@@ -1875,8 +1875,20 @@ export const scenarioMap = {
     '按业务日期倒序排列': { evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', 'independentPage 按业务日期而非 created_at 倒序，并以同一业务日期+id 游标翻页']] },
     '相同业务日期稳定排序': { evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', 'independentPage 按业务日期而非 created_at 倒序，并以同一业务日期+id 游标翻页']] },
     '按客户名称或编号搜索': { evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', '任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND']] },
+    '按白名单字段搜索命中': {
+      evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', '白名单逐类可命中']],
+    },
+    '关键词跨类型工程师命中': {
+      evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', '两类工程师均可命中']],
+    },
     '区域筛选为固定枚举': { evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', '任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND']] },
     '搜索与区域筛选组合': { evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', '任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND']] },
+    '展示项目级计划上门日期': {
+      evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', 'planVisitAt 映射正确']],
+    },
+    '空值与一致性': {
+      evidence: [['tests/integration/workbench-read-v2.sqlite.test.ts', 'planVisitAt 映射正确']],
+    },
     '查看已有暂定仪器数量': { evidence: [['tests/renderer/app.test.tsx', '编辑项目资料忽略旧暂定仪器三字段，回显并保存 UPS 与其他项目资料']] },
     '暂定仪器数量允许留空': { evidence: [['tests/domain/relocation-execution.test.ts', '编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）']] },
     '补录或调整后回显最新值': { evidence: [['tests/domain/relocation-execution.test.ts', '编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）']] },

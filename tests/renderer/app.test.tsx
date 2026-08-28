@@ -41,6 +41,7 @@ function project(index: number): WorkbenchProjectRow {
       { groupId: 'group-instrument', groupName: '特殊仪器', tagIds: ['tag-icpms'], tagNames: ['ICPMS'] },
     ] : [],
     updatedAt: '2026-08-08T08:00:00+08:00',
+    planVisitAt: index === 1 ? '2026-08-16' : null,
   };
 }
 
@@ -172,6 +173,18 @@ describe('Oracle #10 bounded workbench renderer', () => {
     expect(screen.getByText('固定每页20 · 第 1–20 项 / 共 100000 项')).toBeInTheDocument();
     expect(screen.queryByText(/每页最多50项/)).not.toBeInTheDocument();
     expect(api.v2ProjectPage).toHaveBeenLastCalledWith(expect.not.objectContaining({ limit: expect.anything() }));
+  });
+
+  it('项目队列显示上门时间列、日期与空值，并提供紧凑的完整查询提示', async () => {
+    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+    const grid = await screen.findByRole('grid', { name: '项目队列' });
+    expect(within(grid).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
+      '客户 / ECC', '主状态', '区域', '提醒', '上门时间', '批次 / 仪器', '累计掉票', '更新时间', '就近录入',
+    ]);
+    expect(within(await within(grid).findByRole('row', { name: /^客户 1 / })).getByText('2026-08-16')).toBeInTheDocument();
+    expect(within(await within(grid).findByRole('row', { name: /^客户 2 / })).getByText('—')).toBeInTheDocument();
+    expect(screen.getByLabelText('查找项目')).toHaveAttribute('placeholder', '客户 / ECC / 临时编号等');
+    expect(screen.getByLabelText('查找项目')).toHaveAttribute('title', '支持客户、ECC、临时编号、单号、工程师及更多项目资料模糊查询');
   });
 
   it('最新布局：顶部主导航直接显示标签库并打开全局标签库', async () => {

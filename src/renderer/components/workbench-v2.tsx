@@ -1313,7 +1313,8 @@ export function WorkbenchV2({
               查找项目
               <input
                 type="search"
-                placeholder="客户名称 / ECC / 临时编号"
+                placeholder="客户 / ECC / 临时编号等"
+                title="支持客户、ECC、临时编号、单号、工程师及更多项目资料模糊查询"
                 value={draftFilters.query}
                 onChange={(event) =>
                   setDraftFilters((old) => ({
@@ -1336,6 +1337,7 @@ export function WorkbenchV2({
                   <th>主状态</th>
                   <th>区域</th>
                   <th>提醒</th>
+                  <th>上门时间</th>
                   <th>批次 / 仪器</th>
                   <th>累计掉票</th>
                   <th>更新时间</th>
@@ -1391,6 +1393,7 @@ export function WorkbenchV2({
                         ? businessDate(project.reminderAt)
                         : project.reminderNote || "—"}
                     </td>
+                    <td>{project.planVisitAt || "—"}</td>
                     <td>
                       {project.counts.batches} / {project.counts.instruments}
                     </td>

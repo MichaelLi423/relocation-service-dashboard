@@ -613,6 +613,311 @@ describe('工作台 v2 项目 keyset 分页（Oracle #10）', () => {
   });
 });
 
+describe('工作台 v2 项目队列扩展查询（白名单）与 planVisitAt 映射', () => {
+  it('白名单逐类可命中：旧址/新址、联系人、服务单号、仪器字段、批次、标签（定义与分组）', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const repo = reader(ctx);
+    // 探针项目：唯一 token 分布在各白名单字段
+    const probe = facade.v2Mutate({
+      op: 'create_project',
+      payload: {
+        intent: 'formal',
+        customerName: '白名单探针客户',
+        ecc: 'ECC-WHITELIST-001',
+        region: 'East',
+        oldSiteAddress: 'OLD-ADDR-UNIQ-001',
+        newSiteAddress: 'NEW-ADDR-UNIQ-002',
+        instrumentCount: 1,
+        contractAmount: '1000',
+      },
+    }).changed!.projectId!;
+    // 旧址/新址联系人（姓名/电话均可命中，LIKE 整字段）
+    db.prepare('UPDATE projects SET old_site_contact = ?, new_site_contact = ? WHERE id = ?').run(
+      '张三 138-UNIQ-PHONE-001',
+      '李四 139-UNIQ-PHONE-002',
+      probe,
+    );
+    // 服务单：单号与工程师
+    db.prepare(
+      `INSERT INTO service_orders (id, order_type, service_order_no, ordered_at, engineer, customer_name, project_id, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+    ).run('so-wh-1', 'relocation', 'SO-UNIQ-001', '2026-08-10', 'ENG-SO-UNIQ-001', '白名单探针客户', probe, 't', 't');
+    // 上门活动 + activity_engineers 工程师
+    db.prepare(`INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'act-wh-1',
+      probe,
+      '2026-08-11',
+      't',
+      't',
+    );
+    db.prepare(`INSERT INTO activity_engineers (id, activity_id, engineer) VALUES (?,?,?)`).run(
+      'ae-wh-1',
+      'act-wh-1',
+      'ENG-AE-UNIQ-002',
+    );
+    // 仪器：name/model/serial_no 各含唯一 token
+    db.prepare(
+      `INSERT INTO instruments (id, project_id, name, model, serial_no, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
+    ).run('inst-wh-1', probe, 'INST-NAME-UNIQ-003', 'MODEL-UNIQ-004', 'SERIAL-UNIQ-005', 't', 't');
+    // 批次：transport_company
+    db.prepare(
+      `INSERT INTO batches (id, project_id, transport_company, created_at, updated_at) VALUES (?,?,?,?,?)`,
+    ).run('batch-wh-1', probe, 'TRANS-UNIQ-006', 't', 't');
+    // 标签：定义名与分组名均可命中（组名是用户可见业务文本）
+    db.prepare(`INSERT INTO project_tag_groups (id, name, sort_order) VALUES (?,?,?)`).run(
+      'wh-group-uniq',
+      'GROUP-NAME-UNIQ-007',
+      999,
+    );
+    db.prepare(`INSERT INTO project_tag_definitions (id, group_id, name, sort_order) VALUES (?,?,?,?)`).run(
+      'wh-tag-uniq',
+      'wh-group-uniq',
+      'TAG-NAME-UNIQ-008',
+      10,
+    );
+    db.prepare(`INSERT INTO project_tag_assignments (project_id, tag_id) VALUES (?,?)`).run(probe, 'wh-tag-uniq');
+
+    const expectHit = (keyword: string, msg: string): void => {
+      const page = repo.projectPage({ query: keyword });
+      expect(page.total, msg).toBe(1);
+      expect(page.projects[0].id, msg).toBe(probe);
+    };
+
+    // 1) 项目旧址/新址
+    expectHit('OLD-ADDR-UNIQ-001', '旧址地址应命中');
+    expectHit('NEW-ADDR-UNIQ-002', '新址地址应命中');
+    // 2) 旧址/新址联系人：姓名与电话子串均可命中
+    expectHit('张三', '旧址联系人姓名应命中');
+    expectHit('138-UNIQ-PHONE-001', '旧址联系人电话应命中');
+    expectHit('139-UNIQ-PHONE-002', '新址联系人电话应命中');
+    // 3) 服务单号与 service_orders.engineer
+    expectHit('SO-UNIQ-001', '服务单号应命中');
+    expectHit('ENG-SO-UNIQ-001', '服务单工程师应命中');
+    // 4) activity_engineers.engineer
+    expectHit('ENG-AE-UNIQ-002', '活动工程师应命中');
+    // 5) 仪器 name/model/serial_no
+    expectHit('INST-NAME-UNIQ-003', '仪器名称应命中');
+    expectHit('MODEL-UNIQ-004', '仪器型号应命中');
+    expectHit('SERIAL-UNIQ-005', '仪器序列号应命中');
+    // 6) 批次 transport_company
+    expectHit('TRANS-UNIQ-006', '批次运输公司应命中');
+    // 7) 标签定义名与分组名
+    expectHit('TAG-NAME-UNIQ-008', '标签定义名应命中');
+    expectHit('GROUP-NAME-UNIQ-007', '标签分组名应命中');
+    // 8) 原有白名单仍有效：客户名/ECC/临时编号
+    const tempNo = String(db.prepare('SELECT temp_no FROM projects WHERE id = ?').get(probe)!.temp_no);
+    expectHit('白名单探针客户', '客户名仍应命中');
+    expectHit('ECC-WHITELIST-001', 'ECC 仍应命中');
+    expectHit(tempNo, '临时编号仍应命中');
+    closeDatabase(db);
+  });
+
+  it('两类工程师均可命中且互不掩盖', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const repo = reader(ctx);
+    const probe = facade.v2Mutate({
+      op: 'create_project',
+      payload: { intent: 'formal', customerName: '工程师双类客户', ecc: 'ECC-ENG-002', region: 'East', instrumentCount: 1, contractAmount: '1000' },
+    }).changed!.projectId!;
+    db.prepare(
+      `INSERT INTO service_orders (id, order_type, service_order_no, ordered_at, engineer, customer_name, project_id, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+    ).run('so-eng', 'pm', 'SO-ENG-100', '2026-08-10', 'ENG-SERVICE-AAA', '工程师双类客户', probe, 't', 't');
+    db.prepare(`INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'act-eng',
+      probe,
+      '2026-08-11',
+      't',
+      't',
+    );
+    db.prepare(`INSERT INTO activity_engineers (id, activity_id, engineer) VALUES (?,?,?)`).run('ae-eng', 'act-eng', 'ENG-ACTIVITY-BBB');
+
+    const hitService = repo.projectPage({ query: 'ENG-SERVICE-AAA' });
+    expect(hitService.total).toBe(1);
+    expect(hitService.projects[0].id).toBe(probe);
+
+    const hitActivity = repo.projectPage({ query: 'ENG-ACTIVITY-BBB' });
+    expect(hitActivity.total).toBe(1);
+    expect(hitActivity.projects[0].id).toBe(probe);
+
+    // 任一命中即 OR：两关键词分别仍只命中该项目
+    expect(repo.projectPage({ query: 'ENG-ACTIVITY' }).total).toBe(1);
+    closeDatabase(db);
+  });
+
+  it('查询结果不重复：1:N 多行含同一关键词不导致项目重复、total/分页游标正确', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const repo = reader(ctx);
+    const probe = facade.v2Mutate({
+      op: 'create_project',
+      payload: { intent: 'formal', customerName: '去重客户', ecc: 'ECC-DEDUP-003', region: 'East', instrumentCount: 1, contractAmount: '1000' },
+    }).changed!.projectId!;
+    // 3 台仪器含同一关键词，且各有不同批次/服务单也含同一关键词，模拟 JOIN 会重复的场景
+    for (let i = 0; i < 3; i++) {
+      db.prepare(`INSERT INTO instruments (id, project_id, name, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+        `inst-dedup-${i}`,
+        probe,
+        'DEDUP-KWD-XYZ',
+        't',
+        't',
+      );
+      db.prepare(`INSERT INTO batches (id, project_id, transport_company, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+        `batch-dedup-${i}`,
+        probe,
+        'DEDUP-KWD-XYZ',
+        't',
+        't',
+      );
+      db.prepare(
+        `INSERT INTO service_orders (id, order_type, service_order_no, ordered_at, engineer, customer_name, project_id, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+      ).run(`so-dedup-${i}`, 'relocation', `SO-DEDUP-${i}`, '2026-08-10', 'DEDUP-KWD-XYZ', '去重客户', probe, 't', 't');
+    }
+    // 再插两个活动工程师同样关键词
+    db.prepare(`INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'act-dedup',
+      probe,
+      '2026-08-11',
+      't',
+      't',
+    );
+    db.prepare(`INSERT INTO activity_engineers (id, activity_id, engineer) VALUES (?,?,?)`).run('ae-dedup-1', 'act-dedup', 'DEDUP-KWD-XYZ');
+    db.prepare(`INSERT INTO activity_engineers (id, activity_id, engineer) VALUES (?,?,?)`).run('ae-dedup-2', 'act-dedup', 'DEDUP-KWD-XYZ-2');
+
+    const page = repo.projectPage({ query: 'DEDUP-KWD-XYZ' });
+    // 必须仅命中一个项目，且列表不重复
+    expect(page.total).toBe(1);
+    expect(page.projects.length).toBe(1);
+    expect(page.projects[0].id).toBe(probe);
+    expect(page.nextCursor).toBeNull();
+
+    // 翻页也无重复：塞入另一个同样关键词项目，total=2，分页不重复
+    const probe2 = facade.v2Mutate({
+      op: 'create_project',
+      payload: { intent: 'formal', customerName: '去重客户2', ecc: 'ECC-DEDUP-004', region: 'East', instrumentCount: 1, contractAmount: '1000' },
+    }).changed!.projectId!;
+    db.prepare(`INSERT INTO instruments (id, project_id, name, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'inst-dedup-other',
+      probe2,
+      'DEDUP-KWD-XYZ',
+      't',
+      't',
+    );
+    const paged = repo.projectPage({ query: 'DEDUP-KWD-XYZ' });
+    expect(paged.total).toBe(2);
+    expect(paged.projects.length).toBe(2);
+    expect(new Set(paged.projects.map((p) => p.id)).size).toBe(2);
+    closeDatabase(db);
+  });
+
+  it('region 与扩展 query 组合、分页不回归、转义保留（%_\\）', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const repo = reader(ctx);
+    // 建立 25 个 East 项目，旧址地址含 COMBO-KWD，分页验证
+    for (let i = 0; i < 25; i++) {
+      const id = `combo-p-${i}`;
+      db.prepare(
+        `INSERT INTO projects (id, temp_no, status, region, old_site_address, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
+      ).run(id, `TP-COMBO-${String(i).padStart(3, '0')}`, 'pending_execution', i % 2 === 0 ? 'East' : 'North', `COMBO-KWD-${i}`, 't', `2026-08-10T00:00:${String(i).padStart(2, '0')}+08:00`);
+    }
+    // combo 前 total 25 COMBO-KWD，East 过滤约 13
+    const filtered = repo.projectPage({ query: 'COMBO-KWD', region: 'East' });
+    expect(filtered.total).toBe(13);
+    expect(filtered.projects.length).toBe(13);
+    expect(filtered.projects.every((p) => p.region === 'East')).toBe(true);
+    expect(filtered.nextCursor).toBeNull();
+
+    // 不满足组合的 AND：North + COMBO-KWD 的 East 项目应 0
+    expect(repo.projectPage({ query: 'NONEXIST-KWD-999', region: 'East' }).total).toBe(0);
+
+    // 转义：字段含字面 % 与 _，查询含 %_ 应按字面命中而非通配
+    const escProject = facade.v2Mutate({
+      op: 'create_project',
+      payload: { intent: 'formal', customerName: '转义客户', ecc: 'ECC-ESC-005', region: 'East', oldSiteAddress: 'ADDR-%_\\LITERAL', newSiteAddress: 'X', instrumentCount: 1, contractAmount: '1000' },
+    }).changed!.projectId!;
+    // 旧址联系人含 %
+    db.prepare('UPDATE projects SET old_site_contact = ? WHERE id = ?').run('NAME%_TEST', escProject);
+    // 仪器名含 _
+    db.prepare(`INSERT INTO instruments (id, project_id, name, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'inst-esc',
+      escProject,
+      'MODEL_%_LITERAL',
+      't',
+      't',
+    );
+
+    // 查询含 % 应转义，仅命中字面
+    const esc1 = repo.projectPage({ query: '%_\\' });
+    // 该项目旧址与仪器均含 %_\\ 子串，应命中
+    expect(esc1.projects.some((p) => p.id === escProject)).toBe(true);
+    // 查询含 _ 的子串也应转义命中
+    const esc2 = repo.projectPage({ query: 'MODEL_%' });
+    expect(esc2.projects.some((p) => p.id === escProject)).toBe(true);
+    // 查询普通字符组合不误命中
+    expect(repo.projectPage({ query: '绝无此串999' }).total).toBe(0);
+    closeDatabase(db);
+  });
+
+  it('planVisitAt 映射正确：暴露 projects.plan_visit_at，为空为 null，不聚合 activities.visit_at', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const repo = reader(ctx);
+    const probe = facade.v2Mutate({
+      op: 'create_project',
+      payload: {
+        intent: 'formal',
+        customerName: '计划上门客户',
+        ecc: 'ECC-PLAN-006',
+        region: 'East',
+        oldSiteAddress: '旧址',
+        newSiteAddress: '新址',
+        instrumentCount: 1,
+        contractAmount: '1000',
+      },
+    }).changed!.projectId!;
+
+    // 初始应为 null（未设置）
+    expect(repo.projectPage({ query: '计划上门客户' }).projects[0].planVisitAt).toBeNull();
+    expect(facade.v2ProjectDetail(probe).detail!.planVisitAt).toBeNull();
+
+    // 设置计划上门日期 via update_project
+    facade.v2Mutate({ op: 'update_project', payload: { projectId: probe, plannedVisitAt: '2026-09-18' } });
+    const row = repo.projectPage({ query: 'ECC-PLAN-006' }).projects[0];
+    expect(row.planVisitAt).toBe('2026-09-18');
+    expect(facade.v2ProjectDetail(probe).detail!.planVisitAt).toBe('2026-09-18');
+    expect(facade.v2ProjectDetail(probe).project!.planVisitAt).toBe('2026-09-18');
+
+    // 插入活动的 visit_at 不同日期，队列 planVisitAt 不应被聚合或覆盖
+    db.prepare(`INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'act-plan-1',
+      probe,
+      '2026-08-20',
+      't',
+      't',
+    );
+    db.prepare(`INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)`).run(
+      'act-plan-2',
+      probe,
+      '2026-08-21',
+      't',
+      't',
+    );
+    const rowAfterActivities = repo.projectPage({ query: 'ECC-PLAN-006' }).projects[0];
+    expect(rowAfterActivities.planVisitAt).toBe('2026-09-18');
+
+    // 清空后应回 null
+    facade.v2Mutate({ op: 'update_project', payload: { projectId: probe, plannedVisitAt: null } });
+    const cleared = repo.projectPage({ query: 'ECC-PLAN-006' }).projects[0];
+    expect(cleared.planVisitAt).toBeNull();
+    expect(facade.v2ProjectDetail(probe).detail!.planVisitAt).toBeNull();
+    closeDatabase(db);
+  });
+});
+
 describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
   it('detail：金额字符串、计数、非阻塞；不存在返回 null', () => {
     const ctx = makeFacade();
@@ -756,8 +1061,8 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
         temporaryInstrumentModel: 'BS-200',
         temporaryHasUps: true,
         plannedInstallAt: '2026-09-01',
-        plannedVisitAt: '2026-08-20',
-        plannedTransportAt: '2026-08-18',
+        plannedVisitAt: '2026-09-20',
+        plannedTransportAt: '2026-09-18',
         siteConfirmed: true,
       },
     });
@@ -782,8 +1087,8 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     expect(d.contractEndDate).toBe('2027-07-31');
 
     // 执行准备：计划上门/计划运输/场地确认/是否暂存 + 计划装机日期（更名契约字段）
-    expect(d.planVisitAt).toBe('2026-08-20');
-    expect(d.planTransportAt).toBe('2026-08-18');
+    expect(d.planVisitAt).toBe('2026-09-20');
+    expect(d.planTransportAt).toBe('2026-09-18');
     expect(d.siteConfirmed).toBe(true);
     expect(d.isTemporaryStorage).toBe(true);
     expect(d.temporaryStorageAddress).toBe('临时仓 A');

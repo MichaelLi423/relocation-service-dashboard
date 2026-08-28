@@ -1134,8 +1134,42 @@ export class WorkbenchReadRepository {
     }
     if (request.query && request.query.trim()) {
       const pattern = likePattern(request.query.trim());
-      clauses.push("(cu.name LIKE ? ESCAPE '\\' OR p.temp_no LIKE ? ESCAPE '\\' OR c.ecc LIKE ? ESCAPE '\\')");
-      params.push(pattern, pattern, pattern);
+      // 扩展 query 白名单：单条关键词 OR 命中全部白名单字段；1:N 表用 EXISTS 避免 JOIN 重复导致 total/游标错误。
+      // LIKE 统一转义 %_\（likePattern）并保持 ESCAPE '\'；AND 语义保留给 region/status/reminder/repair。
+      clauses.push(
+        `(
+          cu.name LIKE ? ESCAPE '\\' OR
+          c.ecc LIKE ? ESCAPE '\\' OR
+          p.temp_no LIKE ? ESCAPE '\\' OR
+          p.old_site_address LIKE ? ESCAPE '\\' OR
+          p.new_site_address LIKE ? ESCAPE '\\' OR
+          p.old_site_contact LIKE ? ESCAPE '\\' OR
+          p.new_site_contact LIKE ? ESCAPE '\\' OR
+          EXISTS (SELECT 1 FROM service_orders so WHERE so.project_id = p.id AND (so.service_order_no LIKE ? ESCAPE '\\' OR so.engineer LIKE ? ESCAPE '\\')) OR
+          EXISTS (SELECT 1 FROM activities a JOIN activity_engineers ae ON ae.activity_id = a.id WHERE a.project_id = p.id AND ae.engineer LIKE ? ESCAPE '\\') OR
+          EXISTS (SELECT 1 FROM instruments i WHERE i.project_id = p.id AND (i.name LIKE ? ESCAPE '\\' OR i.model LIKE ? ESCAPE '\\' OR i.serial_no LIKE ? ESCAPE '\\')) OR
+          EXISTS (SELECT 1 FROM batches b WHERE b.project_id = p.id AND b.transport_company LIKE ? ESCAPE '\\') OR
+          EXISTS (SELECT 1 FROM project_tag_assignments pta JOIN project_tag_definitions ptd ON ptd.id = pta.tag_id JOIN project_tag_groups ptg ON ptg.id = ptd.group_id WHERE pta.project_id = p.id AND (ptd.name LIKE ? ESCAPE '\\' OR ptg.name LIKE ? ESCAPE '\\'))
+        )`,
+      );
+      params.push(
+        pattern, // cu.name
+        pattern, // c.ecc
+        pattern, // p.temp_no
+        pattern, // p.old_site_address
+        pattern, // p.new_site_address
+        pattern, // p.old_site_contact
+        pattern, // p.new_site_contact
+        pattern, // so.service_order_no
+        pattern, // so.engineer
+        pattern, // ae.engineer
+        pattern, // i.name
+        pattern, // i.model
+        pattern, // i.serial_no
+        pattern, // b.transport_company
+        pattern, // ptd.name
+        pattern, // ptg.name
+      );
     }
     if (request.reminder) {
       switch (request.reminder) {
@@ -1249,6 +1283,7 @@ export class WorkbenchReadRepository {
       regionNeedsAdjustment:
         row.region !== null && row.region !== undefined && !isProjectRegion(String(row.region)),
       entryAt: row.entry_at === null ? null : String(row.entry_at),
+      planVisitAt: row.plan_visit_at === null || row.plan_visit_at === undefined ? null : String(row.plan_visit_at),
       reminderAt: row.reminder_at === null ? null : String(row.reminder_at),
       reminderNote: row.reminder_note === null ? null : String(row.reminder_note),
       reminderDueClass: classifyReminder(

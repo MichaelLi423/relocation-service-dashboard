@@ -902,7 +902,7 @@
 
 ### Requirement: 项目队列关键词搜索与固定区域筛选
 
-高密度项目队列 SHALL 支持按客户名称、ECC 与系统临时编号进行关键词搜索，输入任一匹配关键词 SHALL 将队列筛选为对应项目；项目队列 SHALL 提供区域筛选，区域选项 SHALL 为 East、South、West、Central、North 五个固定枚举值，SHALL NOT 提供自由输入或自定义区域；关键词搜索与区域筛选 SHALL 可组合使用，同时满足两个条件时才展示项目。
+高密度项目队列 SHALL 支持按客户名称、ECC 与系统临时编号进行关键词搜索，输入任一匹配关键词 SHALL 将队列筛选为对应项目；此外关键词搜索的白名单还包括：服务单号与 service_orders.engineer、activity_engineers.engineer、项目旧址/新址地址、旧址/新址联系人（姓名字段与电话子串均可命中）、仪器 name/model/serial_no、项目标签定义的名称（若标签分组名为用户可见业务文本则一并纳入关键词匹配）、批次 transport_company。关键词搜索 SHALL 使用转义后的 `%keyword%` LIKE 语义（保留字面 `%_\`，ESCAPE '\'），对 1:N 表 SHALL 使用 EXISTS 避免 JOIN 导致项目重复而使 total/游标错误；区域筛选的区域选项 SHALL 为 East、South、West、Central、North 五个固定枚举值，SHALL NOT 提供自由输入或自定义区域；关键词搜索与区域/状态/提醒/repair 筛选 SHALL 可组合使用，同时满足全部条件（AND）时才展示项目；分页 total 与 keyset 游标 SHALL 按过滤后去重项目集合计算。
 
 #### Scenario: 按客户名称或编号搜索
 
@@ -910,6 +910,13 @@
 - **WHEN** 负责人输入客户名称、ECC 或系统临时编号的关键词
 - **THEN** 队列仅展示与关键词匹配的项目
 - **AND** 不匹配的项目不出现在队列中
+
+#### Scenario: 按白名单字段搜索命中
+
+- **GIVEN** 项目关联旧址/新址地址、旧址/新址联系人、服务单号与工程师、活动工程师、仪器名称/型号/序列号、批次运输公司、项目标签定义或分组名称等白名单字段
+- **WHEN** 负责人输入匹配上述任一字段的关键词（转义 `%keyword%` LIKE）
+- **THEN** 队列展示对应项目
+- **AND** 1:N 表通过 EXISTS 匹配，同一项目多行关联不导致重复或 total/游标错误
 
 #### Scenario: 区域筛选为固定枚举
 
@@ -923,6 +930,30 @@
 - **GIVEN** 负责人同时指定关键词与区域
 - **WHEN** 应用搜索与筛选条件
 - **THEN** 项目队列仅展示同时满足关键词与所选区域的项目
+
+#### Scenario: 关键词跨类型工程师命中
+
+- **GIVEN** 项目同时存在服务单工程师与活动工程师记录
+- **WHEN** 负责人分别输入两类工程师关键词
+- **THEN** 两类关键词均可命中同一项目
+
+### Requirement: 项目队列行计划上门日期
+
+工作台项目队列行 SHALL 暴露项目级计划上门日期 `planVisitAt: string | null`，其值 SHALL 直接映射 `projects.plan_visit_at`，为业务日期 `yyyy-mm-dd` 或 `null`；队列行 SHALL NOT 聚合或派生自 `activities.visit_at` 等实际到访日期。该字段 SHALL 在空值时保持 `null`、有值时透出原文，随项目资料编辑同步更新，并在有界分页与详情中保持一致。
+
+#### Scenario: 展示项目级计划上门日期
+
+- **GIVEN** 项目已设置计划上门日期
+- **WHEN** 读取项目队列
+- **THEN** 队列行 `planVisitAt` 等于 `projects.plan_visit_at`
+- **AND** 不等于任何活动到访日期的聚合值
+
+#### Scenario: 空值与一致性
+
+- **GIVEN** 项目未设置计划上门日期或已被清空
+- **WHEN** 读取项目队列或项目详情
+- **THEN** `planVisitAt` 为 `null`
+- **AND** 队列与详情返回一致
 
 ### Requirement: 补齐进单核心资料维护暂定仪器数量
 

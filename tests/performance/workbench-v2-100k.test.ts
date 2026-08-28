@@ -197,7 +197,7 @@ describe('Oracle #10 性能：100k 项目 + 大量子记录', () => {
     expect(overview.metrics.pendingAmount).toBe('900000000.00'); // 1000 合同 × 900000.00 元，未挂票
     // 提醒预览固定 ≤6（种子无提醒）
     expect(overview.reminderPreview.length).toBeLessThanOrEqual(6);
-    expect(overview.stages).toHaveLength(6);
+    expect(overview.stages).toHaveLength(7);
 
     // 项目页固定每页 20 行（tasks 7.5）：limit: 50 属 legacy limit 被忽略；total 全量；页数据不因数据规模放大
     expect(page.projects.length).toBe(20);

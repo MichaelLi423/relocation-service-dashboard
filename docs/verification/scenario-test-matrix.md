@@ -9,10 +9,10 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 15 |
-| ADDED Requirements 场景总数 | 585 |
-| 有有效测试证据（✅） | 585 |
+| ADDED Requirements 场景总数 | 604 |
+| 有有效测试证据（✅） | 589 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
-| 缺证据 / 证据无效（❌） | 0 |
+| 缺证据 / 证据无效（❌） | 15 |
 
 ### 待验证与阻塞项（诚实边界）
 
@@ -183,6 +183,9 @@
 | Windows 桌面运行且不依赖远程服务 | 无网络时业务不中断 | ✅ | `tests/persistence/runtime-boundary.test.ts`「离线无远程依赖：领域与持久化源码不导入任何网络模块」 |  |
 | 本机 SQLite 持久化 | 关闭重开后数据保留 | ✅ | `tests/persistence/connection.test.ts`「关闭并重开应用后数据保留（真实临时 SQLite）」<br>`tests/integration/relocation-project-lifecycle.sqlite.test.ts`「正式进单全流程落库（ECC/进单时间/快照/最终金额），关闭重开保留」<br>`tests/integration/runtime-lifecycle.sqlite.test.ts`「启动自动备份 → 初始化 → 录入 → 关闭重开登录 → 手动备份 → 恢复 → 恢复码重置」<br>`e2e/electron-smoke.spec.ts`「关闭并重开应用：无密码模式直接进入工作台，已有账号与数据保留」 |  |
 | 本机 SQLite 持久化 | 数据保存于本机数据库 | ✅ | `tests/persistence/connection.test.ts`「数据库位于本机数据目录（不依赖远程存储）」 |  |
+| 项目分类标签持久化与升级兼容 | 标签重命名保持稳定关联 | ❌ | — |  |
+| 项目分类标签持久化与升级兼容 | 标签唯一性冲突零变化 | ❌ | — |  |
+| 项目分类标签持久化与升级兼容 | 重命名不返回受影响项目列表 | ❌ | — |  |
 | 项目分类标签持久化与升级兼容 | 重启后保留标签库与项目关联 | ✅ | `tests/integration/project-tags.sqlite.test.ts`「重开 SQLite 后保留自定义目录与项目关联」 |  |
 | 项目分类标签持久化与升级兼容 | 备份恢复后保留标签库与项目关联 | ✅ | `tests/integration/project-tags.sqlite.test.ts`「真实手动备份与恢复保留自定义标签和项目关联」 |  |
 | 项目分类标签持久化与升级兼容 | 升级幂等初始化预设标签并保留既有数据 | ✅ | `tests/persistence/migration-v17.test.ts`「空库引导到 v17：建立规范化三表、精确且稳定地 seed 三组七标签」<br>`tests/persistence/migration-v17.test.ts`「v16 存量库升级并重复 bootstrap：保留项目且不重复 seed」 |  |
@@ -331,9 +334,14 @@
 | 占位仪器与序列号唯一性 | 建立无序列号占位仪器 | ✅ | `tests/domain/relocation-execution.test.ts`「建立无序列号占位仪器：序列号可空」 |  |
 | 占位仪器与序列号唯一性 | 合同/项目内序列号重复被拒 | ✅ | `tests/domain/relocation-execution.test.ts`「合同/项目内序列号重复被拒」<br>`tests/persistence/schema.test.ts`「非空序列号在同一项目内唯一、跨项目可重复（TBD-02）」 |  |
 | 占位仪器与序列号唯一性 | 跨合同序列号可重复 | ✅ | `tests/domain/relocation-execution.test.ts`「跨合同序列号可重复」 |  |
+| 搬迁仪器字段 | 运行时拒绝越权字段 | ❌ | — |  |
+| 搬迁仪器字段 | 仅更新允许字段 | ❌ | — |  |
 | 搬迁仪器字段 | 仪器名称必填型号选填 | ✅ | `tests/domain/relocation-execution.test.ts`「仪器名称必填、型号选填」 |  |
 | 搬迁仪器字段 | UPS 标记为是或否 | ✅ | `tests/domain/relocation-execution.test.ts`「UPS 标记为是或否（仅限两值）」 |  |
 | 搬迁仪器字段 | 二维码是否申请为手工字段 | ✅ | `tests/domain/relocation-execution.test.ts`「二维码是否申请为手工字段：默认未申请、不由申请记录推导」<br>`tests/domain/qr-request-tracking.test.ts`「手工标记是/否：不随二维码申请记录的保存而变化」 |  |
+| 批次归属与改批 | 全量无变化保存零写 | ❌ | — |  |
+| 批次归属与改批 | 运输限制导致跨批保存全回滚 | ❌ | — |  |
+| 批次归属与改批 | 跨项目批次导致保存全回滚 | ❌ | — |  |
 | 批次归属与改批 | 运输开始前改批保留改批历史 | ✅ | `tests/domain/relocation-execution.test.ts`「运输开始前改批保留改批历史（原批次、新批次、变更时间、登录账号归属）」 |  |
 | 批次归属与改批 | 运输开始后禁止改批 | ✅ | `tests/domain/relocation-execution.test.ts`「运输开始后禁止直接改批」 |  |
 | 批次归属与改批 | 空批次不能开始运输 | ✅ | `tests/domain/relocation-execution.test.ts`「空批次不能开始运输：至少需要一台归属仪器」 |  |
@@ -467,10 +475,13 @@
 | 四类开单与项目关联 | PM 开单独立保存 | ✅ | `tests/domain/service-order-recording.test.ts`「PM 开单独立保存」 |  |
 | 服务单号全局唯一 | 重复服务单号被拒 | ✅ | `tests/domain/service-order-recording.test.ts`「重复服务单号被拒」<br>`tests/integration/service-order-recording.sqlite.test.ts`「服务单号全局唯一：领域校验 + SQLite 部分唯一索引兜底」 |  |
 | 服务单号全局唯一 | 不同业务类型共用唯一空间 | ✅ | `tests/domain/service-order-recording.test.ts`「不同业务类型共用唯一空间：搬迁单号被认证开单占用拒绝」 |  |
+| 认证、单寄备件与 PM 开单最小字段 | 开单仅维护备注 | ❌ | — |  |
+| 认证、单寄备件与 PM 开单最小字段 | 运行时拒绝开单身份字段 | ❌ | — |  |
 | 认证、单寄备件与 PM 开单最小字段 | 最小字段校验 | ✅ | `tests/domain/service-order-recording.test.ts`「缺少服务单号、工程师或客户单位之一拒绝保存」 |  |
 | 认证、单寄备件与 PM 开单最小字段 | 记录全部最小字段 | ✅ | `tests/domain/service-order-recording.test.ts`「记录全部最小字段后保存，且不关联搬迁项目生命周期」 |  |
 | 认证、单寄备件与 PM 开单最小字段 | 开单日期未填默认当天 | ✅ | `tests/domain/service-order-recording.test.ts`「开单时间未填默认当前时间」 |  |
 | 认证、单寄备件与 PM 开单最小字段 | 后补备注 | ✅ | `tests/domain/service-order-recording.test.ts`「后补备注：备注缺失不影响保存，可后补填写」 |  |
+| 开单记录人工备注保护导入 forward-fix | 人工备注阻止 forward-fix 覆盖 | ❌ | — |  |
 | 开单与进单独立 | 开单不影响进单与主状态 | ✅ | `tests/domain/service-order-recording.test.ts`「开单不影响项目进单状态与主状态」 |  |
 | 开单与进单独立 | 一个项目多条开单 | ✅ | `tests/domain/service-order-recording.test.ts`「一个项目可关联多条开单」 |  |
 | 开单工作量计数 | 同一服务单只计一次 | ✅ | `tests/domain/service-order-recording.test.ts`「同一服务单只计一次（服务单号唯一，关联多名工程师/多次上门仍只计一次）」 |  |
@@ -539,6 +550,7 @@
 | 生命周期吞吐 | 六阶段展示项目数与平均停留 | ✅ | `tests/renderer/app.test.tsx`「任务入口、运营指标、提醒、吞吐、上下文与队列形成分区，并显示项目状态色」 |  |
 | 生命周期吞吐 | 点击阶段筛选项目队列 | ✅ | `tests/renderer/app.test.tsx`「阶段、提醒、区域和查询筛选下推并重置到首页 cursor」 |  |
 | 生命周期吞吐 | 不提供流入流出与自动瓶颈提示 | ✅ | `tests/renderer/app.test.tsx`「任务入口、运营指标、提醒、吞吐、上下文与队列形成分区，并显示项目状态色」 | 生命周期吞吐精简：不提供流入流出（inflow/outflow）节奏指标与自动瓶颈提示（客户最终反馈 2026-08-10） |
+| 项目分类标签库维护与按组多选展示 | 标签重命名后粗粒度刷新 | ❌ | — |  |
 | 项目分类标签库维护与按组多选展示 | 维护全局标签库 | ✅ | `tests/renderer/app.test.tsx`「最新布局：顶部主导航直接显示标签库并打开全局标签库」 |  |
 | 项目分类标签库维护与按组多选展示 | 按组多选并展示项目分类标签 | ✅ | `tests/renderer/app.test.tsx`「新建项目按组键盘可达地同组与跨组多选，并提交全局自定义 tagIds」<br>`tests/renderer/app.test.tsx`「详情保持标签区域；无标签显示添加入口，已有标签显示编辑入口」 |  |
 | 正式规格基线的验证矩阵来源与证据校验 | 验证矩阵只读取正式规格基线 | ✅ | `scripts/build-verification-matrix.mjs`「仅扫描 `openspec/specs/` 正式基线」 |  |
@@ -631,6 +643,9 @@
 | 待掉票指标仅由有效关联财务事实计算 | 待掉票金额仅计入有效关联事实 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「孤立排除：引用不存在项目的掉票/合同事实不计入指标」 |  |
 | 待掉票指标仅由有效关联财务事实计算 | 无项目时指标显示 0 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「零项目为 0：仅孤立/脏财务事实（无任何项目）时 pendingAmount 必为 0」 |  |
 | 待掉票指标仅由有效关联财务事实计算 | 保持有效项目财务口径 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「已完成余额纳入：已完成项目仍有有效待掉票余额时按 final − 有效掉票计入」<br>`tests/integration/financial-closure.sqlite.test.ts`「已取消排除：仅已取消项目存在时 pendingAmount 为 0（口径不改动为仅活跃项目）」 |  |
+| 登记记录带确认的删除入口与项目/掉票语义保持 | 不可编辑事实提供正确更正路径 | ❌ | — |  |
+| 登记记录带确认的删除入口与项目/掉票语义保持 | 有下游依赖的事实删除被拒绝 | ❌ | — |  |
+| 登记记录带确认的删除入口与项目/掉票语义保持 | 撤销掉票的终态提示 | ❌ | — |  |
 | 登记记录带确认的删除入口与项目/掉票语义保持 | 登记记录删除需确认 | ✅ | `tests/renderer/app.test.tsx`「删除确认取消时通用保护阻止 v2Delete 调用」 |  |
 | 登记记录带确认的删除入口与项目/掉票语义保持 | 各类登记记录均提供删除入口 | ✅ | `tests/renderer/app.test.tsx`「八类登记记录逐类提供删除入口并调用对应 v2Delete kind」 |  |
 | 登记记录带确认的删除入口与项目/掉票语义保持 | 搬迁项目维持取消语义 | ✅ | `tests/renderer/app.test.tsx`「项目仅有取消入口且无物理删除，掉票只提供撤销并在终态禁编辑和重复撤销」 |  |
@@ -639,8 +654,12 @@
 | 顶栏浏览全部记录入口与业务日期倒序 | 按业务日期倒序排列 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「independentPage 按业务日期而非 created_at 倒序，并以同一业务日期+id 游标翻页」 |  |
 | 顶栏浏览全部记录入口与业务日期倒序 | 相同业务日期稳定排序 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「independentPage 按业务日期而非 created_at 倒序，并以同一业务日期+id 游标翻页」 |  |
 | 项目队列关键词搜索与固定区域筛选 | 按客户名称或编号搜索 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND」 |  |
+| 项目队列关键词搜索与固定区域筛选 | 按白名单字段搜索命中 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「白名单逐类可命中」 |  |
 | 项目队列关键词搜索与固定区域筛选 | 区域筛选为固定枚举 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND」 |  |
 | 项目队列关键词搜索与固定区域筛选 | 搜索与区域筛选组合 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND」 |  |
+| 项目队列关键词搜索与固定区域筛选 | 关键词跨类型工程师命中 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「两类工程师均可命中」 |  |
+| 项目队列行计划上门日期 | 展示项目级计划上门日期 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「planVisitAt 映射正确」 |  |
+| 项目队列行计划上门日期 | 空值与一致性 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「planVisitAt 映射正确」 |  |
 | 补齐进单核心资料维护暂定仪器数量 | 查看已有暂定仪器数量 | ✅ | `tests/renderer/app.test.tsx`「编辑项目资料忽略旧暂定仪器三字段，回显并保存 UPS 与其他项目资料」 |  |
 | 补齐进单核心资料维护暂定仪器数量 | 暂定仪器数量允许留空 | ✅ | `tests/domain/relocation-execution.test.ts`「编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）」 |  |
 | 补齐进单核心资料维护暂定仪器数量 | 补录或调整后回显最新值 | ✅ | `tests/domain/relocation-execution.test.ts`「编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）」 |  |
@@ -681,3 +700,23 @@
 | 项目提醒快速处理按提醒日期展示非空泳道 | 每列内项目顺序稳定 | ✅ | `tests/integration/workbench-todos.sqlite.test.ts`「任务7.6：列内 id 稳定 tie-breaker；按列分页携带 selectedDates 锁定日期集合、不重算不重读」 |  |
 | 项目提醒快速处理按提醒日期展示非空泳道 | 1024px 下泳道内部横向滚动且键盘可达 | ✅ | `tests/interface/layout.test.ts`「提醒泳道保留日期列头、列内加载和容器内横向滚动」 |  |
 | 项目提醒快速处理按提醒日期展示非空泳道 | 完整提醒视图保持独立默认排序 | ✅ | `tests/integration/workbench-todos.sqlite.test.ts`「任务7.3：切换升序立即生效；asc/desc 与泳道（7.6）排序独立」 |  |
+
+## 缺口清单（缺证据或证据无效的场景）
+
+| 能力 | Scenario | 问题 |
+| --- | --- | --- |
+| local-data-persistence | 标签重命名保持稳定关联 | 未登记 |
+| local-data-persistence | 标签唯一性冲突零变化 | 未登记 |
+| local-data-persistence | 重命名不返回受影响项目列表 | 未登记 |
+| relocation-execution | 运行时拒绝越权字段 | 未登记 |
+| relocation-execution | 仅更新允许字段 | 未登记 |
+| relocation-execution | 全量无变化保存零写 | 未登记 |
+| relocation-execution | 运输限制导致跨批保存全回滚 | 未登记 |
+| relocation-execution | 跨项目批次导致保存全回滚 | 未登记 |
+| service-order-recording | 开单仅维护备注 | 未登记 |
+| service-order-recording | 运行时拒绝开单身份字段 | 未登记 |
+| service-order-recording | 人工备注阻止 forward-fix 覆盖 | 未登记 |
+| workbench-interface | 标签重命名后粗粒度刷新 | 未登记 |
+| workbench-interface | 不可编辑事实提供正确更正路径 | 未登记 |
+| workbench-interface | 有下游依赖的事实删除被拒绝 | 未登记 |
+| workbench-interface | 撤销掉票的终态提示 | 未登记 |

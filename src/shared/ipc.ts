@@ -411,6 +411,8 @@ export interface WorkbenchProjectRow {
   regionNeedsAdjustment: boolean;
   /** 进单日期（业务日期 yyyy-mm-dd）。 */
   entryAt: string | null;
+  /** 项目级计划上门日期（业务日期 yyyy-mm-dd；直接映射 projects.plan_visit_at，不聚合 activities.visit_at）。 */
+  planVisitAt: string | null;
   /** 项目提醒日期（业务日期 yyyy-mm-dd）。 */
   reminderAt: string | null;
   reminderNote: string | null;
