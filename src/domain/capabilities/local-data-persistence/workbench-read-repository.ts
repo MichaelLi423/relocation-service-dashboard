@@ -1212,6 +1212,10 @@ export class WorkbenchReadRepository {
         return { sql: 'ORDER BY p.temp_no ASC, p.id ASC' };
       case 'reminder':
         return { sql: "ORDER BY COALESCE(p.reminder_at, '') ASC, p.id ASC" };
+      case 'visit_asc':
+        return { sql: 'ORDER BY p.plan_visit_at IS NULL ASC, p.plan_visit_at ASC, p.id ASC' };
+      case 'visit_desc':
+        return { sql: 'ORDER BY p.plan_visit_at IS NULL ASC, p.plan_visit_at DESC, p.id DESC' };
       case 'updated':
       default:
         return { sql: 'ORDER BY p.updated_at DESC, p.id DESC' };
@@ -1226,6 +1230,19 @@ export class WorkbenchReadRepository {
         return { sql: '(p.temp_no, p.id) > (?, ?)', params: (c) => [c.sortKey ?? '', c.id] };
       case 'reminder':
         return { sql: "(COALESCE(p.reminder_at, ''), p.id) > (?, ?)", params: (c) => [c.sortKey ?? '', c.id] };
+      case 'visit_asc':
+        return {
+          sql: '((p.plan_visit_at IS NULL), COALESCE(p.plan_visit_at, \'\'), p.id) > (?, ?, ?)',
+          params: (c) => [c.sortKey === null ? 1 : 0, c.sortKey ?? '', c.id],
+        };
+      case 'visit_desc':
+        return {
+          sql: '((p.plan_visit_at IS NULL) > ? OR ((p.plan_visit_at IS NULL) = ? AND (COALESCE(p.plan_visit_at, \'\'), p.id) < (?, ?)))',
+          params: (c) => {
+            const empty = c.sortKey === null ? 1 : 0;
+            return [empty, empty, c.sortKey ?? '', c.id];
+          },
+        };
       case 'updated':
       default:
         return { sql: '(p.updated_at, p.id) < (?, ?)', params: (c) => [c.sortKey ?? '', c.id] };
@@ -1240,6 +1257,9 @@ export class WorkbenchReadRepository {
         return encodeProjectCursor(stateKey, String(row.temp_no), String(row.id));
       case 'reminder':
         return encodeProjectCursor(stateKey, row.reminder_at === null ? '' : String(row.reminder_at), String(row.id));
+      case 'visit_asc':
+      case 'visit_desc':
+        return encodeProjectCursor(stateKey, row.plan_visit_at === null ? null : String(row.plan_visit_at), String(row.id));
       case 'updated':
       default:
         return encodeProjectCursor(stateKey, String(row.updated_at), String(row.id));

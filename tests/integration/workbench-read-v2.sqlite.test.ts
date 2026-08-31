@@ -570,6 +570,32 @@ describe('工作台 v2 项目 keyset 分页（Oracle #10）', () => {
     closeDatabase(ctx.db);
   });
 
+  it('计划上门日期升降序均跨页稳定，未填写日期始终置后', () => {
+    const ctx = makeFacade();
+    seedProjects(ctx.db, 45);
+    ctx.db.prepare('UPDATE projects SET plan_visit_at=? WHERE id=?').run('2026-09-03', 'seed-p-0');
+    ctx.db.prepare('UPDATE projects SET plan_visit_at=? WHERE id=?').run('2026-09-01', 'seed-p-1');
+    ctx.db.prepare('UPDATE projects SET plan_visit_at=? WHERE id=?').run('2026-09-02', 'seed-p-2');
+    const repo = reader(ctx);
+    for (const sort of ['visit_asc', 'visit_desc'] as const) {
+      const rows: WorkbenchProjectRow[] = [];
+      let cursor: string | null = null;
+      do {
+        const next = repo.projectPage({ sort, cursor });
+        rows.push(...next.projects);
+        cursor = next.nextCursor;
+      } while (cursor);
+      expect(new Set(rows.map((row) => row.id)).size).toBe(46);
+      const dates = rows.map((row) => row.planVisitAt);
+      const firstEmpty = dates.findIndex((date) => date === null);
+      expect(dates.slice(firstEmpty).every((date) => date === null)).toBe(true);
+      expect(dates.slice(0, firstEmpty)).toEqual(sort === 'visit_asc'
+        ? ['2026-09-01', '2026-09-02', '2026-09-03']
+        : ['2026-09-03', '2026-09-02', '2026-09-01']);
+    }
+    closeDatabase(ctx.db);
+  });
+
   it('任务7.4：关键词覆盖客户/ECC/临时编号；区域仅五枚举（runtime 非枚举拒绝）；query+region AND', () => {
     const ctx = makeFacade();
     const { db, facade, projectId } = ctx;

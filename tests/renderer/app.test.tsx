@@ -179,12 +179,26 @@ describe('Oracle #10 bounded workbench renderer', () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
     const grid = await screen.findByRole('grid', { name: '项目队列' });
     expect(within(grid).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
-      '客户 / ECC', '主状态', '区域', '提醒', '上门时间', '批次 / 仪器', '累计掉票', '更新时间', '就近录入',
+      '客户 / ECC', '主状态', '区域', '提醒', '上门时间↕', '批次 / 仪器', '累计掉票', '更新时间', '就近录入',
     ]);
     expect(within(await within(grid).findByRole('row', { name: /^客户 1 / })).getByText('2026-08-16')).toBeInTheDocument();
     expect(within(await within(grid).findByRole('row', { name: /^客户 2 / })).getByText('—')).toBeInTheDocument();
     expect(screen.getByLabelText('查找项目')).toHaveAttribute('placeholder', '客户 / ECC / 临时编号等');
     expect(screen.getByLabelText('查找项目')).toHaveAttribute('title', '支持客户、ECC、临时编号、单号、工程师及更多项目资料模糊查询');
+  });
+
+  it('上门时间表头可用键盘切换升降序，方向清晰且空值排序由主进程处理', async () => {
+    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+    const grid = await screen.findByRole('grid', { name: '项目队列' });
+    const header = within(grid).getByRole('columnheader', { name: /上门时间/ });
+    const sort = within(header).getByRole('button', { name: /当前未排序/ });
+    expect(header).toHaveAttribute('aria-sort', 'none');
+    sort.focus(); fireEvent.keyDown(sort, { key: 'Enter' }); fireEvent.click(sort);
+    await waitFor(() => expect(api.v2ProjectPage).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: null, sort: 'visit_asc' })));
+    expect(header).toHaveAttribute('aria-sort', 'ascending'); expect(sort).toHaveTextContent('升序 ↑');
+    fireEvent.click(sort);
+    await waitFor(() => expect(api.v2ProjectPage).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: null, sort: 'visit_desc' })));
+    expect(header).toHaveAttribute('aria-sort', 'descending'); expect(sort).toHaveTextContent('降序 ↓');
   });
 
   it('最新布局：顶部主导航直接显示标签库并打开全局标签库', async () => {
@@ -576,22 +590,26 @@ describe('Oracle #10 bounded workbench renderer', () => {
     render(<App />); const grid = await screen.findByRole('grid', { name: '项目队列' }); const rows = within(grid).getAllByRole('row').slice(1); rows[0]!.focus(); fireEvent.keyDown(rows[0]!, { key: 'ArrowDown' }); expect(rows[1]).toHaveFocus(); fireEvent.keyDown(rows[1]!, { key: 'Enter' }); expect(rows[1]).toHaveAttribute('aria-selected', 'true'); fireEvent.keyDown(rows[1]!, { key: 'End' }); expect(rows.at(-1)).toHaveFocus(); fireEvent.keyDown(rows.at(-1)!, { key: 'Home' }); expect(rows[0]).toHaveFocus(); fireEvent.keyDown(rows[0]!, { key: ' ' }); expect(rows[0]).toHaveAttribute('aria-selected', 'true'); fireEvent.keyDown(rows[0]!, { key: 'PageDown' }); expect(await screen.findByText('客户 21')).toBeInTheDocument();
   });
 
-  it('仪器编辑只提交四个允许字段，名称与序列号保持只读，并刷新队列详情和当前表格', async () => {
-    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+  it('仪器单行行内编辑五个字段，明确保存；失败保留编辑态并就地提示，成功退出', async () => {
+    const api = mockApi(); vi.mocked(api.v2Mutate).mockRejectedValueOnce(new Error('序列号重复')); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
     const instrumentTable = (await screen.findByRole('columnheader', { name: '二维码' })).closest('table')!;
     fireEvent.click(within(instrumentTable).getAllByRole('button', { name: '编辑' })[0]!);
-    const dialog = screen.getByRole('dialog', { name: '编辑仪器资料' });
-    expect(within(dialog).getByText('仪器 0')).toBeInTheDocument(); expect(within(dialog).getByText('SN-0')).toBeInTheDocument();
-    expect(within(dialog).queryByRole('textbox', { name: /仪器名称|序列号/ })).not.toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText(/型号/), { target: { value: '7900X' } });
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: '配备 UPS' }));
-    fireEvent.click(within(dialog).getByRole('checkbox', { name: '二维码已申请' }));
-    const batch = within(dialog).getByLabelText('物流费用记录'); await waitFor(() => expect(within(batch).getByRole('option', { name: /华东运输/ })).toBeInTheDocument()); fireEvent.change(batch, { target: { value: 'batch-1' } });
-    const projectReads = vi.mocked(api.v2ProjectPage).mock.calls.length; const detailReads = vi.mocked(api.v2ProjectDetail).mock.calls.length; const sectionReads = vi.mocked(api.v2SectionPage).mock.calls.length;
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存修改' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith({ op: 'instrument_update', payload: { instrumentId: 'i-0', model: '7900X', ups: true, qrRequested: true, batchId: 'batch-1' } }));
-    await waitFor(() => expect(vi.mocked(api.v2ProjectPage).mock.calls.length).toBeGreaterThan(projectReads));
-    expect(vi.mocked(api.v2ProjectDetail).mock.calls.length).toBeGreaterThan(detailReads); expect(vi.mocked(api.v2SectionPage).mock.calls.length).toBeGreaterThan(sectionReads);
+    expect(screen.queryByRole('dialog', { name: '编辑仪器资料' })).not.toBeInTheDocument();
+    const row = within(instrumentTable).getByRole('row', { name: /仪器 0/ });
+    expect(within(row).queryByRole('textbox', { name: '仪器名称' })).not.toBeInTheDocument();
+    fireEvent.change(within(row).getByLabelText('仪器厂商'), { target: { value: '新厂商' } });
+    fireEvent.change(within(row).getByLabelText('型号'), { target: { value: '7900X' } });
+    fireEvent.change(within(row).getByLabelText('服务级别'), { target: { value: '白金' } });
+    fireEvent.change(within(row).getByLabelText('序列号'), { target: { value: 'SN-NEW' } });
+    fireEvent.change(within(row).getByLabelText('是否 UPS'), { target: { value: 'true' } });
+    fireEvent.blur(within(row).getByLabelText('型号')); expect(api.v2Mutate).not.toHaveBeenCalled();
+    expect(within(instrumentTable).getAllByRole('button', { name: '正在编辑' })[0]).toBeDisabled();
+    fireEvent.click(within(row).getByRole('button', { name: '保存' }));
+    expect(await within(row).findByRole('alert')).toHaveTextContent('保存失败：序列号重复');
+    expect(within(row).getByLabelText('序列号')).toHaveValue('SN-NEW');
+    fireEvent.click(within(row).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(api.v2Mutate).toHaveBeenLastCalledWith({ op: 'instrument_update', payload: { instrumentId: 'i-0', manufacturer: '新厂商', model: '7900X', serviceLevel: '白金', serialNo: 'SN-NEW', ups: true, qrRequested: false, batchId: null } }));
+    await waitFor(() => expect(within(instrumentTable).queryByLabelText('型号')).not.toBeInTheDocument());
   });
 
   it('开单编辑只发送备注，并支持清空已有备注', async () => {

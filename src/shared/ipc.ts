@@ -607,7 +607,8 @@ export interface WorkbenchV2ProjectPageRequest {
    * 事项状态未修复且未关闭未修复），不是项目主状态。
    */
   repair?: 'open' | null;
-  sort?: 'updated' | 'created' | 'temp' | 'reminder' | null;
+  /** visit_asc / visit_desc 按计划上门日期排序，未填写日期始终置后。 */
+  sort?: 'updated' | 'created' | 'temp' | 'reminder' | 'visit_asc' | 'visit_desc' | null;
 }
 
 export interface WorkbenchV2ProjectPageDto {
@@ -1450,10 +1451,13 @@ export interface InstrumentBulkImportPayload {
   rows: readonly InstrumentBulkImportRow[];
 }
 
-/** 仪器编辑仅允许修改型号、UPS、二维码申请标记和所属批次；名称与序列号不可编辑。 */
+/** 仪器行内编辑允许修改清单字段；名称、二维码标记和所属批次保持只读。 */
 export interface InstrumentUpdatePayload {
   instrumentId: string;
+  manufacturer: string | null;
   model: string | null;
+  serviceLevel: string | null;
+  serialNo: string | null;
   ups: boolean;
   qrRequested: boolean;
   batchId: string | null;

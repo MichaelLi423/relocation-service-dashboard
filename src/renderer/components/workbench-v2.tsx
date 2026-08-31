@@ -293,16 +293,13 @@ type LayerState =
       damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>;
     }
   | {
-      kind: "instrument-edit";
-      instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>;
-    }
-  | {
       kind: "order-note-edit";
       order: Extract<WorkbenchV2SectionRow, { kind: "orders" }>;
     };
 
 type TagRenameMutation = Extract<ProjectTagMutationRequestDto, { command: "rename_group" | "rename_tag" }>;
 type InstrumentEditValues = Omit<InstrumentUpdatePayload, "instrumentId">;
+type VisitSort = "asc" | "desc" | null;
 
 function updateProjectRequest(payload: ProjectUpdatePayload): WorkbenchV2MutationRequest {
   return { op: "update_project", payload };
@@ -364,6 +361,7 @@ export function WorkbenchV2({
     query: "",
   });
   const [draftFilters, setDraftFilters] = useState(filters);
+  const [visitSort, setVisitSort] = useState<VisitSort>(null);
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<WorkbenchV2ProjectDetailDto | null>(
@@ -516,6 +514,7 @@ export function WorkbenchV2({
         region: effective.region.trim() || null,
         query: effective.query.trim() || null,
         repair: effective.repair || null,
+        sort: visitSort ? `visit_${visitSort}` : null,
       });
       if (
         id !== requests.current.projects ||
@@ -609,7 +608,7 @@ export function WorkbenchV2({
   useEffect(() => {
     setCursorStack([null]);
     void loadProjects(null, 0);
-  }, [filters.status, filters.repair, filters.reminder, filters.region, filters.query]);
+  }, [filters.status, filters.repair, filters.reminder, filters.region, filters.query, visitSort]);
   useEffect(() => {
     setDetail(null);
     setSectionPage(null);
@@ -1231,7 +1230,12 @@ export function WorkbenchV2({
             onInvoiceRevoke={(invoice) => setLayer({ kind: "invoice-revoke", invoice })}
             onBatchEdit={(batch) => setLayer({ kind: "batch-edit", batch })}
             onDamageUpdate={(damage) => setLayer({ kind: "damage-update", damage })}
-            onInstrumentEdit={(instrument) => setLayer({ kind: "instrument-edit", instrument })}
+            onInstrumentSave={(instrument, values) =>
+              mutateRecord(
+                { op: "instrument_update", payload: { instrumentId: instrument.id, ...values } },
+                "仪器资料已更新",
+              )
+            }
             onOrderNoteEdit={(order) => setLayer({ kind: "order-note-edit", order })}
             onDelete={(kind, id) => {
               if (!window.confirm("删除后无法恢复，确认删除这条记录？")) return;
@@ -1337,7 +1341,19 @@ export function WorkbenchV2({
                   <th>主状态</th>
                   <th>区域</th>
                   <th>提醒</th>
-                  <th>上门时间</th>
+                  <th aria-sort={visitSort === "asc" ? "ascending" : visitSort === "desc" ? "descending" : "none"}>
+                    <button
+                      type="button"
+                      className="queue-sort-button"
+                      aria-label={`上门时间，${visitSort === "asc" ? "当前升序，点击切换为降序" : visitSort === "desc" ? "当前降序，点击切换为升序" : "当前未排序，点击按升序排列"}`}
+                      onClick={() => setVisitSort((current) => current === "asc" ? "desc" : "asc")}
+                    >
+                      <span>上门时间</span>
+                      <span className={visitSort ? "sort-direction active" : "sort-direction"} aria-hidden="true">
+                        {visitSort === "asc" ? "升序 ↑" : visitSort === "desc" ? "降序 ↓" : "↕"}
+                      </span>
+                    </button>
+                  </th>
                   <th>批次 / 仪器</th>
                   <th>累计掉票</th>
                   <th>更新时间</th>
@@ -1662,11 +1678,6 @@ export function WorkbenchV2({
                 )
               }
             />
-          ) : layer.kind === "instrument-edit" ? (
-            <InstrumentEditForm
-              instrument={layer.instrument}
-              onSave={(values) => mutateRecord({ op: "instrument_update", payload: { instrumentId: layer.instrument.id, ...values } }, "仪器资料已更新")}
-            />
           ) : layer.kind === "order-note-edit" ? (
             <ServiceOrderNoteForm
               order={layer.order}
@@ -1966,7 +1977,7 @@ function ProjectDetails({
   onInvoiceRevoke,
   onBatchEdit,
   onDamageUpdate,
-  onInstrumentEdit,
+  onInstrumentSave,
   onOrderNoteEdit,
   onDelete,
 }: {
@@ -1999,9 +2010,10 @@ function ProjectDetails({
   onDamageUpdate: (
     damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>,
   ) => void;
-  onInstrumentEdit: (
+  onInstrumentSave: (
     instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>,
-  ) => void;
+    values: InstrumentEditValues,
+  ) => Promise<void>;
   onOrderNoteEdit: (
     order: Extract<WorkbenchV2SectionRow, { kind: "orders" }>,
   ) => void;
@@ -2184,7 +2196,7 @@ function ProjectDetails({
               onInvoiceRevoke={onInvoiceRevoke}
               onBatchEdit={onBatchEdit}
               onDamageUpdate={onDamageUpdate}
-              onInstrumentEdit={onInstrumentEdit}
+              onInstrumentSave={onInstrumentSave}
               onOrderNoteEdit={onOrderNoteEdit}
               onDelete={onDelete}
             />
@@ -2196,7 +2208,7 @@ function ProjectDetails({
             onInvoiceRevoke={onInvoiceRevoke}
             onBatchEdit={onBatchEdit}
             onDamageUpdate={onDamageUpdate}
-            onInstrumentEdit={onInstrumentEdit}
+            onInstrumentSave={onInstrumentSave}
             onOrderNoteEdit={onOrderNoteEdit}
             onDelete={onDelete}
           />
@@ -2235,7 +2247,7 @@ function SectionTable({
   onInvoiceRevoke,
   onBatchEdit,
   onDamageUpdate,
-  onInstrumentEdit,
+  onInstrumentSave,
   onOrderNoteEdit,
   onDelete,
 }: {
@@ -2252,14 +2264,58 @@ function SectionTable({
   onDamageUpdate: (
     damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>,
   ) => void;
-  onInstrumentEdit: (
+  onInstrumentSave: (
     instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>,
-  ) => void;
+    values: InstrumentEditValues,
+  ) => Promise<void>;
   onOrderNoteEdit: (
     order: Extract<WorkbenchV2SectionRow, { kind: "orders" }>,
   ) => void;
   onDelete: (kind: "service_order" | "activity" | "damage_repair_item" | "batch" | "instrument", id: string) => void;
 }): JSX.Element {
+  const [editingId, setEditingId] = useState("");
+  const [instrumentDraft, setInstrumentDraft] = useState<InstrumentEditValues | null>(null);
+  const [instrumentSaving, setInstrumentSaving] = useState(false);
+  const [instrumentError, setInstrumentError] = useState("");
+  function startInstrumentEdit(instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>): void {
+    setEditingId(instrument.id);
+    setInstrumentDraft({
+      manufacturer: instrument.manufacturer,
+      model: instrument.model,
+      serviceLevel: instrument.serviceLevel,
+      serialNo: instrument.serialNo,
+      ups: instrument.ups,
+      qrRequested: instrument.qrRequested,
+      batchId: instrument.batchId,
+    });
+    setInstrumentError("");
+  }
+  function cancelInstrumentEdit(): void {
+    if (instrumentSaving) return;
+    setEditingId("");
+    setInstrumentDraft(null);
+    setInstrumentError("");
+  }
+  async function saveInstrument(instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>): Promise<void> {
+    if (!instrumentDraft) return;
+    setInstrumentSaving(true);
+    setInstrumentError("");
+    try {
+      await onInstrumentSave(instrument, {
+        ...instrumentDraft,
+        manufacturer: instrumentDraft.manufacturer?.trim() || null,
+        model: instrumentDraft.model?.trim() || null,
+        serviceLevel: instrumentDraft.serviceLevel?.trim() || null,
+        serialNo: instrumentDraft.serialNo?.trim() || null,
+      });
+      setEditingId("");
+      setInstrumentDraft(null);
+    } catch (cause) {
+      setInstrumentError(messageOf(cause));
+    } finally {
+      setInstrumentSaving(false);
+    }
+  }
   if (!page?.rows.length)
     return <Empty title="暂无记录" copy="通过就近记录入口新增业务事实。" />;
   return (
@@ -2274,16 +2330,24 @@ function SectionTable({
           </tr>
         </thead>
         <tbody>
-          {page.rows.map((row) => (
-            <tr key={row.id}>
-              {sectionColumns(page.kind).map((column) => (
-                <td key={column}>
-                  {formatCell(
-                    column,
-                    sectionCellValue(row, column),
-                  )}
-                </td>
-              ))}
+          {page.rows.map((row) => {
+            const editing = row.kind === "instruments" && row.id === editingId;
+            return (
+            <tr key={row.id} className={editing ? "instrument-row-editing" : undefined} onKeyDown={editing ? (event) => { if (event.key === "Escape") { event.preventDefault(); cancelInstrumentEdit(); } } : undefined}>
+              {row.kind === "instruments" && editing && instrumentDraft ? (
+                <>
+                  <td><strong>{row.name}</strong><small className="inline-readonly-note">只读</small></td>
+                  <td><input autoFocus aria-label="仪器厂商" value={instrumentDraft.manufacturer ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, manufacturer: event.target.value })} /></td>
+                  <td><input aria-label="型号" value={instrumentDraft.model ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, model: event.target.value })} /></td>
+                  <td><input aria-label="服务级别" value={instrumentDraft.serviceLevel ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, serviceLevel: event.target.value })} /></td>
+                  <td><input aria-label="序列号" value={instrumentDraft.serialNo ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, serialNo: event.target.value })} /></td>
+                  <td>{formatCell("batchId", row.batchId)}<small className="inline-readonly-note">只读</small></td>
+                  <td><select aria-label="是否 UPS" value={instrumentDraft.ups ? "true" : "false"} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, ups: event.target.value === "true" })}><option value="true">是</option><option value="false">否</option></select></td>
+                  <td>{formatCell("qrRequested", row.qrRequested)}<small className="inline-readonly-note">只读</small></td>
+                </>
+              ) : sectionColumns(page.kind).map((column) => (
+                  <td key={column}>{formatCell(column, sectionCellValue(row, column))}</td>
+                ))}
               {row.kind === "invoices" && (
                 <td>
                   {row.active ? (
@@ -2316,11 +2380,28 @@ function SectionTable({
                   <div className="row-actions compact"><button className="button small" onClick={() => onDamageUpdate(row)}>更新维修状态</button><button className="button danger small" onClick={() => onDelete("damage_repair_item", row.id)}>删除</button></div>
                 </td>
               )}
-              {row.kind === "instruments" && <td><div className="row-actions compact"><button className="button small" onClick={() => onInstrumentEdit(row)}>编辑</button><button className="button danger small" onClick={() => onDelete("instrument", row.id)}>删除</button></div></td>}
+              {row.kind === "instruments" && (
+                <td>
+                  {editing ? (
+                    <div className="instrument-inline-actions">
+                      <div className="row-actions compact">
+                        <button className="button primary small" disabled={instrumentSaving} onClick={() => void saveInstrument(row)}>{instrumentSaving ? "正在保存…" : "保存"}</button>
+                        <button className="button small" disabled={instrumentSaving} onClick={cancelInstrumentEdit}>取消</button>
+                      </div>
+                      {instrumentError && <small className="instrument-inline-error" role="alert">保存失败：{instrumentError}</small>}
+                    </div>
+                  ) : (
+                    <div className="row-actions compact">
+                      <button className="button small" disabled={Boolean(editingId)} onClick={() => startInstrumentEdit(row)}>{editingId ? "正在编辑" : "编辑"}</button>
+                      <button className="button danger small" onClick={() => onDelete("instrument", row.id)}>删除</button>
+                    </div>
+                  )}
+                </td>
+              )}
               {row.kind === "orders" && <td><div className="row-actions compact"><button className="button small" onClick={() => onOrderNoteEdit(row)}>{row.note ? "修改备注" : "后补备注"}</button><button className="button danger small" onClick={() => onDelete("service_order", row.id)}>删除</button></div></td>}
               {row.kind === "activities" && <td><div className="restricted-action"><button className="button danger small" onClick={() => onDelete("activity", row.id)}>删除</button><small>到访与工作事实有误时，删除后按实际情况重新登记。</small></div></td>}
             </tr>
-          ))}
+          );})}
         </tbody>
       </table>
     </div>
@@ -2418,44 +2499,6 @@ function formatCell(column: string, value: unknown): ReactNode {
   if (["planTransportDate", "startedAt", "visitAt", "invoicedAt", "revokedAt", "orderedAt"].includes(column))
     return businessDate(String(value)) || String(value);
   return String(value);
-}
-
-function InstrumentEditForm({
-  instrument,
-  onSave,
-}: {
-  instrument: Extract<WorkbenchV2SectionRow, { kind: "instruments" }>;
-  onSave: (values: InstrumentEditValues) => Promise<void>;
-}): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [batchId, setBatchId] = useState(instrument.batchId ?? "");
-  const [ups, setUps] = useState(instrument.ups);
-  const [qrRequested, setQrRequested] = useState(instrument.qrRequested);
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    setBusy(true); setError("");
-    const data = new FormData(event.currentTarget);
-    const model = String(data.get("model") ?? "").trim();
-    try { await onSave({ model: model || null, ups, qrRequested, batchId: batchId || null }); }
-    catch (cause) { setError(messageOf(cause)); setBusy(false); }
-  }
-  return <form id="instrument-edit-form" className="record-edit-form" aria-busy={busy} onSubmit={(event) => void submit(event)}>
-    <LayerHeaderAction><button form="instrument-edit-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : "保存修改"}</button></LayerHeaderAction>
-    <div className="readonly-record" aria-label="只读仪器识别信息">
-      <div><span>仪器名称</span><strong>{instrument.name}</strong></div>
-      <div><span>序列号</span><strong>{instrument.serialNo || "未登记"}</strong></div>
-      <p>名称与序列号用于识别和关联历史记录。如有错误，请删除本条后按正确信息重新登记。</p>
-    </div>
-    <div className="form-grid">
-      <Field name="model" label="型号" defaultValue={instrument.model ?? ""} optional autoFocus />
-      <BoundedSectionPicker projectId={instrument.projectId} kind="batches" value={batchId} onChange={setBatchId} />
-      <label className="confirm-check"><input type="checkbox" checked={ups} onChange={(event) => setUps(event.target.checked)} />配备 UPS</label>
-      <label className="confirm-check"><input type="checkbox" checked={qrRequested} onChange={(event) => setQrRequested(event.target.checked)} />二维码已申请</label>
-    </div>
-    {error && <div className="inline-error" role="alert">{error}</div>}
-    <div className="form-footer"><span>仅更新型号、UPS、二维码标记和所属批次</span></div>
-  </form>;
 }
 
 function ServiceOrderNoteForm({
@@ -4769,7 +4812,6 @@ function layerRequiresDirtyProtection(layer: LayerState): boolean {
     "invoice-revoke",
     "batch-edit",
     "damage-update",
-    "instrument-edit",
     "order-note-edit",
     "tags",
     "edit-project-tags",
@@ -5100,7 +5142,6 @@ function layerTitle(layer: LayerState): string {
   if (layer.kind === "invoice-revoke") return "撤销掉票";
   if (layer.kind === "batch-edit") return "编辑物流费用记录";
   if (layer.kind === "damage-update") return "更新维修状态";
-  if (layer.kind === "instrument-edit") return "编辑仪器资料";
   if (layer.kind === "order-note-edit") return "维护开单备注";
   if (layer.kind === "action")
     return (
@@ -5122,7 +5163,6 @@ function layerDescription(
   if (layer.kind === "reminder-all") return "按提醒日期查看全部项目与到期分类";
   if (layer.kind === "clean") return "先检查数量，再输入固定文本确认";
   if (layer.kind === "tags") return "所有项目共用的分组与标签";
-  if (layer.kind === "instrument-edit") return `${layer.instrument.name} · 名称与序列号保持只读`;
   if (layer.kind === "order-note-edit") return `${layer.order.serviceOrderNo || "服务单号待补"} · 可修改、后补或清空`;
   if (layer.kind === "independent") return "独立模块 · 记录按页读取";
   if (layer.kind === "cancel") return "记录取消日期与原因（终态，不可恢复）";

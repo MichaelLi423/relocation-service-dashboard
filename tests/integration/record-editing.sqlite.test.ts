@@ -29,16 +29,20 @@ describe('记录编辑 SQLite 集成', () => {
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'instrument', projectId, values: { name: '名称不可改', serialNo: 'SN-1', ups: false, qrRequested: false } } });
     const instrumentId = (facade.v2SectionPage({ projectId, kind: 'instruments' }).rows[0] as { id: string }).id;
 
-    facade.v2Mutate({ op: 'instrument_update', payload: { instrumentId, model: ' M-1 ', ups: true, qrRequested: true, batchId } });
+    facade.v2Mutate({ op: 'instrument_update', payload: { instrumentId, manufacturer: ' 厂商甲 ', model: ' M-1 ', serviceLevel: ' 金牌 ', serialNo: ' SN-2 ', ups: true, qrRequested: true, batchId } });
     const beforeNoop = readBusinessRevision(db);
     const timestampBeforeNoop = (db.prepare('SELECT updated_at FROM instruments WHERE id=?').get(instrumentId) as { updated_at: string }).updated_at;
-    const noop = facade.v2Mutate({ op: 'instrument_update', payload: { instrumentId, model: 'M-1', ups: true, qrRequested: true, batchId } });
-    expect(db.prepare('SELECT name,serial_no,model,ups,qr_requested,batch_id FROM instruments WHERE id=?').get(instrumentId)).toMatchObject({ name: '名称不可改', serial_no: 'SN-1', model: 'M-1', ups: 1, qr_requested: 1, batch_id: batchId });
+    const noop = facade.v2Mutate({ op: 'instrument_update', payload: { instrumentId, manufacturer: '厂商甲', model: 'M-1', serviceLevel: '金牌', serialNo: 'SN-2', ups: true, qrRequested: true, batchId } });
+    expect(db.prepare('SELECT name,manufacturer,service_level,serial_no,model,ups,qr_requested,batch_id FROM instruments WHERE id=?').get(instrumentId)).toMatchObject({ name: '名称不可改', manufacturer: '厂商甲', service_level: '金牌', serial_no: 'SN-2', model: 'M-1', ups: 1, qr_requested: 1, batch_id: batchId });
     expect(db.prepare('SELECT COUNT(*) AS n FROM batch_change_history WHERE instrument_id=?').get(instrumentId)).toMatchObject({ n: 1 });
     expect(noop.businessRevision).toBe(beforeNoop);
     expect(db.prepare('SELECT updated_at FROM instruments WHERE id=?').get(instrumentId)).toMatchObject({ updated_at: timestampBeforeNoop });
 
-    const full = (batch: string | null, model = '不应保存') => ({ op: 'instrument_update' as const, payload: { instrumentId, model, ups: true, qrRequested: true, batchId: batch } });
+    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'instrument', projectId, values: { name: '另一台仪器', serialNo: 'SN-DUP', ups: false, qrRequested: false } } });
+    expect(() => facade.v2Mutate({ op: 'instrument_update', payload: { instrumentId, manufacturer: '厂商甲', model: 'M-1', serviceLevel: '金牌', serialNo: 'SN-DUP', ups: true, qrRequested: true, batchId } })).toThrow(/序列号.*已存在/);
+    expect(db.prepare('SELECT serial_no FROM instruments WHERE id=?').get(instrumentId)).toMatchObject({ serial_no: 'SN-2' });
+
+    const full = (batch: string | null, model = '不应保存') => ({ op: 'instrument_update' as const, payload: { instrumentId, manufacturer: '不应保存', model, serviceLevel: '不应保存', serialNo: 'SN-3', ups: true, qrRequested: true, batchId: batch } });
     expect(() => facade.v2Mutate(full('missing-batch'))).toThrow(/批次不存在/);
     const otherProjectId = facade.v2Mutate({ op: 'create_project', payload: { intent: 'draft', customerName: '跨项目客户', region: 'East' } }).changed!.projectId!;
     facade.v2Mutate({ op: 'submit_action', projectId: otherProjectId, action: { type: 'batch', projectId: otherProjectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '10', dealPrice: '0' } } });

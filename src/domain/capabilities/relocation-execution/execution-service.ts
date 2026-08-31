@@ -255,18 +255,37 @@ export class ExecutionService {
   }
 
   /**
-   * 更新仪器非批次字段（型号/UPS/"二维码是否申请"）。
+   * 更新仪器非批次字段（厂商/型号/服务级别/序列号/UPS/"二维码是否申请"）。
    * "二维码是否申请"为负责人手工维护的是/否字段，不由二维码申请记录推导（4.10）。
    * 所属批次调整走 setInstrumentBatch（保留改批历史）。
    */
   updateInstrumentFields(
     instrumentId: string,
-    input: { model?: string | null; ups?: boolean; qrRequested?: boolean },
+    input: { manufacturer?: string | null; model?: string | null; serviceLevel?: string | null; serialNo?: string | null; ups?: boolean; qrRequested?: boolean },
     actor: ActorSnapshot,
   ): Instrument {
     const instrument = this.requireInstrument(instrumentId);
+    if (input.manufacturer !== undefined) {
+      instrument.manufacturer = input.manufacturer?.trim() === '' ? null : (input.manufacturer?.trim() ?? null);
+    }
     if (input.model !== undefined) {
       instrument.model = input.model?.trim() === '' ? null : (input.model?.trim() ?? null);
+    }
+    if (input.serviceLevel !== undefined) {
+      instrument.serviceLevel = input.serviceLevel?.trim() === '' ? null : (input.serviceLevel?.trim() ?? null);
+    }
+    if (input.serialNo !== undefined) {
+      const serial = input.serialNo?.trim() === '' ? null : (input.serialNo?.trim() ?? null);
+      if (serial !== null) {
+        const existing = this.instruments.findByProjectAndSerial(instrument.projectId, serial);
+        if (existing && existing.id !== instrument.id) {
+          throw new UniquenessError(
+            'SERIAL_UNIQUE_IN_PROJECT',
+            `序列号「${serial}」在该合同/搬迁项目内已存在，跨合同可重复`,
+          );
+        }
+      }
+      instrument.serialNo = serial;
     }
     if (input.ups !== undefined) {
       instrument.ups = input.ups;

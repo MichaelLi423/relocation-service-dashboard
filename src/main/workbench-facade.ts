@@ -963,8 +963,8 @@ export class WorkbenchFacade {
   private writeInstrumentUpdate(input: Extract<WorkbenchV2MutationRequest, { op: 'instrument_update' }>): { projectId: string } {
     let projectId = '';
     this.transaction(() => {
-      const payload = this.recordEditingPayload(input.payload, ['instrumentId', 'model', 'ups', 'qrRequested', 'batchId']) as unknown as typeof input.payload;
-      if (typeof payload.instrumentId !== 'string' || (payload.model !== null && typeof payload.model !== 'string') || typeof payload.ups !== 'boolean' || typeof payload.qrRequested !== 'boolean' || (payload.batchId !== null && typeof payload.batchId !== 'string')) {
+      const payload = this.recordEditingPayload(input.payload, ['instrumentId', 'manufacturer', 'model', 'serviceLevel', 'serialNo', 'ups', 'qrRequested', 'batchId']) as unknown as typeof input.payload;
+      if (typeof payload.instrumentId !== 'string' || (payload.manufacturer !== null && typeof payload.manufacturer !== 'string') || (payload.model !== null && typeof payload.model !== 'string') || (payload.serviceLevel !== null && typeof payload.serviceLevel !== 'string') || (payload.serialNo !== null && typeof payload.serialNo !== 'string') || typeof payload.ups !== 'boolean' || typeof payload.qrRequested !== 'boolean' || (payload.batchId !== null && typeof payload.batchId !== 'string')) {
         throw new ValidationError('V2_MUTATION_PAYLOAD_INVALID', '仪器编辑字段格式不正确');
       }
       const instrumentId = payload.instrumentId;
@@ -972,7 +972,10 @@ export class WorkbenchFacade {
       if (!instrument) throw new ValidationError('INSTRUMENT_NOT_FOUND', `搬迁仪器不存在: ${instrumentId}`);
       projectId = instrument.projectId;
       if (
+        instrument.manufacturer === (payload.manufacturer?.trim() === '' ? null : (payload.manufacturer?.trim() ?? null)) &&
         instrument.model === (payload.model?.trim() === '' ? null : (payload.model?.trim() ?? null)) &&
+        instrument.serviceLevel === (payload.serviceLevel?.trim() === '' ? null : (payload.serviceLevel?.trim() ?? null)) &&
+        instrument.serialNo === (payload.serialNo?.trim() === '' ? null : (payload.serialNo?.trim() ?? null)) &&
         instrument.ups === payload.ups &&
         instrument.qrRequested === payload.qrRequested &&
         instrument.batchId === payload.batchId
@@ -981,12 +984,18 @@ export class WorkbenchFacade {
       }
       const execution = this.executionService();
       if (
+        instrument.manufacturer !== (payload.manufacturer?.trim() === '' ? null : (payload.manufacturer?.trim() ?? null)) ||
         instrument.model !== (payload.model?.trim() === '' ? null : (payload.model?.trim() ?? null)) ||
+        instrument.serviceLevel !== (payload.serviceLevel?.trim() === '' ? null : (payload.serviceLevel?.trim() ?? null)) ||
+        instrument.serialNo !== (payload.serialNo?.trim() === '' ? null : (payload.serialNo?.trim() ?? null)) ||
         instrument.ups !== payload.ups ||
         instrument.qrRequested !== payload.qrRequested
       ) {
         execution.updateInstrumentFields(instrumentId, {
+          manufacturer: payload.manufacturer,
           model: payload.model,
+          serviceLevel: payload.serviceLevel,
+          serialNo: payload.serialNo,
           ups: payload.ups,
           qrRequested: payload.qrRequested,
         }, this.actor());
