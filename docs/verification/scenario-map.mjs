@@ -590,7 +590,27 @@ export const scenarioMap = {
     },
     '最小字段校验': {
       evidence: [
-        ['tests/domain/service-order-recording.test.ts', '缺少服务单号、工程师或客户单位之一拒绝保存'],
+        ['tests/domain/service-order-recording.test.ts', '缺少服务单号或客户单位之一拒绝保存，工程师可空'],
+      ],
+    },
+    '开单仅维护备注与工程师': {
+      evidence: [
+        ['tests/domain/service-order-recording.test.ts', '开单仅维护备注与工程师'],
+      ],
+    },
+    '运行时拒绝开单身份字段': {
+      evidence: [
+        ['tests/domain/service-order-recording.test.ts', '运行时拒绝开单身份字段'],
+      ],
+    },
+    '工程师可空保存并可后续补录': {
+      evidence: [
+        ['tests/domain/service-order-recording.test.ts', '工程师可空保存并可后续补录'],
+      ],
+    },
+    '后补工程师': {
+      evidence: [
+        ['tests/domain/service-order-recording.test.ts', '后补工程师'],
       ],
     },
     '记录全部最小字段': {
@@ -606,6 +626,12 @@ export const scenarioMap = {
     '后补备注': {
       evidence: [
         ['tests/domain/service-order-recording.test.ts', '后补备注：备注缺失不影响保存，可后补填写'],
+      ],
+    },
+    '人工备注阻止 forward-fix 覆盖': {
+      evidence: [
+        ['tests/integration/record-editing.sqlite.test.ts', '人工备注与工程师阻止 forward-fix 覆盖'],
+        ['tests/integration/record-editing.sqlite.test.ts', '真实导入 forward-fix 遇到人工开单备注时阻塞并零写保留审计基线'],
       ],
     },
     '开单不影响进单与主状态': {
@@ -2331,6 +2357,30 @@ export const scenarioMap = {
       abstract: true,
       evidence: [['tests/interface/README.md', '未复制原型 HTML、CSS 或 JavaScript']],
       note: '原型意图验收记录见 tests/interface/README.md',
+    },
+    '空工程师计入总量与下钻': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '空工程师计入总量，下钻明细工程师为 null'],
+        ['tests/integration/operational-reporting.sqlite.test.ts', '开单工程师可空：空值计入总量、筛选、下钻 null'],
+      ],
+    },
+    '按工程师筛选': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '按工程师筛选：仅匹配文本包含值，空值不命中'],
+        ['tests/integration/operational-reporting.sqlite.test.ts', '开单工程师可空：空值计入总量、筛选、下钻 null'],
+      ],
+    },
+    '下钻明细含空工程师': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '空工程师计入总量，下钻明细工程师为 null'],
+        ['tests/integration/operational-reporting.sqlite.test.ts', '开单工程师可空：空值计入总量、筛选、下钻 null'],
+      ],
+    },
+    '补录后筛选变化': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '补录后筛选变化：空值补充为有值后可被筛选命中'],
+        ['tests/integration/operational-reporting.sqlite.test.ts', '开单工程师可空：空值计入总量、筛选、下钻 null，补录后筛选实时变化'],
+      ],
     },
   },
 

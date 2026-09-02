@@ -9,7 +9,7 @@ import {
 } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { closeDatabase, openDatabase, readSchemaVersion } from '../../src/domain/capabilities/local-data-persistence/connection';
 import { MigrationError, runMigrations } from '../../src/domain/capabilities/local-data-persistence/migration';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { SqliteShipToRequestRepository } from '../../src/domain/capabilities/local-data-persistence/ship-to-repositories';
 import { UniquenessError } from '../../src/domain/core/errors';
 import { localCalendarDateOf } from '../../src/domain/capabilities/local-data-persistence/business-date';

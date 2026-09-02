@@ -17,7 +17,7 @@ import {
 } from '../../src/domain/capabilities/local-data-persistence/financial-integrity';
 import { readDatabaseIdentity } from '../../src/domain/capabilities/local-data-persistence/identity';
 import { runMigrations } from '../../src/domain/capabilities/local-data-persistence/migration';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { WorkbenchReadRepository } from '../../src/domain/capabilities/local-data-persistence/workbench-read-repository';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 

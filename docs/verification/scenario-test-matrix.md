@@ -9,10 +9,10 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 15 |
-| ADDED Requirements 场景总数 | 604 |
-| 有有效测试证据（✅） | 589 |
+| ADDED Requirements 场景总数 | 610 |
+| 有有效测试证据（✅） | 598 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
-| 缺证据 / 证据无效（❌） | 15 |
+| 缺证据 / 证据无效（❌） | 12 |
 
 ### 待验证与阻塞项（诚实边界）
 
@@ -475,13 +475,15 @@
 | 四类开单与项目关联 | PM 开单独立保存 | ✅ | `tests/domain/service-order-recording.test.ts`「PM 开单独立保存」 |  |
 | 服务单号全局唯一 | 重复服务单号被拒 | ✅ | `tests/domain/service-order-recording.test.ts`「重复服务单号被拒」<br>`tests/integration/service-order-recording.sqlite.test.ts`「服务单号全局唯一：领域校验 + SQLite 部分唯一索引兜底」 |  |
 | 服务单号全局唯一 | 不同业务类型共用唯一空间 | ✅ | `tests/domain/service-order-recording.test.ts`「不同业务类型共用唯一空间：搬迁单号被认证开单占用拒绝」 |  |
-| 认证、单寄备件与 PM 开单最小字段 | 开单仅维护备注 | ❌ | — |  |
-| 认证、单寄备件与 PM 开单最小字段 | 运行时拒绝开单身份字段 | ❌ | — |  |
-| 认证、单寄备件与 PM 开单最小字段 | 最小字段校验 | ✅ | `tests/domain/service-order-recording.test.ts`「缺少服务单号、工程师或客户单位之一拒绝保存」 |  |
-| 认证、单寄备件与 PM 开单最小字段 | 记录全部最小字段 | ✅ | `tests/domain/service-order-recording.test.ts`「记录全部最小字段后保存，且不关联搬迁项目生命周期」 |  |
-| 认证、单寄备件与 PM 开单最小字段 | 开单日期未填默认当天 | ✅ | `tests/domain/service-order-recording.test.ts`「开单时间未填默认当前时间」 |  |
-| 认证、单寄备件与 PM 开单最小字段 | 后补备注 | ✅ | `tests/domain/service-order-recording.test.ts`「后补备注：备注缺失不影响保存，可后补填写」 |  |
-| 开单记录人工备注保护导入 forward-fix | 人工备注阻止 forward-fix 覆盖 | ❌ | — |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 开单仅维护备注与工程师 | ✅ | `tests/domain/service-order-recording.test.ts`「开单仅维护备注与工程师」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 运行时拒绝开单身份字段 | ✅ | `tests/domain/service-order-recording.test.ts`「运行时拒绝开单身份字段」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 最小字段校验 | ✅ | `tests/domain/service-order-recording.test.ts`「缺少服务单号或客户单位之一拒绝保存，工程师可空」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 记录全部最小字段 | ✅ | `tests/domain/service-order-recording.test.ts`「记录全部最小字段后保存，且不关联搬迁项目生命周期」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 开单日期未填默认当天 | ✅ | `tests/domain/service-order-recording.test.ts`「开单时间未填默认当前时间」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 后补备注 | ✅ | `tests/domain/service-order-recording.test.ts`「后补备注：备注缺失不影响保存，可后补填写」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 工程师可空保存并可后续补录 | ✅ | `tests/domain/service-order-recording.test.ts`「工程师可空保存并可后续补录」 |  |
+| 四类开单最小字段（工程师可空保存并可后续补录） | 后补工程师 | ✅ | `tests/domain/service-order-recording.test.ts`「后补工程师」 |  |
+| 开单记录人工备注与工程师保护导入 forward-fix | 人工备注阻止 forward-fix 覆盖 | ✅ | `tests/integration/record-editing.sqlite.test.ts`「人工备注与工程师阻止 forward-fix 覆盖」<br>`tests/integration/record-editing.sqlite.test.ts`「真实导入 forward-fix 遇到人工开单备注时阻塞并零写保留审计基线」 |  |
 | 开单与进单独立 | 开单不影响进单与主状态 | ✅ | `tests/domain/service-order-recording.test.ts`「开单不影响项目进单状态与主状态」 |  |
 | 开单与进单独立 | 一个项目多条开单 | ✅ | `tests/domain/service-order-recording.test.ts`「一个项目可关联多条开单」 |  |
 | 开单工作量计数 | 同一服务单只计一次 | ✅ | `tests/domain/service-order-recording.test.ts`「同一服务单只计一次（服务单号唯一，关联多名工程师/多次上门仍只计一次）」 |  |
@@ -671,6 +673,10 @@
 | 页面滚动时顶部导航与任务指挥台固定头部 | 滚动时头部整体固定 | ✅ | `tests/interface/layout.test.ts`「只固定顶部导航，任务区保持紧凑并随页面滚动」 |  |
 | 页面滚动时顶部导航与任务指挥台固定头部 | 固定头部不遮挡内容 | ✅ | `tests/interface/layout.test.ts`「只固定顶部导航，任务区保持紧凑并随页面滚动」 |  |
 | 页面滚动时顶部导航与任务指挥台固定头部 | 不拦截键盘焦点 | ✅ | `e2e/workbench-v2-layout.spec.ts`「最新布局：提醒、全宽单一项目工作区、项目队列依次排列且详情不裁切」 |  |
+| 开单工程师可空保存、空值展示与报表归属（v20） | 空工程师计入总量与下钻 | ✅ | `tests/domain/operational-reporting.test.ts`「空工程师计入总量，下钻明细工程师为 null」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null」 |  |
+| 开单工程师可空保存、空值展示与报表归属（v20） | 按工程师筛选 | ✅ | `tests/domain/operational-reporting.test.ts`「按工程师筛选：仅匹配文本包含值，空值不命中」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null」 |  |
+| 开单工程师可空保存、空值展示与报表归属（v20） | 下钻明细含空工程师 | ✅ | `tests/domain/operational-reporting.test.ts`「空工程师计入总量，下钻明细工程师为 null」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null」 |  |
+| 开单工程师可空保存、空值展示与报表归属（v20） | 补录后筛选变化 | ✅ | `tests/domain/operational-reporting.test.ts`「补录后筛选变化：空值补充为有值后可被筛选命中」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null，补录后筛选实时变化」 |  |
 
 ### workbench-todos
 
@@ -713,9 +719,6 @@
 | relocation-execution | 全量无变化保存零写 | 未登记 |
 | relocation-execution | 运输限制导致跨批保存全回滚 | 未登记 |
 | relocation-execution | 跨项目批次导致保存全回滚 | 未登记 |
-| service-order-recording | 开单仅维护备注 | 未登记 |
-| service-order-recording | 运行时拒绝开单身份字段 | 未登记 |
-| service-order-recording | 人工备注阻止 forward-fix 覆盖 | 未登记 |
 | workbench-interface | 标签重命名后粗粒度刷新 | 未登记 |
 | workbench-interface | 不可编辑事实提供正确更正路径 | 未登记 |
 | workbench-interface | 有下游依赖的事实删除被拒绝 | 未登记 |

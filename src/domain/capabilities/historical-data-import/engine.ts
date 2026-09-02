@@ -135,7 +135,8 @@ export interface ImportedServiceOrder extends ImportedRecordBase {
   serviceOrderNo: string;
   orderType: string;
   orderedAt: string;
-  engineer: string;
+  /** 参与工程师（可空，缺失或空白统一归一为 null，v20）。 */
+  engineer: string | null;
   customerName: string;
   note: string | null;
 }
@@ -288,14 +289,13 @@ function applyProjectField(
   }
 }
 
-/** 各角色必填目标字段（仅 project/invoice 要求 ECC）。 */
+/** 各角色必填目标字段（仅 project/invoice 要求 ECC；v20 起 service_order.engineer 可空）。 */
 const ROLE_REQUIRED_FIELDS: Record<Exclude<SheetRole, 'ignored'>, string[]> = {
   project: ['contract.ecc', 'contract.customer_name'],
   service_order: [
     'service_order.service_order_no',
     'service_order.order_type',
     'service_order.ordered_at',
-    'service_order.engineer',
     'service_order.customer_name',
   ],
   invoice: ['invoice.ecc', 'invoice.amount_cents', 'invoice.invoiced_at'],
@@ -568,6 +568,8 @@ export function buildImportPlan(
           const existing = serviceOrderByNo.get(serviceOrderNo) ?? [];
           existing.push(row);
           serviceOrderByNo.set(serviceOrderNo, existing);
+          const rawEngineer = mappedValue(row, 'service_order.engineer', mapping);
+          const engineer = rawEngineer === null ? null : rawEngineer.trim() === '' ? null : rawEngineer.trim();
           serviceOrders.push({
             sourceRows: [row],
             importSourceKey: makeImportSourceKey(row, `so|${serviceOrderNo}`),
@@ -575,7 +577,7 @@ export function buildImportPlan(
             serviceOrderNo,
             orderType: mappedValue(row, 'service_order.order_type', mapping) ?? '',
             orderedAt: normalizeBusinessDateValue(mappedValue(row, 'service_order.ordered_at', mapping) ?? ''),
-            engineer: mappedValue(row, 'service_order.engineer', mapping) ?? '',
+            engineer,
             customerName: mappedValue(row, 'service_order.customer_name', mapping) ?? '',
             note: mappedValue(row, 'service_order.note', mapping),
           });

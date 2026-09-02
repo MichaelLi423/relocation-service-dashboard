@@ -4,7 +4,7 @@ import { bootstrapWorkspaceDatabase, closeWorkspaceDatabase } from '../../src/do
 import { WorkspaceRepository } from '../../src/domain/capabilities/historical-data-import/workspace/workspace-repository';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { closeDatabase, readSchemaVersion } from '../../src/domain/capabilities/local-data-persistence/connection';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { businessKeyFromCells, toAppendRowInput, type NormalizedRow } from '../../src/domain/capabilities/historical-data-import/normalized-row';
 import { buildPlanFromRows } from '../../src/domain/capabilities/historical-data-import/validation-kernel';
 import { validatePlan } from '../../src/domain/capabilities/historical-data-import/validation';

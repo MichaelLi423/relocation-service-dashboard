@@ -177,4 +177,35 @@ describe('service-order-recording SQLite 集成（3.12）', () => {
     }
   });
 
+  it('工程师可空保存、空工程师可后续补录并关闭重开保留', () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const project = createPendingProject();
+      ctx.projects.save(project);
+      const order = ctx.orderService.recordOrder(
+        { orderType: 'relocation', serviceOrderNo: 'ORD-ENG-NULL', engineer: null, customerName: '华东医药', projectId: project.id },
+        ACTOR,
+      );
+      expect(order.engineer).toBeNull();
+      expect(ctx.orders.findById(order.id)?.engineer).toBeNull();
+      // 空值直接落库为 NULL
+      const raw = ctx.db.prepare('SELECT engineer FROM service_orders WHERE id = ?').get(order.id) as { engineer: string | null };
+      expect(raw.engineer).toBeNull();
+
+      // 补录工程师
+      const updated = ctx.orderService.updateEngineer(order.id, '工程师补录', ACTOR);
+      expect(updated.engineer).toBe('工程师补录');
+      closeDatabase(ctx.db);
+      const reopened = openService(dir);
+      expect(reopened.orders.findById(order.id)?.engineer).toBe('工程师补录');
+      // 清空工程师
+      reopened.orderService.updateEngineer(order.id, null, ACTOR);
+      expect(reopened.orders.findById(order.id)?.engineer).toBeNull();
+      closeDatabase(reopened.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
 });

@@ -12,7 +12,7 @@ import {
   targetSnapshotHash,
 } from '../../src/domain/capabilities/local-data-persistence/target-snapshot';
 import { BUSINESS_DATE_COLUMNS } from '../../src/domain/capabilities/local-data-persistence/schema-v13';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { runImport } from '../../src/domain/capabilities/historical-data-import/migration-service';
 import { MAPPING_V1, SOURCE_TABLE_FILES } from '../../src/domain/capabilities/historical-data-import/mapping';
 import type { SourceRow } from '../../src/domain/capabilities/historical-data-import/source-model';

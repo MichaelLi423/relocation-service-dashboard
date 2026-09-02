@@ -51,7 +51,8 @@ export interface PlanServiceOrder extends PlanRecordBase {
   serviceOrderNo: string;
   orderType: string;
   orderedAt: string;
-  engineer: string;
+  /** 参与工程师（可空，缺失或空白统一归一为 null，v20）。 */
+  engineer: string | null;
   customerName: string;
   note: string | null;
 }
@@ -321,17 +322,20 @@ export function buildPlanFromRows(rows: readonly NormalizedRow[]): NormalizedImp
     switch (row.category) {
       case 'project':
         break; // 项目在下方按 ECC 聚合
-      case 'service_order':
+      case 'service_order': {
+        const rawEngineer = cell(row, 'service_order.engineer');
+        const engineer = rawEngineer === null ? null : rawEngineer.trim() === '' ? null : rawEngineer.trim();
         serviceOrders.push({
           rows: [row],
           serviceOrderNo: cell(row, 'service_order.service_order_no') ?? '',
           orderType: cell(row, 'service_order.order_type') ?? '',
           orderedAt: cell(row, 'service_order.ordered_at') ?? '',
-          engineer: cell(row, 'service_order.engineer') ?? '',
+          engineer,
           customerName: cell(row, 'service_order.customer_name') ?? '',
           note: cell(row, 'service_order.note'),
         });
         break;
+      }
       case 'invoice':
         invoices.push({
           rows: [row],

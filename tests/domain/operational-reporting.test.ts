@@ -439,6 +439,51 @@ describe('月度开单量（7.4）', () => {
   });
 });
 
+describe('开单工程师空值与报表归属（v20）', () => {
+  it('空工程师计入总量，下钻明细工程师为 null', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({})];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', serviceOrderNo: 'ORD-001', engineer: '工程师甲' }),
+      makeOrder({ id: 'o2', serviceOrderNo: 'ORD-002', engineer: null }),
+      makeOrder({ id: 'o3', serviceOrderNo: 'ORD-003', engineer: null }),
+    ];
+    const report = service.buildReport(JULY);
+    expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(3);
+    const details = service.getMetricDetails('monthly_service_order_count', JULY) as Array<{ engineer: string | null }>;
+    expect(details.filter((d) => d.engineer === null)).toHaveLength(2);
+    expect(details.filter((d) => d.engineer === '工程师甲')).toHaveLength(1);
+  });
+
+  it('按工程师筛选：仅匹配文本包含值，空值不命中', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({})];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', serviceOrderNo: 'ORD-001', engineer: '工程师甲' }),
+      makeOrder({ id: 'o2', serviceOrderNo: 'ORD-002', engineer: null }),
+      makeOrder({ id: 'o3', serviceOrderNo: 'ORD-003', engineer: '工程师乙' }),
+    ];
+    const filtered = service.buildReport({ ...JULY, engineer: '工程师甲' });
+    expect(filtered.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+    const details = service.getMetricDetails('monthly_service_order_count', { ...JULY, engineer: '工程师甲' }) as Array<{ engineer: string | null }>;
+    expect(details.every((d) => (d.engineer ?? '').includes('工程师甲'))).toBe(true);
+  });
+
+  it('补录后筛选变化：空值补充为有值后可被筛选命中', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({})];
+    const orderNull = makeOrder({ id: 'o1', serviceOrderNo: 'ORD-001', engineer: null });
+    const orderA = makeOrder({ id: 'o2', serviceOrderNo: 'ORD-002', engineer: '工程师甲' });
+    facts.serviceOrders = [orderNull, orderA];
+    expect(service.buildReport({ ...JULY, engineer: '工程师甲' }).monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+    // 补录
+    orderNull.engineer = '工程师甲';
+    expect(service.buildReport({ ...JULY, engineer: '工程师甲' }).monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
+    const details = service.getMetricDetails('monthly_service_order_count', { ...JULY, engineer: '工程师甲' }) as Array<{ orderId: string; engineer: string | null }>;
+    expect(details.map((d) => d.orderId).sort()).toEqual(['o1', 'o2']);
+  });
+});
+
 describe('损坏维修统计（7.5）', () => {
   it('记录数量按事项计数，仅已使用备件金额计入维修费用', () => {
     const { facts, service } = setup();

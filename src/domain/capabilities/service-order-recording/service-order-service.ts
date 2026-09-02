@@ -23,15 +23,15 @@ import type { ServiceOrderRepository } from './service-order-repositories';
  * 必须经本服务的独立 recordOrder 动作登记。
  */
 
-/** 手工登记开单输入（3.8/3.9）。 */
+/** 手工登记开单输入（3.8/3.9；v20 起 engineer 可空后续补录）。 */
 export interface ServiceOrderInput {
   orderType: OrderType;
   /** 非空服务单号全局唯一（四类共用唯一空间）。 */
   serviceOrderNo: string;
   /** 开单日期（未填默认当天，TBD-22）。 */
   orderedAt?: BusinessDate;
-  /** 参与工程师（必填）。 */
-  engineer: string;
+  /** 参与工程师（可空，允许后续补录）。 */
+  engineer?: string | null;
   /** 客户单位（必填）。 */
   customerName: string;
   /** 项目归档关联（内部 ID）：搬迁开单必填；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */
@@ -67,7 +67,8 @@ export class ServiceOrderService {
       );
     }
     const orderNo = assertRequiredText(input.serviceOrderNo, '服务单号');
-    const engineer = assertRequiredText(input.engineer, '工程师');
+    const rawEngineer = input.engineer == null ? null : String(input.engineer).trim();
+    const engineer = rawEngineer === '' ? null : rawEngineer;
     const customerName = assertRequiredText(input.customerName, '客户单位');
     this.assertOrderNoUnique(orderNo);
 
@@ -120,6 +121,24 @@ export class ServiceOrderService {
     order.note = note?.trim() === '' ? null : (note?.trim() ?? null);
     order.accountId = actor.accountId;
     order.usernameSnapshot = actor.username;
+    order.updatedAt = this.now();
+    this.orders.save(order);
+    return order;
+  }
+
+  /** 后补/修改工程师：工程师允许空缺保存，保存后可随时补录或清空（v20）。 */
+  updateEngineer(orderId: string, engineer: string | null, _actor: ActorSnapshot): ServiceOrder {
+    const order = this.orders.findById(orderId);
+    if (!order) {
+      throw new ValidationError('ORDER_NOT_FOUND', `开单记录不存在: ${orderId}`);
+    }
+    const normalized = engineer?.trim() === '' ? null : (engineer?.trim() ?? null);
+    const current = order.engineer ?? null;
+    if (current === normalized) {
+      return order;
+    }
+    order.engineer = normalized;
+    // 保留创建者归属快照（accountId/usernameSnapshot），不由编辑者覆盖（v20）。
     order.updatedAt = this.now();
     this.orders.save(order);
     return order;

@@ -18,6 +18,7 @@ export * from './schema-v10';
 export * from './schema-v11';
 export * from './schema-v12';
 export * from './schema-v14';
+export * from './schema-v20';
 export * from './identity';
 export * from './migration';
 export * from './backup';

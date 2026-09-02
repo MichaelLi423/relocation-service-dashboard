@@ -1682,6 +1682,7 @@ export function WorkbenchV2({
             <ServiceOrderNoteForm
               order={layer.order}
               onSave={(note) => mutateRecord({ op: "service_order_note_update", payload: { orderId: layer.order.id, note } }, note ? "开单备注已保存" : "开单备注已清空")}
+              onSaveEngineer={(engineer) => mutateRecord({ op: "service_order_engineer_update", payload: { orderId: layer.order.id, engineer } }, engineer ? "工程师已保存" : "工程师已清空")}
             />
           ) : layer.kind === "report" ? (
             <ReportPanelV2 catalog={tagCatalog} catalogLoading={tagCatalogLoading} catalogError={tagCatalogError} onRetryCatalog={loadTagCatalog} />
@@ -2492,6 +2493,7 @@ function formatCell(column: string, value: unknown): ReactNode {
     return value
       ? <span className="record-state qr-marked" aria-label="已申请二维码">已申请</span>
       : <span className="record-state qr-unmarked">未申请</span>;
+  if (column === "engineer" && (value === null || value === "")) return "待补";
   if (value === null || value === "") return "—";
   if (typeof value === "boolean") return value ? "是" : "否";
   if (column === "amount") return money(String(value));
@@ -2504,11 +2506,14 @@ function formatCell(column: string, value: unknown): ReactNode {
 function ServiceOrderNoteForm({
   order,
   onSave,
+  onSaveEngineer,
 }: {
   order: Extract<WorkbenchV2SectionRow, { kind: "orders" }>;
   onSave: (note: string | null) => Promise<void>;
+  onSaveEngineer: (engineer: string | null) => Promise<void>;
 }): JSX.Element {
   const [note, setNote] = useState(order.note ?? "");
+  const [engineer, setEngineer] = useState(order.engineer ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function save(next: string): Promise<void> {
@@ -2516,9 +2521,16 @@ function ServiceOrderNoteForm({
     try { await onSave(next.trim() || null); }
     catch (cause) { setError(messageOf(cause)); setBusy(false); }
   }
+  async function saveEngineer(next: string): Promise<void> {
+    setBusy(true); setError("");
+    try { await onSaveEngineer(next.trim() || null); }
+    catch (cause) { setError(messageOf(cause)); setBusy(false); }
+  }
   return <form id="service-order-note-form" className="record-edit-form" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void save(note); }}>
     <LayerHeaderAction><button form="service-order-note-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : order.note ? "保存修改" : "补充备注"}</button></LayerHeaderAction>
-    <div className="readonly-record compact"><div><span>服务单号</span><strong>{order.serviceOrderNo || "待补"}</strong></div><div><span>工程师</span><strong>{order.engineer}</strong></div></div>
+    <div className="readonly-record compact"><div><span>服务单号</span><strong>{order.serviceOrderNo || "待补"}</strong></div><div><span>工程师</span><strong>{order.engineer || "待补"}</strong></div></div>
+    <Field name="engineer" label="工程师" optional value={engineer} onChange={(event) => setEngineer(event.target.value)} help="可后补或更正，清空后保存会移除工程师。" />
+    <div className="form-footer"><button className="button small" type="button" disabled={busy} onClick={() => void saveEngineer(engineer)}>{order.engineer ? "保存工程师" : "补充工程师"}</button><button className="button small" type="button" disabled={busy || !order.engineer} onClick={() => { setEngineer(""); void saveEngineer(""); }}>清空工程师</button></div>
     <TextArea name="serviceOrderNote" label="备注" value={note} onChange={(event) => setNote(event.target.value)} help="可修改、后补；清空后保存会移除现有备注。" autoFocus />
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="form-footer"><button className="button" type="button" disabled={busy || !order.note} onClick={() => { setNote(""); void save(""); }}>清空备注</button></div>
@@ -3116,7 +3128,7 @@ function actionFields(
           type="date"
           required
         />
-        <Field name="engineer" label="工程师" required help="保存后关联当前项目，并计入该工程师工作量。" />
+        <Field name="engineer" label="工程师" optional help="可留空后补；保存后关联当前项目，并计入该工程师工作量。" />
       </>
     );
   if (type === "acceptance")
@@ -4532,7 +4544,7 @@ function historyRecordText(row: WorkbenchV2HistoryRow): string {
   if (row.kind === "batch") return row.transportCompany || "运输安排";
   if (row.kind === "instrument") return `${row.name}${row.serialNo ? ` · ${row.serialNo}` : ""}`;
   if (row.kind === "activity") return row.engineers || "到访活动";
-  if (row.kind === "service_order") return `${row.serviceOrderNo || "服务单号待补"} · ${row.engineer}`;
+  if (row.kind === "service_order") return `${row.serviceOrderNo || "服务单号待补"} · ${row.engineer || "工程师待补"}`;
   if (row.kind === "invoice") return money(row.amount);
   if (row.kind === "damage") return `${row.instrumentName} · ${row.issueStatus}`;
   if (row.kind === "acceptance") return "验收报告";

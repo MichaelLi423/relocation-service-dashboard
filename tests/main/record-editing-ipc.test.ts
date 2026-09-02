@@ -57,6 +57,27 @@ describe('记录编辑 IPC', () => {
     const orderId = (db.prepare('SELECT id FROM service_orders').get() as { id: string }).id;
     expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_note_update', payload: { orderId, note: '备注', orderedAt: '2026-08-11' } })).toThrow(/不允许字段/);
     expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_note_update', payload: { orderId, note: '备注' }, serviceOrderNo: '越权单号' } as never)).toThrow(/不允许字段/);
+    // service_order_engineer_update 顶层/payload 白名单
+    const engPayload = { orderId, engineer: '新工程师' };
+    expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: { orderId, engineer: '新工程师', serviceOrderNo: '越权' } } as never)).toThrow(/不允许字段/);
+    expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: engPayload, extra: '越权' } as never)).toThrow(/不允许字段/);
+    expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: { orderId: 123 as unknown as string, engineer: '工' } } as never)).toThrow(/格式不正确/);
+    expect(() => bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: { orderId, engineer: 123 as unknown as string } } as never)).toThrow(/格式不正确/);
+    const engUpdate = bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: engPayload }) as { invalidated: string[]; businessRevision: number };
+    expect(engUpdate.invalidated).toEqual(expect.arrayContaining([`project:${projectId}`, `sections:${projectId}`]));
+    expect(db.prepare('SELECT engineer FROM service_orders WHERE id=?').get(orderId)).toMatchObject({ engineer: '新工程师' });
+    // 零写：相同归一值不递增 revision
+    const revBeforeEngNoop = readBusinessRevision(db);
+    const engUpdatedAtBefore = (db.prepare('SELECT updated_at FROM service_orders WHERE id=?').get(orderId) as { updated_at: string }).updated_at;
+    const noopEng = bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: engPayload }) as { businessRevision: number };
+    expect(noopEng.businessRevision).toBe(revBeforeEngNoop);
+    expect(db.prepare('SELECT updated_at FROM service_orders WHERE id=?').get(orderId)).toMatchObject({ updated_at: engUpdatedAtBefore });
+    // 真实导入审计基线不变：补录不刷新 import_record_audit
+    db.prepare('UPDATE service_orders SET import_source_hash=? WHERE id=?').run('src-hash-eng', orderId);
+    db.prepare('INSERT INTO import_record_audit (id, source_key, target_table, target_id, import_source_hash, target_snapshot_hash, imported_at) VALUES (?,?,?,?,?,?,?)').run('audit-eng', 'so-eng-src', 'service_orders', orderId, 'src-hash-eng', 'snap-hash-eng', '2026-08-10T00:00:00Z');
+    bus.invoke(IPC_CHANNELS.workbenchV2Mutate, { op: 'service_order_engineer_update', payload: { orderId, engineer: '再补录' } });
+    expect(db.prepare('SELECT import_source_hash FROM service_orders WHERE id=?').get(orderId)).toMatchObject({ import_source_hash: 'src-hash-eng' });
+    expect(db.prepare('SELECT import_source_hash, target_snapshot_hash FROM import_record_audit WHERE id=?').get('audit-eng')).toMatchObject({ import_source_hash: 'src-hash-eng', target_snapshot_hash: 'snap-hash-eng' });
 
     const group = bus.invoke(IPC_CHANNELS.workbenchV2TagMutate, { command: 'create_group', payload: { name: 'IPC 原分组' } }) as { ok: true; data: { group: { id: string } } };
     const renamed = bus.invoke(IPC_CHANNELS.workbenchV2TagMutate, { command: 'rename_group', payload: { groupId: group.data.group.id, name: ' IPC 新分组 ' } }) as { ok: true; data: { group: { id: string; name: string }; invalidated: string[] } };

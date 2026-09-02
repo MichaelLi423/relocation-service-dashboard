@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { bootstrapDatabase, INITIAL_MIGRATION, MIGRATIONS } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { closeDatabase, openDatabase, readSchemaVersion } from '../../src/domain/capabilities/local-data-persistence/connection';
 import { Migration, MigrationError, runMigrations } from '../../src/domain/capabilities/local-data-persistence/migration';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { applyInitialSchema } from '../../src/domain/capabilities/local-data-persistence/schema';
 import { cleanupTempDir, makeTempDir, makeTempDbPath } from '../helpers/tmp-db';
 

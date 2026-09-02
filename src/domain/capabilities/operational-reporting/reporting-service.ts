@@ -222,7 +222,7 @@ export type MetricDetailRow =
   | ProjectPipelineRow
   | EntryAmountRow
   | { month: MonthKey; invoiceId: string; projectTempNo: string; invoicedAt: BusinessDate; amountCents: bigint; region: string }
-  | { month: MonthKey; orderId: string; orderType: OrderType; serviceOrderNo: string | null; orderedAt: BusinessDate; engineer: string; region: string | null }
+  | { month: MonthKey; orderId: string; orderType: OrderType; serviceOrderNo: string | null; orderedAt: BusinessDate; engineer: string | null; region: string | null }
   | DamageDetailRow
   | { month: MonthKey; feeId: string; batchId: string; projectTempNo: string; transportCompany: string | null; appliedAt: BusinessDate; budgetPriceCents: bigint; dealPriceCents: bigint; costCents: bigint; cancelled: boolean }
   | LogisticsRatioRow
@@ -384,7 +384,7 @@ export class ReportingService {
       .filter((o) => o.serviceOrderNo !== null) // 无单号不计工作量
       .filter((o) => this.inRange(toMonthKey(o.orderedAt), f))
       .filter((o) => f.orderType === null || o.orderType === f.orderType)
-      .filter((o) => f.engineer === null || o.engineer.includes(f.engineer))
+      .filter((o) => f.engineer === null || (o.engineer ?? '').includes(f.engineer))
       .filter((o) => o.projectId === null ? !this.tagFiltering(f) : this.projectInScope(o.projectId, f))
       .filter((o) => {
         if (f.region === null) return true;
@@ -850,7 +850,7 @@ interface OrderAggDetail {
   orderType: OrderType;
   serviceOrderNo: string | null;
   orderedAt: BusinessDate;
-  engineer: string;
+  engineer: string | null;
   region: string | null;
 }
 

@@ -672,6 +672,34 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       cleanupTempDir(dir);
     }
   });
+
+  it('开单工程师可空：空值计入总量、筛选、下钻 null，补录后筛选实时变化', () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const p = seedEnteredProject(ctx, { region: 'East', entryAt: '2026-07-01', snapshot: '10000' });
+      ctx.orderService.recordOrder({ orderType: 'relocation', serviceOrderNo: 'ORD-NULL-1', orderedAt: '2026-07-10', engineer: null, customerName: '客户A', projectId: p }, ACTOR);
+      ctx.orderService.recordOrder({ orderType: 'pm', serviceOrderNo: 'ORD-VAL', orderedAt: '2026-07-11', engineer: '工程师甲', customerName: '客户B' }, ACTOR);
+      ctx.orderService.recordOrder({ orderType: 'pm', serviceOrderNo: 'ORD-NULL-2', orderedAt: '2026-07-12', engineer: '   ', customerName: '客户C' }, ACTOR);
+      const month = { monthFrom: '2026-07', monthTo: '2026-07' };
+      const report = ctx.reporting.buildReport(month);
+      expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(3);
+      const details = ctx.reporting.getMetricDetails('monthly_service_order_count', month) as Array<{ engineer: string | null }>;
+      expect(details.filter((d) => d.engineer === null)).toHaveLength(2);
+      const filtered = ctx.reporting.buildReport({ ...month, engineer: '工程师甲' });
+      expect(filtered.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+      // 补录空值后筛选实时变化
+      const nullOrder = ctx.orderService.listOrders().find((o) => o.serviceOrderNo === 'ORD-NULL-1')!;
+      ctx.orderService.updateEngineer(nullOrder.id, '工程师甲', ACTOR);
+      const after = ctx.reporting.buildReport({ ...month, engineer: '工程师甲' });
+      expect(after.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
+      const afterDetails = ctx.reporting.getMetricDetails('monthly_service_order_count', { ...month, engineer: '工程师甲' }) as Array<{ engineer: string | null }>;
+      expect(afterDetails.every((d) => (d.engineer ?? '').includes('工程师甲'))).toBe(true);
+      closeDatabase(ctx.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
 });
 
 describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例精确（BigInt 定点）', () => {

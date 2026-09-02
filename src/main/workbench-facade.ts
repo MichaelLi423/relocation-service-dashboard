@@ -397,6 +397,12 @@ export class WorkbenchFacade {
         changed = ref.projectId ? { projectId: ref.projectId } : {};
         break;
       }
+      case 'service_order_engineer_update': {
+        this.assertRecordEditingRequestShape(request);
+        const ref = this.writeServiceOrderEngineerUpdate(request);
+        changed = ref.projectId ? { projectId: ref.projectId } : {};
+        break;
+      }
       default:
         throw new ValidationError('V2_MUTATION_UNKNOWN', `未知的 v2 mutation 操作: ${String((request as { op?: unknown }).op)}`);
     }
@@ -1019,6 +1025,20 @@ export class WorkbenchFacade {
     return projectId ? { projectId } : {};
   }
 
+  /** 服务单工程师补录：工程师可空，允许后续补录或清空（v20）。 */
+  private writeServiceOrderEngineerUpdate(input: Extract<WorkbenchV2MutationRequest, { op: 'service_order_engineer_update' }>): { projectId?: string } {
+    let projectId: string | undefined;
+    this.transaction(() => {
+      const payload = this.recordEditingPayload(input.payload, ['orderId', 'engineer']) as unknown as typeof input.payload;
+      if (typeof payload.orderId !== 'string' || (payload.engineer !== null && typeof payload.engineer !== 'string')) {
+        throw new ValidationError('V2_MUTATION_PAYLOAD_INVALID', '服务单工程师编辑字段格式不正确');
+      }
+      const order = new ServiceOrderService(this.orders, this.projects).updateEngineer(payload.orderId, payload.engineer, this.actor());
+      projectId = order.projectId ?? undefined;
+    });
+    return projectId ? { projectId } : {};
+  }
+
   /**
    * 损坏/维修事项更新（v2 damage_update）：复用 updateIssueStatus / setPartStatus /
    * updatePart 领域方法，不绕过领域校验（TBD-15：processing/repaired/closed_unrepaired
@@ -1169,7 +1189,7 @@ export class WorkbenchFacade {
           if (orderCustomerName === '') {
             throw new ValidationError('CUSTOMER_NAME_REQUIRED', '开单客户信息从项目客户读取失败，请先关联客户');
           }
-          new ServiceOrderService(this.orders, this.projects).recordOrder({orderType,serviceOrderNo:text(v.serviceOrderNo),orderedAt:businessDate(v.orderedAt,'开单日期') ?? '',engineer:text(v.engineer),customerName:orderCustomerName,projectId:projectId || null,note:optional(v.note)},actor); break;
+          new ServiceOrderService(this.orders, this.projects).recordOrder({orderType,serviceOrderNo:text(v.serviceOrderNo),orderedAt:businessDate(v.orderedAt,'开单日期') ?? '',engineer:text(v.engineer) === '' ? null : text(v.engineer),customerName:orderCustomerName,projectId:projectId || null,note:optional(v.note)},actor); break;
         }
         case 'logistics': {
           // 记录物流费用（部分费用语义）：全部字段可选；空金额不得转 0、空日期不得

@@ -22,8 +22,8 @@ export interface ServiceOrder {
   serviceOrderNo: string | null;
   /** 开单日期（业务日期；未填默认当天，TBD-22）。 */
   orderedAt: BusinessDate;
-  /** 参与工程师（必填）。 */
-  engineer: string;
+  /** 参与工程师（可空，允许后续补录）。 */
+  engineer: string | null;
   /** 客户单位（必填）。 */
   customerName: string;
   /** 项目归档关联（内部 ID）：搬迁开单必填；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */

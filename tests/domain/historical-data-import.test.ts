@@ -8,6 +8,7 @@ import {
   rebuildStatus,
   resolveImportedStatus,
 } from '../../src/domain/capabilities/historical-data-import/engine';
+import { buildPlanFromRows } from '../../src/domain/capabilities/historical-data-import/validation-kernel';
 import { sourceRowKey } from '../../src/domain/capabilities/historical-data-import/source-model';
 import {
   runDryRun,
@@ -726,5 +727,64 @@ describe('回归 fixture：真实 workbook 路由与列别名', () => {
     const conflict = plan.conflicts.find((c) => c.conflictCode === 'DUPLICATE_SERVICE_ORDER');
     expect(conflict?.field).toBe('service_order.service_order_no');
     expect(JSON.stringify(conflict)).not.toContain('SO-DUP');
+  });
+});
+
+describe('v20 工程师可空导入（缺失/空白统一 null、重跑/forward-fix 快照回归）', () => {
+  it('历史导入链路缺失/空白工程师统一归一为 null 且 dry-run 仍可导入', () => {
+    const missing: SourceRow[] = [row(WORKLOAD, '开单记录表', 2, { 服务单号: 'SO-NULL-1', 开单类型: 'pm', 开单时间: '2026-07-01T00:00:00+08:00', 客户单位: '甲' })];
+    const blank: SourceRow[] = [row(WORKLOAD, '开单记录表', 3, { 服务单号: 'SO-NULL-2', 开单类型: 'pm', 开单时间: '2026-07-01T00:00:00+08:00', 工程师: '   ', 客户单位: '甲' })];
+    const withVal: SourceRow[] = [row(WORKLOAD, '开单记录表', 4, { 服务单号: 'SO-VAL', 开单类型: 'pm', 开单时间: '2026-07-01T00:00:00+08:00', 工程师: '工甲', 客户单位: '甲' })];
+    const planMissing = buildImportPlan(missing, { mapping: MAPPING_V1 });
+    const planBlank = buildImportPlan(blank, { mapping: MAPPING_V1 });
+    const planVal = buildImportPlan(withVal, { mapping: MAPPING_V1 });
+    expect(planMissing.errors).toHaveLength(0);
+    expect(planBlank.errors).toHaveLength(0);
+    expect(planMissing.serviceOrders[0].engineer).toBeNull();
+    expect(planBlank.serviceOrders[0].engineer).toBeNull();
+    expect(planVal.serviceOrders[0].engineer).toBe('工甲');
+    expect(runDryRun({ rows: missing, mapping: MAPPING_V1 }).importable).toBe(true);
+    expect(runDryRun({ rows: blank, mapping: MAPPING_V1 }).importable).toBe(true);
+  });
+
+  it('缺失/空白导入落库为 NULL，重跑幂等跳过，forward-fix 快照一致', () => {
+    const dir = makeTempDir();
+    try {
+      const { db } = bootstrapDatabase({ dataDir: dir });
+      const workload = WORKLOAD;
+      const initial: SourceRow[] = [row(workload, '开单记录表', 2, { 单号: 'SO-IMP-NULL', 类型: 'pm', 日期: '2026-08-10T00:00:00+08:00', 客户单位: '导入客户' })];
+      const first = runImport(db, { rows: initial, mapping: MAPPING_V1 });
+      expect(first.batches[0].status).toBe('success');
+      const row1 = db.prepare('SELECT engineer, import_source_hash FROM service_orders WHERE service_order_no=?').get('SO-IMP-NULL') as { engineer: string | null };
+      expect(row1.engineer).toBeNull();
+      // 空白归一后与缺失同为 null：重跑空白应成功（源 hash 变化但目标快照相同，归一后无冲突）
+      const blank: SourceRow[] = [row(workload, '开单记录表', 2, { 单号: 'SO-IMP-NULL', 类型: 'pm', 日期: '2026-08-10T00:00:00+08:00', 工程师: '   ', 客户单位: '导入客户' })];
+      const second = runImport(db, { rows: blank, mapping: MAPPING_V1 });
+      expect(['success', 'skipped']).toContain(second.batches[0].status);
+      expect((db.prepare('SELECT engineer FROM service_orders WHERE service_order_no=?').get('SO-IMP-NULL') as { engineer: string | null }).engineer).toBeNull();
+      // forward-fix：补充工程师后快照刷新
+      const withEngineer: SourceRow[] = [row(workload, '开单记录表', 2, { 单号: 'SO-IMP-NULL', 类型: 'pm', 日期: '2026-08-10T00:00:00+08:00', 工程师: '补录工', 客户单位: '导入客户' })];
+      const third = runImport(db, { rows: withEngineer, mapping: MAPPING_V1 });
+      expect(third.batches[0].status).toBe('success');
+      expect((db.prepare('SELECT engineer FROM service_orders WHERE service_order_no=?').get('SO-IMP-NULL') as { engineer: string | null }).engineer).toBe('补录工');
+      closeDatabase(db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
+  it('向导内核 NormalizedRow 缺失/空白工程师统一归一为 null', () => {
+    const missing = buildPlanFromRows([
+      { category: 'service_order', rowId: 'r1', sourceRowId: null, businessKey: 'SO-K-1', sourceKind: 'file', sourceFile: 'f.xlsx', sourceSheet: 's', sourceRow: 2, pasteBatch: null, cells: { 'service_order.service_order_no': 'SO-K-1', 'service_order.order_type': 'pm', 'service_order.ordered_at': '2026-07-01', 'service_order.customer_name': '甲' }, positionOnlyIdentity: false },
+    ]);
+    const blank = buildPlanFromRows([
+      { category: 'service_order', rowId: 'r2', sourceRowId: null, businessKey: 'SO-K-2', sourceKind: 'file', sourceFile: 'f.xlsx', sourceSheet: 's', sourceRow: 3, pasteBatch: null, cells: { 'service_order.service_order_no': 'SO-K-2', 'service_order.order_type': 'pm', 'service_order.ordered_at': '2026-07-01', 'service_order.engineer': '   ', 'service_order.customer_name': '甲' }, positionOnlyIdentity: false },
+    ]);
+    const withVal = buildPlanFromRows([
+      { category: 'service_order', rowId: 'r3', sourceRowId: null, businessKey: 'SO-K-3', sourceKind: 'file', sourceFile: 'f.xlsx', sourceSheet: 's', sourceRow: 4, pasteBatch: null, cells: { 'service_order.service_order_no': 'SO-K-3', 'service_order.order_type': 'pm', 'service_order.ordered_at': '2026-07-01', 'service_order.engineer': '工甲', 'service_order.customer_name': '甲' }, positionOnlyIdentity: false },
+    ]);
+    expect(missing.serviceOrders[0].engineer).toBeNull();
+    expect(blank.serviceOrders[0].engineer).toBeNull();
+    expect(withVal.serviceOrders[0].engineer).toBe('工甲');
   });
 });

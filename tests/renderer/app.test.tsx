@@ -909,8 +909,8 @@ describe('Oracle #10 bounded workbench renderer', () => {
   it('开单、合并批次、仪器与损坏维修表单给出对应字段约束和就地反馈', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
     let dialog = await openQuickAction('开单记录');
-    const orderNo = within(dialog).getByRole('textbox', { name: /服务单号.*必填/ }); const engineer = within(dialog).getByRole('textbox', { name: /工程师.*必填/ });
-    expect(orderNo).toHaveAccessibleDescription(/当前项目的开单记录/); expect(engineer).toHaveAccessibleDescription(/关联当前项目，并计入该工程师工作量/);
+    const orderNo = within(dialog).getByRole('textbox', { name: /服务单号.*必填/ }); const engineer = within(dialog).getByRole('textbox', { name: /工程师.*可后补/ });
+    expect(orderNo).toHaveAccessibleDescription(/当前项目的开单记录/); expect(engineer).toHaveAccessibleDescription(/可留空后补/);
     expect(within(dialog).getByLabelText(/开单类型/)).toHaveAccessibleDescription(/仅作项目归档，不影响搬迁进度/);
     expect(within(dialog).getByLabelText(/开单类型/).querySelectorAll('option')).toHaveLength(4);
     for (const label of ['搬迁', '认证', '单寄备件', 'PM']) expect(within(dialog).getByRole('option', { name: label })).toBeInTheDocument();

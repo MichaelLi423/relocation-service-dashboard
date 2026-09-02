@@ -182,8 +182,8 @@ describe('服务单号全局唯一（3.9 / TBD-21）', () => {
   });
 });
 
-describe('认证、单寄备件与 PM 开单最小字段（3.8 / TBD-22）', () => {
-  it('缺少服务单号、工程师或客户单位之一拒绝保存', () => {
+describe('认证、单寄备件与 PM 开单最小字段（3.8 / TBD-22 / v20 工程师可空）', () => {
+  it('缺少服务单号或客户单位之一拒绝保存，工程师可空', () => {
     const { orderService } = setup();
     expect(() =>
       orderService.recordOrder(
@@ -196,10 +196,10 @@ describe('认证、单寄备件与 PM 开单最小字段（3.8 / TBD-22）', () 
         { orderType: 'certification', serviceOrderNo: 'ORD-300', engineer: '  ', customerName: '客户' },
         ACTOR,
       ),
-    ).toThrow(/工程师/);
+    ).not.toThrow();
     expect(() =>
       orderService.recordOrder(
-        { orderType: 'certification', serviceOrderNo: 'ORD-300', engineer: '工程师', customerName: '  ' },
+        { orderType: 'certification', serviceOrderNo: 'ORD-300-B', engineer: null, customerName: '  ' },
         ACTOR,
       ),
     ).toThrow(/客户单位/);
@@ -209,6 +209,92 @@ describe('认证、单寄备件与 PM 开单最小字段（3.8 / TBD-22）', () 
         ACTOR,
       ),
     ).toThrow(/开单类型/);
+  });
+
+  it('工程师可空保存并可后续补录', () => {
+    const { orderService } = setup();
+    const order = orderService.recordOrder(
+      { orderType: 'certification', serviceOrderNo: 'ORD-ENG-EMPTY', engineer: null, customerName: '客户' },
+      ACTOR,
+    );
+    expect(order.engineer).toBeNull();
+    const withEngineer = orderService.updateEngineer(order.id, '工程师甲', ACTOR);
+    expect(withEngineer.engineer).toBe('工程师甲');
+    const cleared = orderService.updateEngineer(order.id, null, ACTOR);
+    expect(cleared.engineer).toBeNull();
+  });
+
+  it('后补工程师', () => {
+    const { orderService } = setup();
+    const order = orderService.recordOrder(
+      { orderType: 'pm', serviceOrderNo: 'ORD-ENG-002', engineer: '', customerName: '客户' },
+      ACTOR,
+    );
+    expect(order.engineer).toBeNull();
+    const updated = orderService.updateEngineer(order.id, '  工程师乙  ', ACTOR);
+    expect(updated.engineer).toBe('工程师乙');
+  });
+
+  it('开单仅维护备注与工程师', () => {
+    const { orderService } = setup();
+    const order = orderService.recordOrder(
+      { orderType: 'pm', serviceOrderNo: 'ORD-ENG-003', engineer: null, customerName: '客户', note: '初' },
+      ACTOR,
+    );
+    const beforeOrderedAt = order.orderedAt;
+    const beforeType = order.orderType;
+    const afterNote = orderService.updateNote(order.id, '改备注', ACTOR);
+    expect(afterNote.note).toBe('改备注');
+    expect(afterNote.orderedAt).toBe(beforeOrderedAt);
+    expect(afterNote.orderType).toBe(beforeType);
+    const afterEng = orderService.updateEngineer(order.id, '工', ACTOR);
+    expect(afterEng.engineer).toBe('工');
+    expect(afterEng.orderedAt).toBe(beforeOrderedAt);
+  });
+
+  it('运行时拒绝开单身份字段', () => {
+    const { orderService } = setup();
+    orderService.recordOrder(
+      { orderType: 'certification', serviceOrderNo: 'ORD-ENG-004', engineer: null, customerName: '客户' },
+      ACTOR,
+    );
+    // 领域服务仅暴露 note/engineer 原位维护，其他身份字段无更新入口，验证无直接 API 可改身份字段
+    expect(typeof (orderService as unknown as { updateServiceOrderNo?: unknown }).updateServiceOrderNo).toBe('undefined');
+  });
+
+  it('后补工程师归一后相同值零写、保留创建者归属且不刷新更新时间', () => {
+    const { orderService, orders } = setup();
+    const creator = makeAccount('creator-1', '创建者');
+    const editor = makeAccount('editor-1', '编辑者');
+    const order = orderService.recordOrder(
+      { orderType: 'pm', serviceOrderNo: 'ORD-ENG-ZERO', engineer: '工程师甲', customerName: '客户' },
+      creator,
+    );
+    const beforeUpdatedAt = order.updatedAt;
+    const beforeAccountId = order.accountId;
+    const beforeUsername = order.usernameSnapshot;
+    // 相同值（含空白归一）零写：不覆盖归属、不刷新 updatedAt、不新增保存
+    const same = orderService.updateEngineer(order.id, ' 工程师甲 ', editor);
+    expect(same.engineer).toBe('工程师甲');
+    expect(same.accountId).toBe(beforeAccountId);
+    expect(same.usernameSnapshot).toBe(beforeUsername);
+    expect(same.accountId).not.toBe(editor.accountId);
+    expect(same.updatedAt).toBe(beforeUpdatedAt);
+    expect(orders.findById(order.id)?.accountId).toBe(creator.accountId);
+    // 空串归一为 null 的零写
+    const nullOrder = orderService.recordOrder(
+      { orderType: 'pm', serviceOrderNo: 'ORD-ENG-ZERO-NULL', engineer: null, customerName: '客户2' },
+      creator,
+    );
+    const beforeNullUpdatedAt = nullOrder.updatedAt;
+    const sameNull = orderService.updateEngineer(nullOrder.id, '   ', editor);
+    expect(sameNull.engineer).toBeNull();
+    expect(sameNull.updatedAt).toBe(beforeNullUpdatedAt);
+    // 真正变更时保留创建者
+    const changed = orderService.updateEngineer(order.id, '工程师乙', editor);
+    expect(changed.engineer).toBe('工程师乙');
+    expect(changed.accountId).toBe(creator.accountId);
+    expect(changed.usernameSnapshot).toBe(creator.username);
   });
 
   it('记录全部最小字段后保存，且不关联搬迁项目生命周期', () => {
@@ -226,6 +312,21 @@ describe('认证、单寄备件与 PM 开单最小字段（3.8 / TBD-22）', () 
     expect(orders.findById(order.id)?.id).toBe(order.id);
     expect(order.orderedAt).toBe('2026-07-01');
     expect(order.projectId).toBeNull();
+  });
+
+  it('记录全部最小字段（工程师可空）后保存', () => {
+    const { orderService, orders } = setup();
+    const order = orderService.recordOrder(
+      {
+        orderType: 'parts_by_mail',
+        serviceOrderNo: 'ORD-301B',
+        orderedAt: '2026-07-01',
+        engineer: null,
+        customerName: '华东医药',
+      },
+      ACTOR,
+    );
+    expect(orders.findById(order.id)?.engineer).toBeNull();
   });
 
   it('开单时间未填默认当前时间', () => {

@@ -94,7 +94,7 @@ describe('记录编辑 SQLite 集成', () => {
     }];
     expect(runImport(db, { rows: initial, mapping: MAPPING_V1 }).batches).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'success' })]));
     const imported = db.prepare('SELECT id,note,engineer,import_source_key,import_source_hash FROM service_orders WHERE service_order_no=?').get('SO-FORWARD-FIX') as {
-      id: string; note: string | null; engineer: string; import_source_key: string; import_source_hash: string;
+      id: string; note: string | null; engineer: string | null; import_source_key: string; import_source_hash: string;
     };
     const auditBefore = db.prepare('SELECT import_source_hash,target_snapshot_hash FROM import_record_audit WHERE source_key=?').get(imported.import_source_key) as {
       import_source_hash: string; target_snapshot_hash: string;
@@ -114,5 +114,74 @@ describe('记录编辑 SQLite 集成', () => {
       note: '人工备注保留', engineer: '导入工程师', import_source_hash: imported.import_source_hash,
     });
     expect(db.prepare('SELECT import_source_hash,target_snapshot_hash FROM import_record_audit WHERE source_key=?').get(imported.import_source_key)).toEqual(auditBefore);
+  });
+
+  it('开单工程师可空保存并可后续补录，补录不刷新导入审计基线', async () => {
+    const { db, facade } = await setup();
+    const projectId = facade.v2Mutate({ op: 'create_project', payload: { intent: 'draft', customerName: '工程师可空客户', region: 'East' } }).changed!.projectId!;
+    // 快速记录时工程师可空
+    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', projectId, values: { orderType: 'relocation', serviceOrderNo: 'SO-ENG-NULL', orderedAt: '2026-08-10', engineer: '' } } });
+    const before = facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0] as { id: string; engineer: string | null };
+    expect(before.engineer).toBeNull();
+    // 补录工程师
+    facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: before.id, engineer: ' 工程师甲 ' } });
+    expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({ engineer: '工程师甲' });
+    // 清空工程师
+    facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: before.id, engineer: null } });
+    expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({ engineer: null });
+    // 补录后导入审计基线不刷新（无导入来源时不影响），验证 businessRevision 递增
+    const rev = readBusinessRevision(db);
+    facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: before.id, engineer: '工程师乙' } });
+    expect(readBusinessRevision(db)).toBeGreaterThan(rev);
+    expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({ engineer: '工程师乙' });
+  });
+
+  it('人工备注与工程师阻止 forward-fix 覆盖', async () => {
+    const { db, facade } = await setup();
+    const workload = SOURCE_TABLE_FILES['workload-stats'];
+    const initial: SourceRow[] = [{
+      file: workload,
+      sheet: '开单记录表',
+      rowNumber: 2,
+      cells: { 单号: 'SO-ENG-FIX', 类型: 'pm', 日期: '2026-08-10T00:00:00+08:00', 工程师: '导入工程师', 客户单位: '导入客户', 备注: '导入备注' },
+    }];
+    expect(runImport(db, { rows: initial, mapping: MAPPING_V1 }).batches).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'success' })]));
+    const imported = db.prepare('SELECT id,engineer,import_source_key FROM service_orders WHERE service_order_no=?').get('SO-ENG-FIX') as { id: string; engineer: string | null; import_source_key: string };
+    facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: imported.id, engineer: '人工工程师' } });
+    const changed: SourceRow[] = [{ ...initial[0], cells: { ...initial[0].cells, 工程师: '来源修正工程师' } }];
+    const result = runImport(db, { rows: changed, mapping: MAPPING_V1 });
+    expect(result.batches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'failed', importedCount: 0 }),
+    ]));
+    expect(db.prepare('SELECT engineer FROM service_orders WHERE id=?').get(imported.id)).toMatchObject({ engineer: '人工工程师' });
+  });
+
+  it('开单工程师归一后相同值零写、保留创建者、精确 revision 递增 1', async () => {
+    const { db, facade } = await setup();
+    const projectId = facade.v2Mutate({ op: 'create_project', payload: { intent: 'draft', customerName: '零写客户', region: 'East' } }).changed!.projectId!;
+    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', projectId, values: { orderType: 'pm', serviceOrderNo: 'SO-REV-001', orderedAt: '2026-08-10', engineer: '工程师甲' } } });
+    const order = facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0] as { id: string; engineer: string | null };
+    const creatorRow = db.prepare('SELECT account_id, username_snapshot, updated_at FROM service_orders WHERE id=?').get(order.id) as { account_id: string; username_snapshot: string; updated_at: string };
+    const baseRev = readBusinessRevision(db);
+    const beforeUpdatedAt = creatorRow.updated_at;
+    // 相同值（含空白）零写：revision不变、updated_at不变、归属不变
+    const noop = facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: order.id, engineer: ' 工程师甲 ' } });
+    expect(noop.businessRevision).toBe(baseRev);
+    expect(db.prepare('SELECT updated_at, account_id, username_snapshot FROM service_orders WHERE id=?').get(order.id)).toMatchObject({ updated_at: beforeUpdatedAt, account_id: creatorRow.account_id, username_snapshot: creatorRow.username_snapshot });
+    // null归一零写
+    facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: order.id, engineer: null } });
+    const revAfterNull = readBusinessRevision(db);
+    expect(revAfterNull).toBe(baseRev + 1);
+    const nullRev = revAfterNull;
+    const nullUpdatedAt = (db.prepare('SELECT updated_at FROM service_orders WHERE id=?').get(order.id) as { updated_at: string }).updated_at;
+    const noopNull = facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: order.id, engineer: '   ' } });
+    expect(noopNull.businessRevision).toBe(nullRev);
+    expect((db.prepare('SELECT updated_at FROM service_orders WHERE id=?').get(order.id) as { updated_at: string }).updated_at).toBe(nullUpdatedAt);
+    expect((db.prepare('SELECT account_id FROM service_orders WHERE id=?').get(order.id) as { account_id: string }).account_id).toBe(creatorRow.account_id);
+    // 真正变更精确递增1且仍保留创建者
+    const changed = facade.v2Mutate({ op: 'service_order_engineer_update', payload: { orderId: order.id, engineer: '工程师乙' } });
+    expect(changed.businessRevision).toBe(nullRev + 1);
+    expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({ engineer: '工程师乙' });
+    expect((db.prepare('SELECT account_id, username_snapshot FROM service_orders WHERE id=?').get(order.id) as { account_id: string }).account_id).toBe(creatorRow.account_id);
   });
 });

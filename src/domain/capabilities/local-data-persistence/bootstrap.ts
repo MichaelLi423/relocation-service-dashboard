@@ -83,6 +83,10 @@ import {
   UNDER_REPAIR_STATUS_MIGRATION_VERSION,
 } from './schema-v19';
 import {
+  applyServiceOrderEngineerNullableMigration,
+  SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION,
+} from './schema-v20';
+import {
   buildFinancialIntegrityHint,
   hasAnyFinancialIntegrityIssue,
   readFinancialIntegrityCounts,
@@ -223,6 +227,13 @@ export const UNDER_REPAIR_STATUS_MIGRATION: Migration = {
   up: (db) => applyUnderRepairStatusMigration(db),
 };
 
+/** v20 迁移：开单记录工程师允许空缺保存并可后续补录（重建 service_orders 使 engineer 可空）。 */
+export const SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION: Migration = {
+  version: SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION,
+  name: 'service-order-engineer-nullable',
+  up: (db) => applyServiceOrderEngineerNullableMigration(db),
+};
+
 /** 当前迁移序列（后续 schema 升级追加新 Migration，不修改已发布迁移）。 */
 export const MIGRATIONS: readonly Migration[] = [
   INITIAL_MIGRATION,
@@ -244,6 +255,7 @@ export const MIGRATIONS: readonly Migration[] = [
   PROJECT_TAG_MIGRATION,
   OPTIONAL_LOGISTICS_FEE_MIGRATION,
   UNDER_REPAIR_STATUS_MIGRATION,
+  SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION,
 ];
 
 export interface BootstrapOptions {

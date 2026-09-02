@@ -7,7 +7,7 @@ import {
 import { closeDatabase, openDatabase, readSchemaVersion } from '../../src/domain/capabilities/local-data-persistence/connection';
 import { runMigrations } from '../../src/domain/capabilities/local-data-persistence/migration';
 import { businessRevisionTriggerName } from '../../src/domain/capabilities/local-data-persistence/schema-v10';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 /**

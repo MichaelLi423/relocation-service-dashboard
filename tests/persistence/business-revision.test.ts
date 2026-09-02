@@ -13,7 +13,7 @@ import {
   RELOCATION_WORKBENCH_NON_BUSINESS_TABLES,
 } from '../../src/domain/capabilities/local-data-persistence/schema-v15';
 import { PROJECT_TAG_BUSINESS_TABLES, projectTagBusinessRevisionTriggerName } from '../../src/domain/capabilities/local-data-persistence/schema-v17';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import {
   readBusinessRevision,
   readDatabaseIdentity,

@@ -791,7 +791,8 @@ export type WorkbenchV2SectionRow =
       serviceOrderNo: string | null;
       /** 开单日期（业务日期 yyyy-mm-dd）。 */
       orderedAt: string;
-      engineer: string;
+      /** 参与工程师（可空，允许后续补录）。 */
+      engineer: string | null;
       customerName: string;
       note: string | null;
       /** 审计/技术创建时间（精确 ISO）。 */
@@ -1022,7 +1023,8 @@ export type WorkbenchV2HistoryRow =
       orderType: 'relocation' | 'certification' | 'parts_by_mail' | 'pm';
       serviceOrderNo: string | null;
       orderedAt: string;
-      engineer: string;
+      /** 参与工程师（可空，允许后续补录）。 */
+      engineer: string | null;
       businessDate: string;
       createdAt: string;
     }
@@ -1469,10 +1471,18 @@ export interface ServiceOrderNoteUpdatePayload {
   note: string | null;
 }
 
+/** 服务单工程师补录：工程师可空，允许后续补录或清空（v20）。 */
+export interface ServiceOrderEngineerUpdatePayload {
+  orderId: string;
+  /** 参与工程师（可空，空白统一清空为 null）。 */
+  engineer: string | null;
+}
+
 /** 记录编辑一律用 payload 承载，防止身份字段混入普通 mutation 顶层。 */
 export type WorkbenchV2RecordEditingMutationRequest =
   | { op: 'instrument_update'; payload: InstrumentUpdatePayload }
-  | { op: 'service_order_note_update'; payload: ServiceOrderNoteUpdatePayload };
+  | { op: 'service_order_note_update'; payload: ServiceOrderNoteUpdatePayload }
+  | { op: 'service_order_engineer_update'; payload: ServiceOrderEngineerUpdatePayload };
 
 export type WorkbenchV2MutationRequest = WorkbenchV2BaseMutationRequest | WorkbenchV2RecordEditingMutationRequest;
 

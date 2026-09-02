@@ -1057,7 +1057,7 @@ export class WorkbenchReadRepository {
           orderType: r.order_type as 'relocation' | 'certification' | 'parts_by_mail' | 'pm',
           serviceOrderNo: nullString(r.service_order_no),
           orderedAt: String(r.ordered_at),
-          engineer: String(r.engineer),
+          engineer: nullString(r.engineer),
           businessDate: String(r.ordered_at),
           createdAt: String(r.created_at),
         };
@@ -1508,7 +1508,7 @@ export class WorkbenchReadRepository {
           orderType: r.order_type as 'relocation' | 'certification' | 'parts_by_mail' | 'pm',
           serviceOrderNo: nullString(r.service_order_no),
           orderedAt: String(r.ordered_at),
-          engineer: String(r.engineer),
+          engineer: nullString(r.engineer),
           customerName: String(r.customer_name),
           note: nullString(r.note),
           createdAt: String(r.created_at),

@@ -6,7 +6,7 @@ import { closeDatabase, openDatabase, readSchemaVersion } from '../../src/domain
 import { MigrationError, runMigrations, type Migration } from '../../src/domain/capabilities/local-data-persistence/migration';
 import { TEMPORARY_INSTRUMENT_FIELDS_MIGRATION_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v16';
 import { PROJECT_TAG_MIGRATION_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v17';
-import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v19';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 describe('schema v17：项目分类标签', () => {

@@ -84,7 +84,7 @@ function rowToServiceOrder(row: Record<string, unknown>): ServiceOrder {
     orderType: row.order_type as OrderType,
     serviceOrderNo: row.service_order_no === null ? null : String(row.service_order_no),
     orderedAt: String(row.ordered_at),
-    engineer: String(row.engineer),
+    engineer: row.engineer === null ? null : String(row.engineer),
     customerName: String(row.customer_name),
     projectId: row.project_id === null ? null : String(row.project_id),
     note: row.note === null ? null : String(row.note),

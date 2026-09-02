@@ -225,10 +225,11 @@ export const CATEGORY_FIELDS: Record<ImportCategory, readonly TargetFieldDef[]> 
       label: '工程师',
       category: 'service_order',
       type: 'text',
-      required: true,
+      required: false,
       businessKey: false,
       aliases: [],
       editable: true,
+      help: '可空，允许后续补录；缺失或空白统一归一为 null',
     },
     {
       field: 'service_order.customer_name',
