@@ -132,3 +132,93 @@ html{overflow-x:clip}.workbench-v2{min-width:0;overflow:visible}.workbench-v2 .p
 /* 项目上门日期排序与仪器单行编辑。 */
 .queue-sort-button{display:inline-flex;min-height:40px;align-items:center;gap:7px;margin:-8px -10px;padding:8px 10px;border:0;background:transparent;color:inherit;font-weight:inherit}.queue-sort-button:hover{color:var(--brand-dark)}.sort-direction{min-width:18px;color:var(--faint);font-size:10px;font-weight:700}.sort-direction.active{padding:2px 5px;border-radius:3px;background:var(--brand-soft);color:var(--brand-dark)}
 .instrument-row-editing{background:#f3f8f6!important;box-shadow:inset 3px 0 var(--brand)}.instrument-row-editing td{vertical-align:top}.instrument-row-editing input,.instrument-row-editing select{width:clamp(112px,11vw,180px);min-height:38px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--raised)}.instrument-row-editing select{width:82px}.inline-readonly-note{display:block;margin-top:3px;color:var(--faint);font-size:10px}.instrument-inline-actions{display:grid;min-width:190px;gap:7px}.instrument-inline-error{max-width:260px;padding:6px 8px;border-left:3px solid var(--red);background:var(--red-soft);color:var(--red);font-size:11px;line-height:1.45;white-space:normal;text-wrap:pretty}
+
+/* 正式工作台细节：不改变导航、模块顺序、栅格和业务状态颜色。 */
+html:has(.workbench-v2) { scrollbar-gutter: stable; }
+html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
+.workbench-v2 .topbar {
+  box-shadow: 0 1px 0 rgba(255,255,255,.12), 0 3px 10px rgba(10,34,29,.10);
+}
+.workbench-v2 .button {
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: 160ms;
+  transition-timing-function: ease-out;
+}
+.workbench-v2 .button:not(:disabled):hover {
+  border-color: var(--brand);
+  box-shadow: 0 1px 3px rgba(23,72,63,.10);
+}
+.workbench-v2 .button.primary:not(:disabled):hover {
+  border-color: var(--brand-dark);
+  background: var(--brand-dark);
+}
+.workbench-v2 .button.danger:not(:disabled):hover {
+  border-color: var(--red);
+  background: var(--red-soft);
+}
+.workbench-v2 button:active:not(:disabled) { transform: none; }
+.workbench-v2 .button:active:not(:disabled) {
+  box-shadow: inset 0 1px 3px rgba(23,72,63,.18);
+}
+.workbench-v2 .button:disabled {
+  opacity: 1;
+  color: var(--muted);
+  background: var(--soft);
+  border-color: var(--line);
+  box-shadow: none;
+}
+.workbench-v2 .icon-button,
+.workbench-v2 .text-action {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-control);
+}
+.workbench-v2 .icon-button:not(:disabled):hover,
+.workbench-v2 .text-action:not(:disabled):hover {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+.workbench-v2 .text-action.danger-text:not(:disabled):hover {
+  color: var(--red);
+  background: var(--red-soft);
+}
+.workbench-v2 :focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+.workbench-v2 .topbar :focus-visible {
+  outline-color: #b4d8cd;
+  outline-offset: -3px;
+}
+.workbench-v2 .project-table tbody tr {
+  transition: background-color 120ms ease-out;
+}
+.workbench-v2 .project-table tbody tr:focus-visible {
+  outline-offset: -2px;
+}
+.workbench-v2 .project-table tbody tr[aria-selected="true"]:hover {
+  background: #d2e4de;
+}
+.workbench-v2 .queue-table-wrap[aria-busy="true"]::before {
+  width: 100%;
+  animation: none;
+  opacity: .65;
+}
+.workbench-v2 .layer-body { scroll-padding-block: 16px; }
+.workbench-v2 .toast.success,
+.workbench-v2 .toast.warning { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .workbench-v2 .overlay { animation: workbench-layer-enter 160ms ease-out; }
+  @keyframes workbench-layer-enter {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workbench-v2 *, .workbench-v2 *::before, .workbench-v2 *::after {
+    transition-duration: 0s !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

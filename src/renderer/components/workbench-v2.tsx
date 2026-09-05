@@ -4922,7 +4922,7 @@ function Layer({
           'button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
         ),
       );
-    window.setTimeout(() => {
+    const autofocusTimer = window.setTimeout(() => {
       const preferred = (initialFocusSelector
         ? root.querySelector<HTMLElement>(initialFocusSelector)
         : null) ?? root.querySelector<HTMLElement>(
@@ -4955,8 +4955,9 @@ function Layer({
     }
     document.addEventListener("keydown", key);
     return () => {
+      window.clearTimeout(autofocusTimer);
       document.removeEventListener("keydown", key);
-      opener.current?.focus();
+      opener.current?.focus({ preventScroll: true });
     };
   }, []);
   return (

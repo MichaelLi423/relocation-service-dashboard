@@ -679,6 +679,22 @@ describe('Oracle #10 bounded workbench renderer', () => {
     expect(within(context).getByLabelText('项目备注')).toHaveTextContent('暂无备注');
   });
 
+  it('关闭项目弹层归还入口焦点，但不要求浏览器滚动页面', async () => {
+    render(<App />);
+    const opener = await screen.findByRole('button', { name: '新建搬迁项目' });
+    await screen.findByRole('heading', { name: /项目队列/ });
+    opener.focus();
+    const focus = vi.spyOn(opener, 'focus');
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog', { name: '新建搬迁项目' });
+    await waitFor(() => expect(within(dialog).getByLabelText(/客户名称/)).toHaveFocus());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    expect(focus).toHaveBeenLastCalledWith({ preventScroll: true });
+    focus.mockRestore();
+  });
+
   it('新建项目未修改时可直接关闭，修改后 Escape 先确认是否放弃', async () => {
     render(<App />); await screen.findByRole('heading', { name: /项目队列/ });
     fireEvent.click(screen.getByRole('button', { name: '新建搬迁项目' }));
