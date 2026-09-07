@@ -32,8 +32,8 @@ node scripts/configure-remote-publisher.cjs --publisher-id <publisher-id>
 
 ## 未完成与阻塞
 
-- **2.1、2.3 尚未整体验收。** 控制器/主进程入口、真实 publisher 和设置 UI 尚未接线；不能据局部模块测试声称已具备可用的远程发布功能。
-- 控制器实施任务连续两次异常结束且没有产物，当前暂停该接线路径；已有模块保留并提交，未使用假的发布适配器伪报成功。
+- **2.1、2.3 尚未整体验收。** 已补充仅负责状态读取、配置、确认启用、本地停止与失效的 `PublisherController`；新增 7 个控制器测试及独立类型检查通过。异步发布编排、主进程入口、真实 publisher 和设置 UI 尚未接线，不能据局部模块测试声称已具备可用的远程发布功能。
+- 控制器初次实施两次异常后，已通过拆小任务恢复状态控制切片；没有提供假的发布适配器或伪报发布成功。
 - 未验证真实 Keychain/Credential Manager 读写、Windows ACL/junction、Electron 打包后的原生模块加载或 Windows 交付产物。
 - HTTPS origin 仅做语法校验，未证明证书、WireGuard、网络 ACL 或部署合规。
 - 未外发客户数据、未部署服务器、未执行浏览器/Electron E2E 或全量 `npm test`。没有运行 `verify:matrix` 或改写正式规格验证矩阵。
