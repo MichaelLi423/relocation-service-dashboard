@@ -16,7 +16,7 @@
 ## 3. 云端接收、构建与只读查询
 
 - [ ] 3.1 实现 streaming ingress 的早期硬限制，验证 64 MiB、100000 实体、64 KiB 行、4096 Unicode 字符、256 MiB staging 和单一 upload/build 均拒绝而不截断或影响 last good。
-- [ ] 3.2 实现严格 JSON/manifest 验证，验证拒绝重复 JSON key、同类型重复 ID、错误引用/计数/association、未知字段、枚举错误及需强制转换的金额或日期。
+- [x] 3.2 实现严格 JSON/manifest 验证，验证拒绝重复 JSON key、同类型重复 ID、错误引用/计数/association、未知字段、枚举错误及需强制转换的金额或日期。
 - [ ] 3.3 在无网络、无认证 secret 的隔离 worker 中以固定 DDL 构建云端自己的只读 SQLite 索引，验证上传方不能影响 SQL、schema、extension、archive 或路径。
 - [ ] 3.4 实现有界 `mobile-read-v1` 查询，验证列表/section 每页 20、搜索 256 Unicode、ID 128、cursor 4 KiB、未知条件拒绝、5 秒 deadline 和 `SNAPSHOT_EXPIRED` 全视图重载。
 - [ ] 3.5 为 ingress/build/query 新增 future focused tests `tests/remote-readonly/ingest-validation.test.ts` 与 `tests/remote-readonly/mobile-read-query.test.ts`，验证坏 payload、超限、空快照和不预加载完整快照。
