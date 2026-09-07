@@ -82,6 +82,8 @@ ingress 和 commit 同时核验当前 binding、epoch、lineage、最新签发 j
 
 secret 保存在 OS credential vault；非敏感发布配置和队列保存在应用私有 control store，且两者均在业务 SQLite 与业务 backup 之外。publisher 可读取完成发布所需的 binding/epoch 元数据，但不能签发、轮换或授予 epoch，也没有业务读取或认证管理权。renderer、环境变量和日志均不得含 secret。
 
+首次发布者凭据登记采用受控本地配置工具（经 main-side/native 模块写入 OS credential vault），而非一次性设备配对或新增配对网络入口：登记经隐藏的本地交互输入完成，secret 从不进入 argv、环境变量、日志、桌面 renderer、业务 SQLite 或备份；OS vault 不可用时 fail closed，不回退明文或 safeStorage 文件。非敏感 target/binding/consent 配置仅存应用私有 control store。凭据登记本身不等于知情启用：不授权真实发布或部署，target 信任、字段范围与保留确认仍须按负责人授权完成；工具不得声称超出实际验证的 native OS 隐私保证。本地实现选用已核对发布 API 的 `@napi-rs/keyring@2.0.0`，真实系统凭据读写、Windows 与打包产物仍须独立验收。
+
 restore 或会导致 lineage 变化的 cleanup 时暂停并失效本地 work。新 generation 必须等待最近 MFA 确认的显式 cloud lineage bind 与新 epoch，不得自动把陈旧上传切换到新 generation。
 
 本地暂停/离线不等于云端撤销。云端确认后轮换 epoch，保留标记 paused 的 last good。重新启用必须重新认证，不重放旧队列。
