@@ -8,7 +8,7 @@
 ## 2. 桌面只读投影与本地控制状态
 
 - [ ] 2.1 在主进程实现默认关闭、明确知情启用的远程发布控制，验证未确认目标、字段范围和保留说明时不产生任何外发。
-- [ ] 2.2 从一致 SQLite online backup 构造字段白名单 DTO、JSONL 与 manifest，验证并发本地写入期间快照一致且绝不上传 SQLite、SQL、schema、扩展、归档或用户路径。
+- [x] 2.2 从一致 SQLite online backup 构造字段白名单 DTO、JSONL 与 manifest，验证并发本地写入期间快照一致且绝不上传 SQLite、SQL、schema、扩展、归档或用户路径。
 - [ ] 2.3 将 secret 存入 OS credential vault，将非敏感发布配置与队列放入业务 SQLite/backup 外的私有 control store，验证 renderer、环境变量和日志没有 secret。
 - [ ] 2.4 实现发布者最小权限凭据，仅允许读取自身 binding/epoch 元数据并创建、心跳、上传、提交自身作业；验证不能读业务投影/认证管理数据或授予 authority。
 - [ ] 2.5 实现单一串行 publisher、变化事件 30 秒 debounce/最大 60 秒与 60 秒 fresh challenge source report，以及桌面发布状态、立即发布、停用和独立撤回入口；验证不排队 heartbeat、普通状态读取不更新来源健康，且任务指挥台直接启动和既有主布局不被阻断。
