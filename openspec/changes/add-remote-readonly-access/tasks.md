@@ -1,9 +1,9 @@
 ## 1. 实施准备与契约基线
 
 - [x] 1.1 确认目标 Node 容器版本可运行 `node:sqlite`、`setReadBigInts` 与规定 scrypt 参数，并以最小 smoke 记录兼容性和 API 512 MiB／worker 256 MiB 预算验证结果。
-- [ ] 1.2 建立 `mobile-read-v1`、投影 manifest/JSONL 和发布控制的独立契约，验证不公开整个 `WorkbenchApi` 或 Electron IPC。
+- [x] 1.2 建立 `mobile-read-v1`、投影 manifest/JSONL 和发布控制的独立契约，验证不公开整个 `WorkbenchApi` 或 Electron IPC。
 - [ ] 1.3 以 `mobile-readonly-workbench` 的表为唯一来源实现字段白名单映射，验证 DTO、JSONL、索引、响应、错误和日志均拒绝未知或未批准字段。
-- [ ] 1.4 建立仅含 synthetic 数据的 future fixture 和 `tests/remote-readonly/projection-contract.test.ts`，覆盖 unknown canary 字段、null/zero、完成项目余额、取消项目、孤立财务事实、无数据、精确金额字符串与 `yyyy-mm-dd`；验证 fixture 不读取、记录或包含真实客户业务数据。
+- [x] 1.4 建立仅含 synthetic 数据的 future fixture 和 `tests/remote-readonly/projection-contract.test.ts`，覆盖 unknown canary 字段、null/zero、完成项目余额、取消项目、孤立财务事实、无数据、精确金额字符串与 `yyyy-mm-dd`；验证 fixture 不读取、记录或包含真实客户业务数据。
 
 ## 2. 桌面只读投影与本地控制状态
 
