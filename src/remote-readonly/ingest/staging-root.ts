@@ -14,9 +14,15 @@
  *   StagingError，不回显输入/路径/cause）。
  * - 捕获根 dev/ino；assertRootOwnership 闭包在 acquire/assertActive/dispose 边界重校验根
  *   身份、标记与 protections 拓扑，不再归我方 → OWNER_MISMATCH。
- * - inspect() 永不抛错：只读有界 owner.json（不碰 payload）。owner.json 须为封闭规范形
- *   （仅 version/token 两键、token 为规范 UUID、重序列化一致）→ occupied；owner 未知/不
- *   完整、根内多余条目或标记异常 → recovery_required（contentBytes=null）；绝不按
+ * - inspect() 永不抛错：只读 owner.json 与固定 payload 的元数据（绝不读 payload 内容）。
+ *   active/ 内 owner.json 须存在且为封闭规范形（仅 version/token 两键、token 为规范 UUID、
+ *   重序列化一致）、普通文件、nlink=1、0600、≤4KiB；其余条目只允许固定三种 payload 名
+ *   （manifest.json/projection.jsonl.part/build.sqlite.part，仅限 active/ 内，根级一律无效），
+ *   逐项 lstat 须普通文件、nlink=1、0600、size 为安全整数且 ≤ STAGING_FILE_LIMITS[kind]；
+ *   总字节（根标记+owner+payload）须 ≤ STAGING_TOTAL_LIMIT_BYTES → occupied
+ *   （contentBytes=精确占用字节）。owner 缺失/未知条目/符号链接/硬链接/非常规文件/权限
+ *   不符/越界/读取失败/根内多余条目或标记异常 → recovery_required（contentBytes=null）。
+ *   occupied 只代表结构合法与租约存在，不证明 payload 已校验/已持久/持有者存活；绝不按
  *   time/PID 判死、绝不删 active/。tryAcquire() 原样委托 acquireStagingLease。路径与身份
  *   仅在 #private 字段/闭包，JSON 不含根路径或 token。
  */
@@ -24,10 +30,13 @@ import {
   lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, writeFileSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
-import { STAGING_ERROR_CODES, StagingError, type StagingErrorCode } from './staging-contract';
+import {
+  STAGING_ERROR_CODES, STAGING_FILE_LIMITS, STAGING_FILES, STAGING_TOTAL_LIMIT_BYTES,
+  StagingError, type StagingErrorCode, type StagingFileKind,
+} from './staging-contract';
 import {
   acquireStagingLease, STAGING_ACTIVE_DIR_NAME, STAGING_OWNER_FILE_NAME,
-  STAGING_OWNER_VERSION, type StagingLease,
+  STAGING_OWNER_FILE_PERMISSION, STAGING_OWNER_VERSION, type StagingLease,
 } from './staging-lease';
 
 export const STAGING_ROOT_DIR_NAME = 'remote-readonly-staging'; // 根固定叶子目录名
@@ -47,6 +56,14 @@ const MAX_ENTRY_BYTES = 4 * 1024;
 /** owner.json token 必须为规范（小写 v4）UUID。 */
 const CANONICAL_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** active/ 内固定 payload 文件权限（与 owner.json 同为 0600）。 */
+const PAYLOAD_FILE_PERMISSION = 0o600;
+/** 固定 payload 文件名 → kind 反查表（仅 active/ 内合法；根级任何 payload 名都属多余条目）。 */
+const STAGING_FILE_KIND_BY_NAME: Readonly<Record<string, StagingFileKind>> = (() => {
+  const m: Record<string, StagingFileKind> = {};
+  for (const k of Object.keys(STAGING_FILES) as StagingFileKind[]) m[STAGING_FILES[k]] = k;
+  return Object.freeze(m);
+})();
 
 const E = STAGING_ERROR_CODES;
 const stagingError = (code: StagingErrorCode): StagingError => new StagingError(code);
@@ -172,6 +189,45 @@ function isCanonicalOwnerJson(content: string): boolean {
   return JSON.stringify(o) === content;
 }
 
+/** active/ 只读占用核算：owner.json 必须存在且为封闭规范形（普通文件、nlink=1、0600、
+ *  ≤4KiB）；其余条目只允许固定三种 payload 名（根级 payload 由 statOwnedRoot 的多余条目
+ *  检查拒绝），逐项须普通文件、nlink=1、0600、size 为安全整数且 ≤ STAGING_FILE_LIMITS[kind]；
+ *  总字节（根标记+owner+payload）须 ≤ STAGING_TOTAL_LIMIT_BYTES。任一不符返回 null
+ *  （inspect 层收口为 recovery_required）。绝不读 payload 内容。 */
+function occupiedActiveBytes(activePath: string, names: readonly string[]): number | null {
+  if (!names.includes(STAGING_OWNER_FILE_NAME)) return null;
+  let total = MARKER_BYTES;
+  for (const name of names) {
+    let st;
+    try {
+      st = lstatSync(join(activePath, name));
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) return null;
+    if (name === STAGING_OWNER_FILE_NAME) {
+      if ((st.mode & 0o777) !== STAGING_OWNER_FILE_PERMISSION) return null;
+      if (!Number.isSafeInteger(st.size) || st.size > MAX_ENTRY_BYTES) return null;
+      let raw: string;
+      try {
+        raw = readFileSync(join(activePath, name), 'utf8');
+      } catch {
+        return null;
+      }
+      if (!isCanonicalOwnerJson(raw)) return null;
+    } else {
+      const kind = STAGING_FILE_KIND_BY_NAME[name];
+      if (kind === undefined || (st.mode & 0o777) !== PAYLOAD_FILE_PERMISSION) return null;
+      if (!Number.isSafeInteger(st.size) || st.size < 0 || st.size > STAGING_FILE_LIMITS[kind]) {
+        return null;
+      }
+    }
+    total += st.size;
+  }
+  if (!Number.isSafeInteger(total) || total > STAGING_TOTAL_LIMIT_BYTES) return null;
+  return total;
+}
+
 class StagingRootImpl implements StagingRoot {
   readonly #rootPath: string;
   readonly #activePath: string;
@@ -197,19 +253,10 @@ class StagingRootImpl implements StagingRoot {
     }
     if (!names.includes(STAGING_ACTIVE_DIR_NAME)) return { state: 'idle', contentBytes: MARKER_BYTES };
     try {
-      const ownerNames = readdirSync(this.#activePath);
-      if (ownerNames.length !== 1 || ownerNames[0] !== STAGING_OWNER_FILE_NAME) {
-        return { state: 'recovery_required', contentBytes: null };
-      }
-      const ownerPath = join(this.#activePath, STAGING_OWNER_FILE_NAME);
-      const st = lstatSync(ownerPath);
-      if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) {
-        return { state: 'recovery_required', contentBytes: null };
-      }
-      if (st.size > MAX_ENTRY_BYTES) return { state: 'recovery_required', contentBytes: null };
-      const raw = readFileSync(ownerPath, 'utf8');
-      if (!isCanonicalOwnerJson(raw)) return { state: 'recovery_required', contentBytes: null };
-      return { state: 'occupied', contentBytes: MARKER_BYTES + st.size };
+      const activeNames = readdirSync(this.#activePath);
+      const bytes = occupiedActiveBytes(this.#activePath, activeNames);
+      if (bytes === null) return { state: 'recovery_required', contentBytes: null };
+      return { state: 'occupied', contentBytes: bytes };
     } catch {
       return { state: 'recovery_required', contentBytes: null };
     }

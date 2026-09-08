@@ -8,8 +8,11 @@
  *   缺路径与字面 '..'、`symlink/../` 的 realpath 真实语义）；非 ENOENT fail-closed；parent/root/marker 符号链接与 marker
  *   硬链接拒绝；受保护别名后期重定向向根、调用方改配置数组不影响原保护；inspect 各状态
  *   只读：idle/occupied/空 active/未知条目/坏 owner/被篡改标记 → 固定 recovery_required，
- *   不删除不修复；JSON/keys/toString 不含根路径与 token；原生错误一律固定 StagingError，
- *   消息不回显输入路径。
+ *   不删除不修复；occupied 允许 owner.json + 固定三种 payload（manifest/projection/build）
+ *   的任意子集，逐项校验 lstat 常规文件/nlink=1/0600/≤ STAGING_FILE_LIMITS[kind]，精确
+ *   字节 = 标记+owner+payload 且 ≤ STAGING_TOTAL_LIMIT_BYTES；未知名/符号链接/硬链接/
+ *   非常规/权限/越界/缺 owner/根级 payload → recovery_required 且内容原样保留；JSON/keys/
+ *   toString 不含根路径与 token；原生错误一律固定 StagingError，消息不回显输入路径。
  * - lease 的原子 claim / 跨进程竞态由 staging-lease.test.ts 覆盖，本文件不重复（仅验证
  *   tryAcquire 委托后的稳定核心接口）。全部 synthetic 临时目录，无真实业务数据。
  */
@@ -24,9 +27,12 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,9 +49,15 @@ import {
 import {
   STAGING_ACTIVE_DIR_NAME,
   STAGING_OWNER_FILE_NAME,
+  STAGING_OWNER_FILE_PERMISSION,
   STAGING_OWNER_VERSION,
 } from '../../src/remote-readonly/ingest/staging-lease';
-import { STAGING_ERROR_CODES, StagingError } from '../../src/remote-readonly/ingest/staging-contract';
+import {
+  STAGING_ERROR_CODES,
+  STAGING_FILE_LIMITS,
+  STAGING_FILES,
+  StagingError,
+} from '../../src/remote-readonly/ingest/staging-contract';
 
 const E = STAGING_ERROR_CODES;
 const MARKER_TEXT = JSON.stringify({
@@ -84,6 +96,14 @@ const markerOf = (temp: string): string =>
   join(rootDirOf(temp), STAGING_ROOT_MARKER_FILE_NAME);
 const activeOf = (rootDir: string): string => join(rootDir, STAGING_ACTIVE_DIR_NAME);
 const ownerOf = (rootDir: string): string => join(activeOf(rootDir), STAGING_OWNER_FILE_NAME);
+
+/** 在 active/ 内手工创建固定 payload（0600），返回落盘字节数。 */
+function writePayload(rootDir: string, name: string, content: string | Buffer): number {
+  const p = join(activeOf(rootDir), name);
+  writeFileSync(p, content);
+  chmodSync(p, 0o600);
+  return statSync(p).size;
+}
 
 function expectFixedError(threw: unknown, code: string, noLeak: readonly string[] = []): void {
   expect(threw).toBeInstanceOf(StagingError);
@@ -499,6 +519,7 @@ describe.skipIf(process.platform === 'win32')('staging-root：inspect 只读状�
     expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
 
     writeFileSync(ownerOf(rootDir), JSON.stringify({ version: STAGING_OWNER_VERSION, token: UUID }));
+    chmodSync(ownerOf(rootDir), STAGING_OWNER_FILE_PERMISSION); // inspect 要求 owner 0600
     expect(root.inspect().state).toBe('occupied');
   });
 
@@ -527,6 +548,249 @@ describe.skipIf(process.platform === 'win32')('staging-root：inspect 只读状�
     const threw = await captureReject(() => root.tryAcquire());
     expectFixedError(threw, E.OWNER_MISMATCH, [temp]);
     expect(existsSync(activeOf(rootDirOf(temp)))).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('staging-root：inspect 的固定 payload（active/ 内）', () => {
+  it('真实租约 + 三种固定 payload → occupied（精确字节）；inspect 不读内容/不修改', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const lease = await root.tryAcquire();
+
+    const payloadNames = Object.values(STAGING_FILES);
+    const manifestBytes = writePayload(rootDir, STAGING_FILES.manifest, '{"count":1}');
+    const projectionBytes = writePayload(rootDir, STAGING_FILES.projection, '{"id":"p1"}\n');
+    const buildBytes = writePayload(rootDir, STAGING_FILES.build, Buffer.from([0x00, 0x01, 0x02]));
+    const before = new Map(payloadNames.map((n) => [n, readFileSync(join(activeOf(rootDir), n))] as const));
+
+    const markerSize = statSync(markerOf(temp)).size;
+    const ownerSize = statSync(ownerOf(rootDir)).size;
+    expect(root.inspect()).toEqual({
+      state: 'occupied',
+      contentBytes: markerSize + ownerSize + manifestBytes + projectionBytes + buildBytes,
+    });
+
+    // 未删除任何条目；payload 内容/权限/nlink 均未被 inspect 触碰
+    expect(readdirSync(activeOf(rootDir)).sort()).toEqual(
+      [STAGING_OWNER_FILE_NAME, ...payloadNames].sort(),
+    );
+    for (const [n, bytes] of before) {
+      const p = join(activeOf(rootDir), n);
+      expect(readFileSync(p)).toEqual(bytes);
+      expect(statSync(p).mode & 0o777).toBe(STAGING_OWNER_FILE_PERMISSION);
+      expect(statSync(p).nlink).toBe(1);
+    }
+
+    for (const n of payloadNames) unlinkSync(join(activeOf(rootDir), n)); // dispose 前移除 fixtures
+    await lease.dispose();
+    expect(root.inspect()).toEqual({ state: 'idle', contentBytes: statSync(markerOf(temp)).size });
+  });
+
+  it('仅部分固定 payload 子集（manifest / manifest+projection）→ occupied，字节精确', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const lease = await root.tryAcquire();
+    const markerSize = statSync(markerOf(temp)).size;
+    const ownerSize = statSync(ownerOf(rootDir)).size;
+
+    const manifestBytes = writePayload(rootDir, STAGING_FILES.manifest, '{"count":1}');
+    expect(root.inspect()).toEqual({
+      state: 'occupied',
+      contentBytes: markerSize + ownerSize + manifestBytes,
+    });
+
+    const projectionBytes = writePayload(rootDir, STAGING_FILES.projection, '{"id":"p1"}\n');
+    expect(root.inspect()).toEqual({
+      state: 'occupied',
+      contentBytes: markerSize + ownerSize + manifestBytes + projectionBytes,
+    });
+
+    unlinkSync(join(activeOf(rootDir), STAGING_FILES.projection));
+    unlinkSync(join(activeOf(rootDir), STAGING_FILES.manifest));
+    await lease.dispose();
+  });
+
+  it('合法 owner+payload 旁有未知文件名 → recovery_required，全部条目原样保留', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    const manifestPath = join(activeDir, STAGING_FILES.manifest);
+    writePayload(rootDir, STAGING_FILES.manifest, '{"count":1}');
+    const roguePath = join(activeDir, 'rogue.bin');
+    writeFileSync(roguePath, 'rogue-bytes');
+    const ownerText = readFileSync(ownerOf(rootDir), 'utf8');
+    const namesBefore = readdirSync(activeDir).sort();
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(readdirSync(activeDir).sort()).toEqual(namesBefore);
+    expect(readFileSync(manifestPath, 'utf8')).toBe('{"count":1}');
+    expect(readFileSync(roguePath, 'utf8')).toBe('rogue-bytes');
+    expect(readFileSync(ownerOf(rootDir), 'utf8')).toBe(ownerText);
+
+    unlinkSync(roguePath);
+    unlinkSync(manifestPath);
+    await lease.dispose();
+  });
+
+  it('payload 符号链接 → recovery_required（不跟随、不读目标），链接与目标原样', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    const target = join(temp, 'payload-target.bin');
+    writeFileSync(target, 'target-bytes');
+    const linkPath = join(activeDir, STAGING_FILES.manifest);
+    symlinkSync(target, linkPath);
+    const ownerText = readFileSync(ownerOf(rootDir), 'utf8');
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('target-bytes');
+    expect(readFileSync(ownerOf(rootDir), 'utf8')).toBe(ownerText);
+
+    unlinkSync(linkPath);
+    await lease.dispose();
+  });
+
+  it('payload 硬链接（nlink>1）→ recovery_required，文件保留', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    const payloadPath = join(activeDir, STAGING_FILES.projection);
+    writePayload(rootDir, STAGING_FILES.projection, '{"id":"p1"}\n');
+    const extraPath = join(temp, 'projection-extra');
+    linkSync(payloadPath, extraPath);
+    expect(statSync(payloadPath).nlink).toBe(2);
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(statSync(payloadPath).nlink).toBe(2); // 未删除任一链接
+    expect(readFileSync(payloadPath, 'utf8')).toBe('{"id":"p1"}\n');
+
+    unlinkSync(extraPath);
+    unlinkSync(payloadPath);
+    await lease.dispose();
+  });
+
+  it('payload 权限非 0600 → recovery_required，不 chmod 修复', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    const payloadPath = join(activeDir, STAGING_FILES.build);
+    writePayload(rootDir, STAGING_FILES.build, Buffer.from([0x0a, 0x0b]));
+    chmodSync(payloadPath, 0o644);
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(statSync(payloadPath).mode & 0o777).toBe(0o644); // 未自动修复
+    expect(readFileSync(payloadPath)).toEqual(Buffer.from([0x0a, 0x0b]));
+
+    unlinkSync(payloadPath);
+    await lease.dispose();
+  });
+
+  it('payload size 越界 → recovery_required；size 只按该 kind 上限判定', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    // manifest 上限最小：越界即 recovery
+    const manifestPath = join(activeDir, STAGING_FILES.manifest);
+    writeFileSync(manifestPath, '');
+    truncateSync(manifestPath, STAGING_FILE_LIMITS.manifest + 1);
+    chmodSync(manifestPath, 0o600);
+    expect(statSync(manifestPath).size).toBe(STAGING_FILE_LIMITS.manifest + 1);
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(statSync(manifestPath).size).toBe(STAGING_FILE_LIMITS.manifest + 1); // 原样保留
+    unlinkSync(manifestPath);
+
+    // 上限按名映射各自 kind：65537 远超 manifest 上限、仍远小于 projection 上限 → occupied
+    const projectionPath = join(activeDir, STAGING_FILES.projection);
+    writeFileSync(projectionPath, '');
+    truncateSync(projectionPath, STAGING_FILE_LIMITS.manifest + 1);
+    chmodSync(projectionPath, 0o600);
+    expect(root.inspect().state).toBe('occupied');
+
+    unlinkSync(projectionPath);
+    await lease.dispose();
+  });
+
+  it('payload 位置为目录（非普通文件）→ recovery_required，目录保留', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    const lease = await root.tryAcquire();
+
+    const dirPath = join(activeDir, STAGING_FILES.manifest);
+    mkdirSync(dirPath, { mode: 0o700 });
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(lstatSync(dirPath).isDirectory()).toBe(true);
+
+    rmdirSync(dirPath);
+    await lease.dispose();
+  });
+
+  it('active/ 内只有 payload 而缺 owner.json → recovery_required（owner 必须存在）', () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const activeDir = activeOf(rootDir);
+    mkdirSync(activeDir, { mode: 0o700 });
+    writePayload(rootDir, STAGING_FILES.manifest, '{"count":1}');
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(readdirSync(activeDir)).toEqual([STAGING_FILES.manifest]); // 未删除
+    expect(readFileSync(join(activeDir, STAGING_FILES.manifest), 'utf8')).toBe('{"count":1}');
+  });
+
+  it('owner 权限非 0600 → recovery_required，不修复；恢复后 occupied', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const lease = await root.tryAcquire();
+    const ownerPath = ownerOf(rootDir);
+    const ownerText = readFileSync(ownerPath, 'utf8');
+
+    chmodSync(ownerPath, 0o644);
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(statSync(ownerPath).mode & 0o777).toBe(0o644); // 未自动修复
+    expect(readFileSync(ownerPath, 'utf8')).toBe(ownerText);
+
+    chmodSync(ownerPath, STAGING_OWNER_FILE_PERMISSION);
+    expect(root.inspect().state).toBe('occupied');
+    await lease.dispose();
+  });
+
+  it('根级固定 payload 名 → recovery_required；acquire OWNER_MISMATCH，文件保留', async () => {
+    const { temp, protectedDir } = fresh();
+    const root = openStagingRoot({ privateParentDir: temp, protectedPaths: [protectedDir] });
+    const rootDir = rootDirOf(temp);
+    const manifestAtRoot = join(rootDir, STAGING_FILES.manifest);
+    const buildAtRoot = join(rootDir, STAGING_FILES.build);
+    writeFileSync(manifestAtRoot, 'root-manifest');
+    writeFileSync(buildAtRoot, 'root-build');
+
+    expect(root.inspect()).toEqual({ state: 'recovery_required', contentBytes: null });
+    expect(readFileSync(manifestAtRoot, 'utf8')).toBe('root-manifest');
+    expect(readFileSync(buildAtRoot, 'utf8')).toBe('root-build');
+    const threw = await captureReject(() => root.tryAcquire());
+    expectFixedError(threw, E.OWNER_MISMATCH, [temp]);
+    expect(existsSync(activeOf(rootDir))).toBe(false);
   });
 });
 
