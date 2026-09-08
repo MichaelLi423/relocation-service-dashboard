@@ -16,8 +16,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:mobile-readonly": "playwright test --config playwright.mobile-readonly.config.ts --workers=1",
     "e2e:build": "electron-forge package",
-    "verify:matrix": "node scripts/build-verification-matrix.mjs"
+    "verify:matrix": "node scripts/build-verification-matrix.mjs",
+    "build:mobile-readonly": "node scripts/build-mobile-readonly.cjs",
+    "start:mobile-readonly": "node dist/mobile-readonly/server.cjs",
+    "dev:mobile-readonly": "node scripts/dev-mobile-readonly.cjs"
   },
   "overrides": {
     "@electron/rebuild": "^4.1.0"

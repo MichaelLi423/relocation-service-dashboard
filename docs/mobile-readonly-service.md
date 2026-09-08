@@ -1,0 +1,228 @@
+# 移动只读云端服务（mobile-readonly-service）操作与线协议文档
+
+对应 `openspec/changes/add-mobile-readonly-publication` tasks 4.3/4.5/7.1–7.6。
+实现：`src/server/mobile-readonly/**`、`webpack.mobile-readonly.config.ts`、
+`Dockerfile.mobile-readonly`、`tests/server/**`。
+
+## 1. 定位与运行形态
+
+单 Node 进程轻量服务（无数据库/Redis/队列/历史库），唯一权威数据文件为
+`<dataDir>/snapshots/current.json`，内容即服务端存储包络：
+
+```json
+{
+  "currentVersion": 8,
+  "publicationId": "…",
+  "publishedAt": "…ISO…",
+  "snapshot": { "schemaVersion": 1, "contentGenerationId": "…", "businessRevision": 7, "dataAsOf": "…ISO…", "overview": {…}, "projects": […] }
+}
+```
+
+- 一次成功提交 = 写同目录唯一临时文件并 `fsync` 后 `rename` 原子替换；校验失败/写盘失败保留旧包络。
+- 启动读取 `current.json` 恢复；内存仅缓存、不是权威。**从未成功提交时不创建该文件、不虚构「版本 0」**
+  （逻辑元数据 `currentVersion=0`、`published:false`、其余字段 `null`，见共享 `UNPUBLISHED_MOBILE_READONLY_METADATA`）。
+- 上传串行处理；幂等仅对**当前存储的 `publicationId`** 生效（无历史库）。
+- 上传中断/超时绝不落半写；重启遗留的本服务临时文件（`current.json.<hex>.tmp`）启动即清理、绝不作为可读版本。
+- 同一时刻仅保留一份可读当前包络与一份正在校验/写入的临时候选。
+
+部署网络形态（design D9）：
+
+- 生产推荐：容器加入 1Panel/OpenResty 可达的**共享 Docker 内部网络**（或 host 网络/宿主机 loopback），
+  默认 `MOBILE_READONLY_HOST=0.0.0.0` + `MOBILE_READONLY_PORT=8082`，**默认不发布宿主机端口**；
+  外部 HTTPS 由反向代理终止，公网不暴露明文 HTTP。
+- **不得用容器自身 loopback（127.0.0.1）做跨容器访问**（容器内 loopback 对其它容器不可达）。
+- 需要「服务自身直接 HTTPS」（本地测试/无反代）时注入 `MOBILE_READONLY_TLS_KEY_FILE` /
+  `MOBILE_READONLY_TLS_CERT_FILE`，服务改为 https 监听。
+
+## 2. 构建与运行
+
+```bash
+# 构建（需仓库 devDependencies 含 webpack-cli；src/mobile/** 需已存在）
+npm ci
+npx webpack --config webpack.mobile-readonly.config.ts
+# 产物：
+#   dist/mobile-readonly/server.cjs       服务入口（node dist/mobile-readonly/server.cjs）
+#   dist/mobile-readonly/credentials.cjs  凭证摘要生成 CLI
+#   dist/mobile-readonly/web/app.js       手机只读 bundle（entry: src/mobile/index.tsx）
+
+# 镜像（父集成补根 .dockerignore 后）
+docker build -f Dockerfile.mobile-readonly -t mobile-readonly-service .
+```
+
+环境变量（`src/server/mobile-readonly/config.ts`）：
+
+| 变量 | 缺省 | 说明 |
+|---|---|---|
+| `MOBILE_READONLY_HOST` | `0.0.0.0` | 监听主机（共享 Docker 内部网络） |
+| `MOBILE_READONLY_PORT` | `8082` | 监听端口 |
+| `MOBILE_READONLY_DATA_DIR` | `data` | 数据目录（`snapshots/current.json` 所在） |
+| `MOBILE_READONLY_CREDENTIALS_FILE` | `<dataDir>/credentials.json` | 凭证摘要文件 |
+| `MOBILE_READONLY_WEB_ROOT` | `__dirname/web` | 手机静态目录 |
+| `MOBILE_READONLY_MAX_BODY_BYTES` | 64 MiB | 上传/静态请求体上限 |
+| `MOBILE_READONLY_MAX_URL_LENGTH` | 8192 | URL 长度上限（超出 414） |
+| `MOBILE_READONLY_REQUEST_TIMEOUT_MS` | 30000 | 单请求整体超时 |
+| `MOBILE_READONLY_HEADERS_TIMEOUT_MS` | 10000 | 请求头超时 |
+| `MOBILE_READONLY_KEEPALIVE_TIMEOUT_MS` | 5000 | keep-alive 空闲超时 |
+| `MOBILE_READONLY_TLS_KEY_FILE` / `MOBILE_READONLY_TLS_CERT_FILE` | 无 | 同时设置则以直连 HTTPS 运行 |
+
+## 3. 凭证（只存摘要；tasks 7.2/7.3）
+
+- 查看（浏览）凭证：HTTPS **Basic Auth** 强密码（可由反代终止）；仅存加盐 scrypt 摘要。
+- 上传凭证：独立 **Bearer token**；仅存摘要，恒时比较校验。
+- 上传端点校验服务自身持有的 token 摘要，**不接受/不要求「叠加 Basic」的模糊双层认证**；
+  上传请求不携带查看 Basic。
+- 查看凭证可浏览全部页面/资产与业务端点；**不可上传、不可读 `/api/meta`**。
+  上传凭证**可上传、可读 `/api/meta`**；**不可读任何业务端点/页面/资产**。
+
+生成凭证摘要（输入只来自 **stdin 或环境变量，绝不 argv**；输出只含摘要，绝不落盘明文）：
+
+```bash
+MOBILE_READONLY_VIEWER_USERNAME=viewer \
+MOBILE_READONLY_VIEWER_PASSWORD='…强密码…' \
+MOBILE_READONLY_UPLOAD_TOKEN='…高熵 token…' \
+node dist/mobile-readonly/credentials.cjs > /var/lib/mobile-readonly/credentials.json
+# 或 stdin（第一行密码、第二行 token）：
+printf '%s\n' "$PW" "$TOKEN" | node dist/mobile-readonly/credentials.cjs > /var/lib/mobile-readonly/credentials.json
+```
+
+凭证文件示例（只含摘要）：
+
+```json
+{
+  "viewer": { "username": "viewer", "digest": "scrypt$16384$8$1$64$<saltB64>$<hashB64>" },
+  "upload": { "digest": "scrypt$16384$8$1$64$<saltB64>$<hashB64>" }
+}
+```
+
+## 4. 认证语义
+
+- 401：无凭证或凭证错误（查看端点带 `WWW-Authenticate: Basic realm="mobile-readonly"`）。
+- 403：凭证正确但作用域不符（如用上传 Bearer 请求业务/页面；用查看 Basic 请求 upload/meta）。
+- 全部响应（含静态页、401/403、413/409 等错误）均带 `Cache-Control: no-store`。
+
+## 5. 端点与线协议
+
+### 5.1 `PUT /api/publish`（上传 Bearer）
+
+请求体 `Content-Type: application/json`；严格两层：
+
+```json
+{
+  "protocol": { "publicationId": "urn:uuid:…", "expectedCurrentVersion": 8 },
+  "snapshot": { "schemaVersion": 1, "contentGenerationId": "…", "businessRevision": 7, "dataAsOf": "…", "overview": {…}, "projects": […] }
+}
+```
+
+- protocol 严格键集 `publicationId`（非空、≤200 字符）与 `expectedCurrentVersion`（非负安全整数）；
+  协议字段不进业务白名单 unknown-key 判定。
+- snapshot 以共享严格校验器校验：封闭白名单（含嵌套未知 key 拒绝）、金额固定两位小数字符串、
+  业务日期 `yyyy-mm-dd`、`dataAsOf` 带偏移 ISO；首版空集合快照合法（D10）。
+- 决策（串行）：`expectedCurrentVersion == 当前版本` → 原子替换为 `currentVersion+1`；
+  重复**当前** `publicationId` → 幂等成功（版本/`publishedAt`/文件不变）；
+  其余过期候选 → 409 冲突并返回当前元数据。
+- 有限请求体上限（默认 64 MiB，超限 413）、整体超时（默认 30s）、上传中断不提交。
+- 响应体为共享 wire 类型 `MobileReadonlyPublishResult = { result: 'committed' | 'idempotent' | 'conflict', metadata: MobileReadonlyPublishMetadata }`。
+
+成功（提交）：`200`
+
+```json
+{ "result": "committed", "metadata": { "published": true, "currentVersion": 9, "publicationId": "…", "publishedAt": "…", "dataAsOf": "…", "fingerprint": { "contentGenerationId": "…", "businessRevision": 8 } } }
+```
+
+重复当前候选幂等：`200` `{ "result": "idempotent", "metadata": {…同 currentVersion/publishedAt…} }`
+
+版本冲突：`409`
+
+```json
+{ "result": "conflict", "metadata": { "published": true, "currentVersion": 9, "publicationId": "…", "publishedAt": "…", "dataAsOf": "…", "fingerprint": {…} } }
+```
+
+校验失败：`400 INVALID_PROTOCOL` / `422 INVALID_SNAPSHOT`（issues 有界回显前 20 条、单条 ≤160 字符）/
+`413 PAYLOAD_TOO_LARGE` / `415 UNSUPPORTED_MEDIA_TYPE` / `400 BAD_JSON`。
+
+### 5.2 `GET /api/meta`（上传 Bearer；桌面三分支恢复）
+
+响应即非业务版本元数据（**无任何业务内容**）：
+
+```json
+{ "published": true, "currentVersion": 9, "publicationId": "…", "publishedAt": "…", "dataAsOf": "…", "fingerprint": { "contentGenerationId": "…", "businessRevision": 8 } }
+```
+
+尚未发布：`{ "published": false, "currentVersion": 0, "publicationId": null, "publishedAt": null, "dataAsOf": null, "fingerprint": null }`（不创建版本 0 文件）。
+
+### 5.3 业务查询端点（查看 Basic）
+
+统一响应载体 `{ "metadata": MobileReadonlyPublishMetadata, "data": … }`；
+metadata 与 data 取自**同一次缓存包络捕获**（同版本、不混新旧）。**绝不返回 current.json 包络或 snapshot 全文。**
+
+- `GET /api/overview`（手机版本检查 + 概览，无额外 viewer 级 meta 端点）
+  - data：共享 wire 类型 `MobileReadonlyOverviewData = { overview: MobileReadonlyOverview | null }`
+    （尚未发布为 `null`；已发布空快照为全零 overview，两者区分）
+- `GET /api/projects?query=&status=&region=&cursor=&limit=`
+  - 参数严格白名单；**可选参数空字符串一律按缺失处理**（手机固定发送
+    `query=&status=&region=&cursor=&limit=20` 形式；必填 `id`/`projectId`/`kind` 空串仍是 400）；
+    `query` 服务端在 **customerName/tempNo/ecc** 上做忽略大小写子串搜索；
+    `status` 为受控枚举（非空非法值 400）；`region` 忽略大小写精确匹配；`limit` 1..100，缺省 50。
+  - data 用共享导出：`MobileReadonlyProjectListData = { items: MobileReadonlyProjectSummary[], nextCursor: string | null }`
+  - 项目行**不含 records**、不含任何快照元数据键。
+- `GET /api/project?id=`
+  - data：`{ "project": MobileReadonlyProjectSummary | null }`（未命中 null；**不带 records**）
+- `GET /api/records?projectId=&kind=&cursor=&limit=`
+  - `kind` ∈ `batches|instruments|activities|orders|invoices|damage_items`；仅返回当前页行。
+  - data：`{ "kind": MobileReadonlyRecordKind, "items": MobileReadonlyRecordRow[], "nextCursor": string | null }`
+
+查询默认值（文档口径）：单页上限 `limit ≤ 100`，缺省 `50`（projects 与 records 一致）。
+
+**游标版本绑定**：游标内嵌 `currentVersion`（base64url `{"v":版本,"o":偏移}`）；请求时版本已变化 →
+`409 { "error": { "code": "STALE_CURSOR", … }, "metadata": {…当前…} }`，手机据此丢弃旧结果重新加载。
+
+示例 `GET /api/overview`（Basic）：
+
+```json
+{
+  "metadata": { "published": true, "currentVersion": 9, "publicationId": "…", "publishedAt": "…", "dataAsOf": "…", "fingerprint": { "contentGenerationId": "…", "businessRevision": 8 } },
+  "data": { "overview": { "metrics": { "totalProjects": 5, "activeProjects": 3, "pendingAmount": "1234.57", "pendingAcceptance": 1, "pendingInvoice": 1 }, "stages": [ … ] } }
+}
+```
+
+示例 `GET /api/projects?query=%E5%BC%A0%E4%B8%89&status=executing&limit=2`：
+
+```json
+{
+  "metadata": { "published": true, "currentVersion": 9, "publicationId": "…", "publishedAt": "…", "dataAsOf": "…", "fingerprint": {…} },
+  "data": {
+    "items": [ { "id": "…", "tempNo": "TP-…", "ecc": "…", "customerName": "…", "status": "executing", "region": "…", "regionNeedsAdjustment": false, "entryAt": "2026-08-01", "planVisitAt": null, "finalAmount": "1000.00", "invoicedAmount": "200.00", "contractAmount": "1000.00", "formallyEntered": true, "preEntryExecution": false } ],
+    "nextCursor": "…"
+  }
+}
+```
+
+## 6. 页面与静态资产
+
+- 手机入口与静态资源由服务托管（全部要求查看 Basic，`no-store`）。
+- 根路径 `/`：优先返回 `webRoot/index.html`（若存在，mobile lane 可自行提供），否则使用服务内建
+  模板（引用 `<script src="/app.js"></script>`）。
+- bundle 约定：`webpack.mobile-readonly.config.ts` 的 web 目标产出 `dist/mobile-readonly/web/app.js`
+  （entry `src/mobile/index.tsx`）；CSS 沿用 style-loader/css-loader（style-loader 运行时注入，**无独立 CSS 文件**）。
+- 仅服务 `webRoot` 目录内文件；拒绝 `..`/`.`/隐藏段/符号链接逃逸；`snapshots` 目录永不暴露。
+- 不存在任何「整份 snapshot / current.json」读取路由。
+
+## 7. 尚未发布 vs 已发布空快照
+
+- 尚未发布：metadata `published:false`、`currentVersion:0`、`dataAsOf/publicationId/publishedAt` 均为 `null`，
+  概览 data `overview:null`、列表/记录为空。
+- 已发布空集合：metadata `published:true`、版本 ≥1，概览返回全零 metrics 空 stages/projects，
+  **不得误读为尚未发布**。
+
+## 8. 安全与运维要点
+
+- 日志不含业务内容/密钥；错误响应不回显请求体、内部堆栈与凭证明文。
+- 凭证文件损坏/缺失 → 启动快速失败，不静默降级。
+- `current.json` 损坏 → 启动快速失败（拒绝以损坏包络服务）。
+- 上传 token 仅能上传 + 读 meta，不能浏览业务；查看 Basic 不能上传。生产建议单独轮换任一凭证。
+- 备份/恢复快照 = 仅保留一份 `current.json`（本服务不保留历史）。
+- 请求路径凭证校验使用**异步 scrypt**（不占用事件循环），并以**有界 auth 并发**保护：
+  同一时刻活动校验不超过 `MOBILE_READONLY_AUTH_MAX_ACTIVE`（默认 4，范围 1..64）；
+  达到上限后的新请求立即返回 `503 AUTH_BUSY`（零排队、不堆积线程池任务），
+  连接在整体 `MOBILE_READONLY_REQUEST_TIMEOUT_MS` 内超时断开；校验期间超时丢弃迟到结果，绝不向已结束连接再写响应。
+  摘要生成/CLI（一次性）仍使用同步 scrypt。

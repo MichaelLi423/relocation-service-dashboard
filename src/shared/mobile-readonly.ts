@@ -303,6 +303,23 @@ export interface MobileReadonlyQueryResponse<TData> {
   data: TData;
 }
 
+/**
+ * 概览查询的 data 载体。`overview` 为 null 仅表示「尚未发布」（从未成功接收快照）；
+ * 已发布空集合快照返回全零 `MobileReadonlyOverview`，两者不得混淆（design D10）。
+ */
+export interface MobileReadonlyOverviewData {
+  overview: MobileReadonlyOverview | null;
+}
+
+/** 上传（PUT /api/publish）响应结果（200 提交/幂等，409 冲突；均携带当前元数据）。 */
+export type MobileReadonlyPublishResultKind = 'committed' | 'idempotent' | 'conflict';
+
+/** PUT /api/publish 响应体（wire）：{ result, metadata }。 */
+export interface MobileReadonlyPublishResult {
+  result: MobileReadonlyPublishResultKind;
+  metadata: MobileReadonlyPublishMetadata;
+}
+
 // ---------------------------------------------------------------------------
 // 封闭白名单严格校验器（纯 TS，无 Node/网络依赖）
 // ---------------------------------------------------------------------------

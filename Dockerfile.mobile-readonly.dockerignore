@@ -1,0 +1,68 @@
+# Docker 构建上下文忽略文件（mobile-readonly 服务）
+# 用法：docker build -f Dockerfile.mobile-readonly -t mobile-readonly-service .
+# Docker 只读取构建上下文根部的 .dockerignore；若你的版本不识别
+# Dockerfile.mobile-readonly.dockerignore 这一命名文件，请把内容合入根 .dockerignore。
+# 本文件白名单式排除，确保不把 node_modules/.git/docs/客户材料 作为上下文发送。
+
+# VCS / 元数据
+.git
+**/.git
+.gitignore
+**/.gitignore
+
+# 依赖
+node_modules
+**/node_modules
+
+# 构建产物与缓存
+out
+**/out
+dist
+**/dist
+.webpack
+**/.webpack
+coverage
+**/coverage
+playwright-report
+test-results
+*.tsbuildinfo
+*.log
+
+# 运行时本地数据
+.userData
+**/.userData
+
+# 客户敏感材料与无关目录（服务镜像一律不需要）
+docs
+tests
+e2e
+prototype
+openspec
+.opencode
+.agents
+
+# 脚本只允许 build 脚本进入上下文（Dockerfile COPY 依赖它）
+scripts/*
+!scripts/build-mobile-readonly.cjs
+
+# 仓库文档/CI 与桌面专用配置
+LICENSE
+README.md
+CONTEXT.md
+CONTEXT-MAP.md
+AGENTS.md
+forge.config.ts
+playwright.config.ts
+vitest.config.ts
+webpack.main.config.ts
+webpack.renderer.config.ts
+webpack.preload.config.ts
+.dockerignore.mobile-readonly
+Dockerfile.mobile-readonly.dockerignore
+
+# 桌面/Electron 目录（手机 web 与服务不需要）
+src/main
+src/preload
+src/renderer
+src/domain
+src/helpers

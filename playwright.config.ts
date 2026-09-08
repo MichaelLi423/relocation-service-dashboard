@@ -11,6 +11,9 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // 移动只读两条验收 spec 由独立配置 playwright.mobile-readonly.config.ts 运行
+  // （npm run test:e2e:mobile-readonly），避免在旧 electron-smoke 项目中重复执行。
+  testIgnore: ['**/mobile-readonly-view.spec.ts', '**/mobile-readonly-publish.spec.ts'],
   timeout: 180_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

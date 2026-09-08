@@ -52,6 +52,7 @@ import type {
   WorkbenchV2ReminderPageDto,
 } from "../../shared/ipc";
 import { PROJECT_REGIONS } from "../../shared/ipc";
+import { MobileReadonlyControl } from "./mobile-readonly-control";
 import {
   HistoryImportWizard,
   IpcHistoryImportProvider,
@@ -985,6 +986,7 @@ export function WorkbenchV2({
           <button onClick={() => setLayer({ kind: "history" })}>浏览全部记录</button>
           <button onClick={() => setLayer({ kind: "report" })}>运营报表</button>
           <button onClick={() => setLayer({ kind: "tags" })}>标签库</button>
+          <MobileReadonlyControl />
           <div className="data-menu">
             <button
               ref={dataMenuTrigger}
