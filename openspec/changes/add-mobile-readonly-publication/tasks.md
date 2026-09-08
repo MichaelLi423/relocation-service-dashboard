@@ -10,15 +10,15 @@
 
 ## 2. 封闭白名单快照（已定契约，实现非归纳）
 
-- [ ] 2.1 按 `design.md`「封闭字段白名单」表实现快照 JSON 序列化契约（schemaVersion、contentGenerationId、businessRevision、dataAsOf、overview、projects[] 及六类 records[]），每字段与表逐项一致；验证产物 schema 样例与 `design.md` 表一致（拟新增 `tests/main/mobile-readonly-whitelist.test.ts`）
-- [ ] 2.2 未知 key 拒绝：快照生成器与校验器对任何位置（含嵌套对象）出现表外字段判定非法；验证 `tests/main/mobile-readonly-whitelist.test.ts` 覆盖顶层、项目行与六类记录内嵌套未知 key 场景
-- [ ] 2.3 排除性测试：断言快照不含联系人、详细地址、自由备注、来源审计/审计时间、账号与会话、本机路径、报表导出/附件/备份内容；验证 `tests/main/mobile-readonly-whitelist.test.ts`
-- [ ] 2.4 金额契约（固定两位）：金额复用主进程已格式化 DTO 的主单位固定两位小数字符串（如 `"1234.57"`、`"0.00"`；可空字段未填写为 `null`，允许负值字段保留负号两位小数字符串如 `"-12.34"`）；验证 `tests/main/mobile-readonly-money.test.ts` 覆盖超安全整数金额（> 2^53 分）、0、`null` 与允许负值字段，发布与手机链路禁止再次除以 100 或转 Number（`formatCents` 自身的分→主单位格式化除外）
-- [ ] 2.5 日期契约：业务日期一律 `yyyy-mm-dd`，不导出审计/技术 ISO 时间；验证 `tests/main/mobile-readonly-date.test.ts`
+- [x] 2.1 按 `design.md`「封闭字段白名单」表实现快照 JSON 序列化契约（schemaVersion、contentGenerationId、businessRevision、dataAsOf、overview、projects[] 及六类 records[]），每字段与表逐项一致；验证产物 schema 样例与 `design.md` 表一致（拟新增 `tests/main/mobile-readonly-whitelist.test.ts`）
+- [x] 2.2 未知 key 拒绝：快照生成器与校验器对任何位置（含嵌套对象）出现表外字段判定非法；验证 `tests/main/mobile-readonly-whitelist.test.ts` 覆盖顶层、项目行与六类记录内嵌套未知 key 场景
+- [x] 2.3 排除性测试：断言快照不含联系人、详细地址、自由备注、来源审计/审计时间、账号与会话、本机路径、报表导出/附件/备份内容；验证 `tests/main/mobile-readonly-whitelist.test.ts`
+- [x] 2.4 金额契约（固定两位）：金额复用主进程已格式化 DTO 的主单位固定两位小数字符串（如 `"1234.57"`、`"0.00"`；可空字段未填写为 `null`，允许负值字段保留负号两位小数字符串如 `"-12.34"`）；验证 `tests/main/mobile-readonly-money.test.ts` 覆盖超安全整数金额（> 2^53 分）、0、`null` 与允许负值字段，发布与手机链路禁止再次除以 100 或转 Number（`formatCents` 自身的分→主单位格式化除外）
+- [x] 2.5 日期契约：业务日期一律 `yyyy-mm-dd`，不导出审计/技术 ISO 时间；验证 `tests/main/mobile-readonly-date.test.ts`
 
 ## 3. 单事务一致快照与变化检测
 
-- [ ] 3.1 单一致事务遍历：在单一同步事务内复用 `WorkbenchReadRepository` 分页方法遍历**全部**搬迁项目与全部六类关联记录（逐页收集至最后一页，非首屏），同事务捕获 contentGenerationId/businessRevision/dataAsOf；验证 `tests/main/mobile-readonly-snapshot.test.ts`（node 环境）用多页项目与多页记录断言无遗漏
+- [x] 3.1 单一致事务遍历：在单一同步事务内复用 `WorkbenchReadRepository` 分页方法遍历**全部**搬迁项目与全部六类关联记录（逐页收集至最后一页，非首屏），同事务捕获 contentGenerationId/businessRevision/dataAsOf；验证 `tests/main/mobile-readonly-snapshot.test.ts`（node 环境）用多页项目与多页记录断言无遗漏
 - [ ] 3.2 事务边界：事务内只做本地读取与内存收集，序列化与网络上传在事务提交后执行，事务内零网络；验证结构测试 `tests/main/mobile-readonly-boundary.test.ts` 与 `tests/main/mobile-readonly-snapshot.test.ts`
 - [ ] 3.3 指纹捕获语义：上传成功保存**候选捕获时指纹**，不得在上传完成后再读"最新修订"做指纹；上传期间新写入归下一轮。验证 `tests/main/mobile-readonly-fingerprint.test.ts`：上传中被修改的数据不出现在本次快照指纹中，下一周期按新指纹发布
 - [ ] 3.4 变化检测：同代际 businessRevision 增长判定变化；contentGenerationId 轮换（恢复，含 revision 数值下降）判定变化；无写入不变化。验证 `tests/main/mobile-readonly-change-detect.test.ts`（可控时钟/内存 DB）
