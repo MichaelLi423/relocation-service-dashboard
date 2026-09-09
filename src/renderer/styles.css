@@ -133,7 +133,6 @@ html{overflow-x:clip}.workbench-v2{min-width:0;overflow:visible}.workbench-v2 .p
 .queue-sort-button{display:inline-flex;min-height:40px;align-items:center;gap:7px;margin:-8px -10px;padding:8px 10px;border:0;background:transparent;color:inherit;font-weight:inherit}.queue-sort-button:hover{color:var(--brand-dark)}.sort-direction{min-width:18px;color:var(--faint);font-size:10px;font-weight:700}.sort-direction.active{padding:2px 5px;border-radius:3px;background:var(--brand-soft);color:var(--brand-dark)}
 
 /* Independent publication settings; no changes to the reminder or project layout. */
-.mrp-trigger{white-space:nowrap;font-weight:500!important;opacity:.9}
 .mrp-backdrop{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:24px;background:rgba(12,31,26,.42)}
 .mrp-panel{display:flex;flex-direction:column;width:min(560px,100%);max-height:calc(100dvh - 48px);overflow:hidden;border:1px solid var(--line-strong);border-radius:var(--radius-dialog);background:var(--raised);box-shadow:var(--shadow);color:var(--ink);overflow-wrap:anywhere}
 .mrp-panel *{min-width:0}.mrp-panel .button{min-height:40px}.mrp-panel :focus-visible{outline:2px solid var(--brand);outline-offset:3px}

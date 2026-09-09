@@ -146,7 +146,7 @@ function PublicationPanel({ api, close, returnFocus }: { api?: MobileReadonlyCon
   const canEnable = status?.configured && (status.issue === null || status.issue === "state_unwritable");
   return createPortal(<div className="mrp-backdrop" onClick={(event) => { if (event.target === event.currentTarget) close(); }}>
     <section className="mrp-panel" role="dialog" aria-modal="true" aria-labelledby="mrp-title" aria-describedby="mrp-description" ref={panel}>
-      <header className="mrp-header"><div><p>电脑发布 · 手机只读</p><h2 id="mrp-title">移动只读发布</h2></div><button ref={closeButton} className="button" type="button" aria-label="关闭移动只读发布" onClick={() => { setToken(""); close(); }}>关闭</button></header>
+      <header className="mrp-header"><div><p>电脑发布 · 手机只读</p><h2 id="mrp-title">发布云端</h2></div><button ref={closeButton} className="button" type="button" aria-label="关闭发布云端" onClick={() => { setToken(""); close(); }}>关闭</button></header>
       <div className="mrp-body">
         <p id="mrp-description" className="mrp-description">默认关闭。配置后需单独启用，才会把只读快照发布到指定服务。发布失败不影响本地录入和查看。</p>
         {!available ? <p role="status" className="mrp-warning">当前版本未提供发布接口，暂不可用。未读取到配置或启用状态。</p> : <>
@@ -182,10 +182,17 @@ function PublicationPanel({ api, close, returnFocus }: { api?: MobileReadonlyCon
   </div>, document.body);
 }
 
-export function MobileReadonlyControl({ api: supplied }: { api?: MobileReadonlyControlApi }) {
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLButtonElement>(null);
+export interface MobileReadonlyControlProps {
+  /** 宿主（数据管理菜单）控制开关：弹窗必须挂在折叠菜单之外，宿主折叠不影响它。 */
+  open: boolean;
+  onClose: () => void;
+  /** 关闭后交还焦点的宿主触发器。 */
+  returnFocus: HTMLButtonElement | null;
+  api?: MobileReadonlyControlApi;
+}
+
+export function MobileReadonlyControl({ api: supplied, open, onClose, returnFocus }: MobileReadonlyControlProps) {
   const api = supplied ?? (window as unknown as { workbench?: WorkbenchApi }).workbench;
-  function close() { setOpen(false); }
-  return <><button ref={trigger} className="mrp-trigger" type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>移动只读发布</button>{open && <PublicationPanel api={api} close={close} returnFocus={trigger.current} />}</>;
+  if (!open) return null;
+  return <PublicationPanel api={api} close={onClose} returnFocus={returnFocus} />;
 }

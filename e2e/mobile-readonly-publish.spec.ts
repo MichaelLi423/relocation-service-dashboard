@@ -126,7 +126,7 @@ test('P1 桌面发布端到端 + 手机自动可见（空首发→建档→改�
 
     // —— 打开发布面板：默认关闭/未配置状态断言 ——
     await openPublishPanel(page);
-    const panel = page.getByRole('dialog', { name: '移动只读发布' });
+    const panel = page.getByRole('dialog', { name: '发布云端' });
     await expect(panel.getByText('未配置', { exact: true })).toBeVisible();
     expect(await publishPanelField(page, '配置情况')).toBe('未配置');
     expect(await publishPanelField(page, '发布开关')).toBe('已停用');
@@ -223,7 +223,7 @@ test('P1 桌面发布端到端 + 手机自动可见（空首发→建档→改�
 });
 
 async function clickEnable(page: Parameters<typeof openPublishPanel>[0]): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   await expect(dialog.getByRole('button', { name: '启用发布' })).toBeEnabled();
   await dialog.getByRole('button', { name: '启用发布' }).click();
   await expect(dialog.getByText(/已启用发布，后续结果会显示在这里/)).toBeVisible();

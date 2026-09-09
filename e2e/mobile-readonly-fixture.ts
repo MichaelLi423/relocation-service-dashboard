@@ -487,16 +487,17 @@ export async function closeMobilePage(opened: OpenMobilePageResult): Promise<voi
 // ---------------------------------------------------------------------------
 
 export async function openPublishPanel(page: Page): Promise<Page> {
-  await page.getByRole('button', { name: '移动只读发布' }).click();
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  await page.getByRole('button', { name: '数据管理', exact: true }).click();
+  await page.getByRole('region', { name: '数据管理', exact: true }).getByRole('button', { name: '发布云端', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   await dialog.waitFor();
   return page;
 }
 
 export async function closePublishPanel(page: Page): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   if (await dialog.count()) {
-    await page.getByRole('button', { name: '关闭移动只读发布' }).click();
+    await page.getByRole('button', { name: '关闭发布云端' }).click();
     await expectDialogClosed(dialog);
   }
 }
@@ -507,14 +508,14 @@ async function expectDialogClosed(dialog: ReturnType<Page['getByRole']>): Promis
 
 /** 读取发布面板某一行的 dd 文本（如「配置情况 / 最近成功发布 / 最近失败」）。 */
 export async function publishPanelField(page: Page, dtLabel: string): Promise<string> {
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   const dd = dialog.getByText(dtLabel, { exact: true }).locator('xpath=following-sibling::dd[1]');
   return ((await dd.textContent()) ?? '').trim();
 }
 
 /** 一次性配置（保存不会自动启用）。 */
 export async function configurePublish(page: Page, target: string, token: string): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   await dialog.getByRole('button', { name: '配置发布' }).click();
   await dialog.getByLabel('HTTPS 服务地址').fill(target);
   await dialog.getByLabel('独立上传凭证').fill(token);
@@ -523,7 +524,7 @@ export async function configurePublish(page: Page, target: string, token: string
 }
 
 export async function clickEnablePublish(page: Page): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: '移动只读发布' });
+  const dialog = page.getByRole('dialog', { name: '发布云端' });
   const enable = dialog.getByRole('button', { name: '启用发布' });
   await expect(enable).toBeEnabled();
   await enable.click();

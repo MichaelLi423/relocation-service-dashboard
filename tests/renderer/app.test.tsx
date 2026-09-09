@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest';
 import ExcelJS from 'exceljs';
 import { App } from '../../src/renderer/app';
+import { DataCleanPanel } from '../../src/renderer/components/workbench-v2';
 import type {
   WorkbenchApi,
   WorkbenchProjectRow,
@@ -1384,30 +1385,169 @@ describe('Oracle #10 bounded workbench renderer', () => {
     await waitFor(() => expect(api.v2Delete).toHaveBeenCalledWith(expect.objectContaining({ kind: 'invoice', id: 'inv-1', expectedRevision: 1, revokeReason: '金额登记有误' })));
   });
 
-  it('清理全部业务数据先展示计数，再要求固定文本并调用两阶段契约', async () => {
-    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+  it('发布云端入口位于数据管理菜单内：菜单折叠后弹窗仍可用，顶栏不再有独立入口', async () => {
+    const publicationStatus = { configured: false, enabled: false, target: null, lastSuccessfulAt: null, lastFailedCode: null, lastFailedAt: null, issue: 'not_configured' as const };
+    const api = mockApi({
+      mobileReadonlyStatus: vi.fn().mockResolvedValue(publicationStatus),
+      mobileReadonlyConfigure: vi.fn().mockResolvedValue(publicationStatus),
+      mobileReadonlySetEnabled: vi.fn().mockResolvedValue(publicationStatus),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
     await screen.findByRole('heading', { name: /项目队列/ });
-    fireEvent.click(screen.getByText('数据管理'));
-    fireEvent.click(screen.getByRole('button', { name: '清理全部业务数据' }));
-    const dialog = screen.getByRole('dialog', { name: '清理全部业务数据' });
-    fireEvent.click(within(dialog).getByRole('button', { name: '先检查将清理的数据' }));
-    expect(await within(dialog).findByText('将清理 4 行业务数据')).toBeInTheDocument();
-    const clean = within(dialog).getByRole('button', { name: '创建安全备份并清理' });
+    const navigation = screen.getByRole('navigation', { name: '主导航' });
+    const trigger = within(navigation).getByRole('button', { name: '数据管理' });
+    expect(within(navigation).queryByRole('button', { name: '移动只读发布' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布云端' })).not.toBeInTheDocument();
+    expect(trigger).not.toHaveAttribute('aria-haspopup');
+    expect(trigger).toHaveAttribute('aria-controls', 'data-menu-panel');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    const menu = screen.getByRole('region', { name: '数据管理' });
+    expect(menu).toHaveAttribute('id', 'data-menu-panel');
+    expect(within(menu).getByRole('button', { name: '历史数据导入' })).toHaveFocus();
+    const publishItem = within(menu).getByRole('button', { name: '发布云端' });
+    expect(publishItem).toBeInTheDocument();
+    expect(publishItem).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(within(menu).queryByRole('button', { name: '清理全部业务数据' })).not.toBeInTheDocument();
+    fireEvent.click(publishItem);
+    const dialog = await screen.findByRole('dialog', { name: '发布云端' });
+    expect(screen.queryByRole('region', { name: '数据管理' })).not.toBeInTheDocument();
+    expect(navigation).not.toContainElement(dialog);
+    expect(await within(dialog).findByText('未配置')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '启用发布' })).toBeDisabled();
+    fireEvent.keyDown(within(dialog).getByRole('button', { name: '关闭发布云端' }), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '发布云端' })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+    expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('数据管理菜单支持键盘进入聚焦第一项、Escape 返回触发器及外部点击关闭', async () => {
+    const api = mockApi();
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+    const trigger = screen.getByRole('button', { name: '数据管理' });
+    expect(trigger).not.toHaveAttribute('aria-haspopup');
+    expect(trigger).toHaveAttribute('aria-controls', 'data-menu-panel');
+
+    // 键盘打开菜单并立即将焦点移入首个可用按钮
+    trigger.focus();
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('region', { name: '数据管理' });
+    expect(menu).toHaveAttribute('id', 'data-menu-panel');
+    const firstButton = within(menu).getByRole('button', { name: '历史数据导入' });
+    expect(firstButton).toHaveFocus();
+
+    // Escape 键关闭菜单并将焦点交还给数据管理触发器
+    fireEvent.keyDown(firstButton, { key: 'Escape' });
+    expect(screen.queryByRole('region', { name: '数据管理' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    // 再次打开并通过外部点击关闭：不应强行把焦点抢回数据管理
+    fireEvent.click(trigger);
+    expect(screen.getByRole('region', { name: '数据管理' })).toBeInTheDocument();
+    const outsideTarget = screen.getByRole('button', { name: '新建搬迁项目' });
+    outsideTarget.focus();
+    fireEvent.mouseDown(outsideTarget);
+    expect(screen.queryByRole('region', { name: '数据管理' })).not.toBeInTheDocument();
+    expect(outsideTarget).toHaveFocus();
+  });
+
+  it('发布云端在宿主重新渲染时保持挂载与草稿，显式关闭后重开清空未保存凭证', async () => {
+    const publicationStatus = {
+      configured: false,
+      enabled: false,
+      target: null,
+      lastSuccessfulAt: null,
+      lastFailedCode: null,
+      lastFailedAt: null,
+      issue: 'not_configured' as const,
+    };
+    const api = mockApi({
+      mobileReadonlyStatus: vi.fn().mockResolvedValue(publicationStatus),
+      mobileReadonlyConfigure: vi.fn().mockResolvedValue(publicationStatus),
+      mobileReadonlySetEnabled: vi.fn().mockResolvedValue(publicationStatus),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    const { rerender } = render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    const navigation = screen.getByRole('navigation', { name: '主导航' });
+    const trigger = within(navigation).getByRole('button', { name: '数据管理' });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('region', { name: '数据管理' });
+    fireEvent.click(within(menu).getByRole('button', { name: '发布云端' }));
+
+    const dialogBefore = await screen.findByRole('dialog', { name: '发布云端' });
+    fireEvent.click(within(dialogBefore).getByRole('button', { name: '配置发布' }));
+
+    const targetInputBefore = within(dialogBefore).getByLabelText('HTTPS 服务地址') as HTMLInputElement;
+    const tokenInputBefore = within(dialogBefore).getByLabelText('独立上传凭证') as HTMLInputElement;
+    fireEvent.change(targetInputBefore, { target: { value: 'https://sync.example.com' } });
+    fireEvent.change(tokenInputBefore, { target: { value: 'synthetic-upload-secret' } });
+    expect(targetInputBefore.value).toBe('https://sync.example.com');
+    expect(tokenInputBefore.value).toBe('synthetic-upload-secret');
+    expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(1);
+
+    // 触发宿主正常重渲染/刷新（React 树 rerender 与 window focus 事件），弹窗及表单节点保持同一实例且内容不丢
+    rerender(<App />);
+    window.dispatchEvent(new Event('focus'));
+    window.dispatchEvent(new Event('resize'));
+
+    const dialogAfter = screen.getByRole('dialog', { name: '发布云端' });
+    const targetInputAfter = within(dialogAfter).getByLabelText('HTTPS 服务地址') as HTMLInputElement;
+    const tokenInputAfter = within(dialogAfter).getByLabelText('独立上传凭证') as HTMLInputElement;
+
+    expect(dialogAfter).toBe(dialogBefore);
+    expect(targetInputAfter).toBe(targetInputBefore);
+    expect(tokenInputAfter).toBe(tokenInputBefore);
+    expect(targetInputAfter.value).toBe('https://sync.example.com');
+    expect(tokenInputAfter.value).toBe('synthetic-upload-secret');
+
+    // 未产生非预期的重新挂载导致多余的状态读取
+    expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(1);
+    expect(api.mobileReadonlyConfigure).not.toHaveBeenCalled();
+    expect(api.mobileReadonlySetEnabled).not.toHaveBeenCalled();
+    expect(api.cleanPrepare).not.toHaveBeenCalled();
+    expect(api.cleanConfirm).not.toHaveBeenCalled();
+
+    // 显式关闭后再打开，未保存的上传凭证必须清空
+    fireEvent.click(within(dialogAfter).getByRole('button', { name: '关闭发布云端' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '发布云端' })).not.toBeInTheDocument());
+
+    fireEvent.click(trigger);
+    const reopenedMenu = screen.getByRole('region', { name: '数据管理' });
+    fireEvent.click(within(reopenedMenu).getByRole('button', { name: '发布云端' }));
+    const reopenedDialog = await screen.findByRole('dialog', { name: '发布云端' });
+    fireEvent.click(within(reopenedDialog).getByRole('button', { name: '配置发布' }));
+    const reopenedTokenInput = within(reopenedDialog).getByLabelText('独立上传凭证') as HTMLInputElement;
+    expect(reopenedTokenInput.value).toBe('');
+  });
+
+  it('清理全部业务数据先展示计数，再要求固定文本并调用两阶段契约', async () => {
+    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<DataCleanPanel onComplete={async () => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: '先检查将清理的数据' }));
+    expect(await screen.findByText('将清理 4 行业务数据')).toBeInTheDocument();
+    const clean = screen.getByRole('button', { name: '创建安全备份并清理' });
     expect(clean).toBeDisabled();
-    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '清理全部业务数据' } });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '清理全部业务数据' } });
     fireEvent.click(clean);
     await waitFor(() => expect(api.cleanConfirm).toHaveBeenCalledWith({ token: 'clean-token', confirmText: '清理全部业务数据' }));
   });
 
   it('清理确认过期后清空旧计数并提供重新检查路径', async () => {
     const api = mockApi({ cleanConfirm: vi.fn().mockRejectedValue(new Error('CLEAN_TOKEN_EXPIRED: token expired')) });
-    Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
-    await screen.findByRole('heading', { name: /项目队列/ }); fireEvent.click(screen.getByText('数据管理')); fireEvent.click(screen.getByRole('button', { name: '清理全部业务数据' }));
-    const dialog = screen.getByRole('dialog', { name: '清理全部业务数据' }); fireEvent.click(within(dialog).getByRole('button', { name: '先检查将清理的数据' }));
-    await within(dialog).findByText('将清理 4 行业务数据'); fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: '清理全部业务数据' } }); fireEvent.click(within(dialog).getByRole('button', { name: '创建安全备份并清理' }));
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('已过期，请重新检查数据');
-    expect(within(dialog).queryByText('将清理 4 行业务数据')).not.toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: '重新检查数据' })).toBeInTheDocument();
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<DataCleanPanel onComplete={async () => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: '先检查将清理的数据' }));
+    await screen.findByText('将清理 4 行业务数据');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '清理全部业务数据' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建安全备份并清理' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('已过期，请重新检查数据');
+    expect(screen.queryByText('将清理 4 行业务数据')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新检查数据' })).toBeInTheDocument();
   });
 
   it('项目总览编辑资料预填分组字段，显式提交 false/空值并在成功后关闭刷新详情', async () => {

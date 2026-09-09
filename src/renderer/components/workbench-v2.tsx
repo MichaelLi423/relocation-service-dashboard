@@ -389,6 +389,7 @@ export function WorkbenchV2({
   const [tagEditGuard, setTagEditGuard] = useState({ dirty: false, busy: false });
   const [historyImport, setHistoryImport] = useState(false);
   const [dataMenuOpen, setDataMenuOpen] = useState(false);
+  const [publicationOpen, setPublicationOpen] = useState(false);
   const [dataMenuPosition, setDataMenuPosition] = useState({ top: 0, left: 12, width: 192 });
   const [independentRefresh, setIndependentRefresh] = useState(0);
   const [reminderRefresh, setReminderRefresh] = useState(0);
@@ -437,6 +438,8 @@ export function WorkbenchV2({
       dataMenuTrigger.current?.focus();
     };
     updatePosition();
+    const firstButton = dataMenuPanel.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    firstButton?.focus();
     document.addEventListener("mousedown", closeFromOutside);
     document.addEventListener("keydown", closeFromKeyboard);
     window.addEventListener("resize", updatePosition);
@@ -986,14 +989,13 @@ export function WorkbenchV2({
           <button onClick={() => setLayer({ kind: "history" })}>浏览全部记录</button>
           <button onClick={() => setLayer({ kind: "report" })}>运营报表</button>
           <button onClick={() => setLayer({ kind: "tags" })}>标签库</button>
-          <MobileReadonlyControl />
           <div className="data-menu">
             <button
               ref={dataMenuTrigger}
               className="data-menu-trigger"
               type="button"
-              aria-haspopup="true"
               aria-expanded={dataMenuOpen}
+              aria-controls="data-menu-panel"
               onClick={() => setDataMenuOpen((open) => !open)}
             >
               数据管理
@@ -1001,6 +1003,7 @@ export function WorkbenchV2({
             {dataMenuOpen && createPortal(
               <div
                 ref={dataMenuPanel}
+                id="data-menu-panel"
                 className="data-menu-panel"
                 role="region"
                 aria-label="数据管理"
@@ -1021,8 +1024,8 @@ export function WorkbenchV2({
                 管理标签库
               </button>
               <div className="data-menu-divider" />
-              <button className="danger-text" onClick={() => { setDataMenuOpen(false); setLayer({ kind: "clean" }); }}>
-                清理全部业务数据
+              <button type="button" aria-haspopup="dialog" onClick={() => { setDataMenuOpen(false); setPublicationOpen(true); }}>
+                发布云端
               </button>
               </div>,
               document.body,
@@ -1034,6 +1037,7 @@ export function WorkbenchV2({
           {session.username}
         </div>
       </header>
+      <MobileReadonlyControl open={publicationOpen} onClose={() => setPublicationOpen(false)} returnFocus={dataMenuTrigger.current} />
       <main id="main" className="page">
         <section className="command" aria-label="今日工作台">
           <div>
@@ -4615,7 +4619,7 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
   </div>;
 }
 
-function DataCleanPanel({ onComplete }: { onComplete: () => Promise<void> }): JSX.Element {
+export function DataCleanPanel({ onComplete }: { onComplete: () => Promise<void> }): JSX.Element {
   const [prepared, setPrepared] = useState<DataCleanPrepareDto | null>(null);
   const [confirmText, setConfirmText] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [needsRecheck, setNeedsRecheck] = useState(false);

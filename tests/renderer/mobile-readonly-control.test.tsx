@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MobileReadonlyControl, PUBLICATION_STATUS_POLL_MS, type MobileReadonlyControlApi } from "../../src/renderer/components/mobile-readonly-control";
@@ -22,11 +24,22 @@ function bridge(initial = fixture()) {
   } satisfies MobileReadonlyControlApi;
   return api;
 }
+/** 宿主形态与桌面一致：入口按钮在折叠菜单里，弹窗由宿主状态持有（组件不渲染自己的入口）。 */
+function Host({ api, itemVisibleByDefault = true }: { api: MobileReadonlyControlApi; itemVisibleByDefault?: boolean }) {
+  const [menuOpen, setMenuOpen] = useState(itemVisibleByDefault);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  return <>
+    <button ref={trigger} type="button" onClick={() => setMenuOpen((open) => !open)}>数据管理</button>
+    {menuOpen && <button type="button" onClick={() => { setMenuOpen(false); setPanelOpen(true); }}>发布云端</button>}
+    <MobileReadonlyControl api={api} open={panelOpen} onClose={() => setPanelOpen(false)} returnFocus={trigger.current} />
+  </>;
+}
 async function open(api: MobileReadonlyControlApi) {
-  render(<MobileReadonlyControl api={api} />);
-  fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+  render(<Host api={api} />);
+  fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
   await screen.findByText("配置情况");
-  return within(screen.getByRole("dialog", { name: "移动只读发布" }));
+  return within(screen.getByRole("dialog", { name: "发布云端" }));
 }
 function enterConfiguration() {
   fireEvent.click(screen.getByRole("button", { name: "配置发布" }));
@@ -34,13 +47,15 @@ function enterConfiguration() {
   fireEvent.change(screen.getByLabelText("独立上传凭证"), { target: { value: "synthetic-upload-secret" } });
 }
 
-describe("桌面移动只读发布控制", () => {
-  it("默认不读取后台状态；打开读取，未配置/停用明确且没有业务写入表单", async () => {
+describe("桌面发布云端控制", () => {
+  it("默认不读取后台状态；入口在折叠菜单内，未配置/停用明确且没有业务写入表单", async () => {
     const api = bridge();
-    render(<MobileReadonlyControl api={api} />);
+    render(<Host api={api} itemVisibleByDefault={false} />);
     expect(api.mobileReadonlyStatus).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+    expect(screen.queryByRole("button", { name: "发布云端" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "数据管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
     await screen.findByText("未配置");
     expect(screen.getByText("已停用")).toBeTruthy();
     expect((screen.getByRole("button", { name: "启用发布" }) as HTMLButtonElement).disabled).toBe(true);
@@ -48,6 +63,13 @@ describe("桌面移动只读发布控制", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("button", { name: /新建项目|修改项目|删除项目|导出|备份|恢复|登录/ })).toBeNull();
     expect(api.mobileReadonlySetEnabled).not.toHaveBeenCalled();
+  });
+  it("入口随宿主菜单折叠消失，但弹窗保持挂载可用", async () => {
+    const api = bridge(); await open(api);
+    expect(screen.queryByRole("button", { name: "发布云端" })).toBeNull();
+    const dialog = screen.getByRole("dialog", { name: "发布云端" });
+    expect(within(dialog).getByText("配置情况")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "配置发布" })).toBeEnabled();
   });
   it("仅通过 bridge 保存 HTTPS 配置；密码只写、成功清空且不会隐式启用", async () => {
     const api = bridge(); await open(api); enterConfiguration();
@@ -73,9 +95,9 @@ describe("桌面移动只读发布控制", () => {
     expect(api.mobileReadonlySetEnabled).toHaveBeenLastCalledWith({ enabled: false });
     expect(screen.getByText(/停用仅停止后续发布/)).toBeTruthy();
   });
-  it("关闭清除未保存 token、Escape 关闭并恢复触发按钮焦点，Tab 留在弹窗", async () => {
+  it("关闭清除未保存 token、Escape 关闭并把焦点交还宿主入口，Tab 留在弹窗", async () => {
     const api = bridge(); await open(api); enterConfiguration();
-    const close = screen.getByRole("button", { name: "关闭移动只读发布" });
+    const close = screen.getByRole("button", { name: "关闭发布云端" });
     close.focus();
     fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "保存配置" }));
@@ -83,8 +105,9 @@ describe("桌面移动只读发布控制", () => {
     expect(document.activeElement).toBe(close);
     fireEvent.keyDown(close, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "移动只读发布" }));
-    fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+    expect(screen.getByRole("button", { name: "数据管理" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "数据管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
     await screen.findByText("未配置");
     fireEvent.click(screen.getByRole("button", { name: "配置发布" }));
     expect((screen.getByLabelText("独立上传凭证") as HTMLInputElement).value).toBe("");
@@ -139,8 +162,8 @@ describe("桌面移动只读发布控制", () => {
   });
   it("旧版 bridge 方法缺失明确不可用，不假设配置成功", async () => {
     const partial = { mobileReadonlyStatus: vi.fn(async () => fixture({ configured: true })) };
-    render(<MobileReadonlyControl api={partial} />);
-    fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+    render(<Host api={partial} />);
+    fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
     expect(screen.getByRole("status").textContent).toContain("当前版本未提供发布接口");
     expect(screen.queryByText("已配置")).toBeNull();
     expect(screen.queryByRole("button", { name: "启用发布" })).toBeNull();
@@ -148,8 +171,8 @@ describe("桌面移动只读发布控制", () => {
   });
   it("初次状态读取失败可重试且不显示虚构的默认状态", async () => {
     const api = bridge(); api.mobileReadonlyStatus.mockRejectedValueOnce(new Error("private-read-secret"));
-    render(<MobileReadonlyControl api={api} />);
-    fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+    render(<Host api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
     await screen.findByRole("alert");
     expect(screen.getByRole("dialog").textContent).not.toContain("private-read-secret");
     expect(screen.queryByText("已停用")).toBeNull();
@@ -160,8 +183,8 @@ describe("桌面移动只读发布控制", () => {
   it("仅在弹窗打开且前台可见时轮询，关闭清理计时器", async () => {
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const api = bridge(); render(<MobileReadonlyControl api={api} />);
-    fireEvent.click(screen.getByRole("button", { name: "移动只读发布" }));
+    const api = bridge(); render(<Host api={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "发布云端" }));
     await act(async () => { await Promise.resolve(); });
     expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(PUBLICATION_STATUS_POLL_MS); });
@@ -170,7 +193,7 @@ describe("桌面移动只读发布控制", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(PUBLICATION_STATUS_POLL_MS * 2); });
     expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue("visible");
-    fireEvent.click(screen.getByRole("button", { name: "关闭移动只读发布" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭发布云端" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(PUBLICATION_STATUS_POLL_MS * 2); });
     expect(api.mobileReadonlyStatus).toHaveBeenCalledTimes(2);
   });
@@ -180,7 +203,7 @@ describe("桌面移动只读发布控制", () => {
     await open(api); enterConfiguration();
     fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
     await waitFor(() => expect(api.mobileReadonlyConfigure).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button", { name: "关闭移动只读发布" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭发布云端" }));
     await act(async () => resolve(fixture({ configured: true, issue: null })));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.body.textContent).not.toContain("synthetic-upload-secret");
