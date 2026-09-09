@@ -4,6 +4,12 @@
 实现：`src/server/mobile-readonly/**`、`webpack.mobile-readonly.config.ts`、
 `Dockerfile.mobile-readonly`、`tests/server/**`。
 
+> 生产现状（2026-09-09）：服务已以 `relocation-mobile-readonly:1766c8f-amd64` 容器在线运行于
+> `https://workbench.michaelli.site`（内部 127.0.0.1:8082，仅自有 data bind + /tmp tmpfs）；
+> 凭证/证书/TLS/首份空冒烟（V1 空集合）已执行，Windows 首次真实业务发布与实体手机验收待人工。
+> 本文档描述的端点/线协议不变；部署细节见 `docs/mobile-readonly-deployment.md`，勿以旧版
+> 「服务待构建/仅本地测试」表述代替上文。
+
 ## 1. 定位与运行形态
 
 单 Node 进程轻量服务（无数据库/Redis/队列/历史库），唯一权威数据文件为
@@ -37,17 +43,25 @@
 ## 2. 构建与运行
 
 ```bash
-# 构建（需仓库 devDependencies 含 webpack-cli；src/mobile/** 需已存在）
+# 构建（程序化 webpack API，无需 webpack-cli/额外依赖；src/mobile/** 需已存在）
 npm ci
-npx webpack --config webpack.mobile-readonly.config.ts
+npm run build:mobile-readonly        # 等价 node scripts/build-mobile-readonly.cjs
 # 产物：
-#   dist/mobile-readonly/server.cjs       服务入口（node dist/mobile-readonly/server.cjs）
+#   dist/mobile-readonly/server.cjs       服务入口（npm run start:mobile-readonly / node dist/mobile-readonly/server.cjs）
 #   dist/mobile-readonly/credentials.cjs  凭证摘要生成 CLI
 #   dist/mobile-readonly/web/app.js       手机只读 bundle（entry: src/mobile/index.tsx）
+#   dist/mobile-readonly/web/index.html   由构建脚本从 src/mobile/index.html 复制
 
-# 镜像（父集成补根 .dockerignore 后）
-docker build -f Dockerfile.mobile-readonly -t mobile-readonly-service .
+# 本地合成开发（45 项目合成快照 + 演示凭证，loopback；退出自动清理自身临时目录）
+npm run dev:mobile-readonly
+
+# 镜像（上下文忽略文件 Dockerfile.mobile-readonly.dockerignore；若 Docker 版本不识别该命名
+# ignore 文件，请把其内容合入根 .dockerignore 后执行）
+docker build -f Dockerfile.mobile-readonly -t relocation-mobile-readonly:<tag> .
 ```
+
+部署/上线的实际编排见 `docs/mobile-readonly-deployment.md`（阶段化子命令：preflight /
+credentials / install / probe / tls-http / acme / tls-https / probe-tls / smoke）。
 
 环境变量（`src/server/mobile-readonly/config.ts`）：
 
