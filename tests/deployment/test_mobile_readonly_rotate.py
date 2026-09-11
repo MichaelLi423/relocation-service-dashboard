@@ -132,12 +132,18 @@ class OfflineTestCase(unittest.TestCase):
 class HelperEnv:
     def __init__(self):
         self.td = tempfile.mkdtemp()
+        self.root = self.td  # 受信根（替代生产 "/"；避开 macOS /var 符号链接）
         self.uid = os.getuid()
         self.gid = os.getgid()
-        self.data = os.path.join(self.td, "data")
+        # 业务根 base 与 data 必须是不同目录，data 是 base 的子目录（防同目录遮 bug）
+        self.base = os.path.join(self.td, "optbase")
+        os.mkdir(self.base, 0o700)
+        self.base_marker = os.path.join(self.base, ".deploy-managed")
+        self._write(self.base_marker, b"relocation-mobile-readonly\n", 0o600)
+        self.data = os.path.join(self.base, "data")
         os.mkdir(self.data, 0o700)
         self.snap_dir = os.path.join(self.data, "snapshots")
-        os.mkdir(self.snap_dir, 0o700)
+        os.mkdir(self.snap_dir, 0o755)  # 服务自建（store.ts mkdirSync 递归默认 0755）
         self.snap = os.path.join(self.snap_dir, "current.json")
         self._write(self.snap, b'{"business":"sensitive"}\n', 0o600)
         self.target = os.path.join(self.data, "credentials.json")
@@ -151,8 +157,6 @@ class HelperEnv:
         self.lock = os.path.join(self.rot, "lock")
         self._write(self.lock, b"", 0o600)
         self.active = os.path.join(self.rot, ".active")
-        self.base_marker = os.path.join(self.data, ".deploy-managed")
-        self._write(self.base_marker, b"relocation-mobile-readonly\n", 0o600)
         self.inspect = json.dumps([{
             "Id": "ctr123", "State": {"Status": "running"}, "Image": "img",
             "Config": {"User": "1000:1000"}, "HostConfig": {}, "Mounts": [],
@@ -171,7 +175,16 @@ class HelperEnv:
         return hashlib.sha256(json.dumps(pick, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def snapshot_hash(self, data=None):
-        return hashlib.sha256(data if data is not None else open(self.snap, "rb").read()).hexdigest()
+        if data is None:
+            with open(self.snap, "rb") as fh:
+                data = fh.read()
+        return hashlib.sha256(data).hexdigest()
+
+    def target_hash(self, data=None):
+        if data is None:
+            with open(self.target, "rb") as fh:
+                data = fh.read()
+        return hashlib.sha256(data).hexdigest()
 
     def restart_cmd(self):
         return [sys.executable, "-c",
@@ -193,16 +206,20 @@ class HelperEnv:
         shutil.rmtree(self.td, ignore_errors=True)
 
     def kwargs(self, **over):
+        if "expected_snapshot_hash" in over:
+            expected_snapshot_hash = over.pop("expected_snapshot_hash")
+        else:
+            expected_snapshot_hash = self.snapshot_hash()
         base = dict(
             container="relocation-mobile-readonly", target=self.target, target_parent=self.data,
             target_owner=(self.uid, self.gid), target_mode=0o600,
-            data_base=self.data, data_marker=self.base_marker,
+            data_base=self.base, data_marker=self.base_marker,
             data_marker_value="relocation-mobile-readonly",
             data_owner=(self.uid, self.gid), data_mode=0o700,
-            snapshot=self.snap, expected_snapshot_hash=self.snapshot_hash(),
+            snapshot=self.snap, expected_snapshot_hash=expected_snapshot_hash,
             snapshot_owner=(self.uid, self.gid), snapshot_mode=0o600,
             directory=self.rot, marker=self.marker, value="relocation-mobile-readonly-rotate",
-            lock=self.lock, active=self.active, uid=self.uid,
+            lock=self.lock, active=self.active, uid=self.uid, root=self.root,
             cid_cmd=self.cid_cmd(), inspect_cmd=self.inspect_cmd(),
         )
         base.update(over)
@@ -210,23 +227,27 @@ class HelperEnv:
 
 
 def run_remote_apply_local(env, *, mode, txn_id, expected_old, expected_new, payload,
-                           restart, owner, restart_gate="apply", **over):
+                           restart, owner, restart_gate="apply",
+                           expected_runtime="running", **over):
     """在本地真实执行远端 helper（本地命令替换 docker）。"""
     def local_remote(shell, stdin=None, timeout=120):
         proc = subprocess.run([sys.executable, "-c", python_source(shell)],
                               input=stdin, capture_output=True, timeout=timeout)
         return ExecResultStub(proc.returncode, proc.stdout, proc.stderr)
     kwargs = env.kwargs(**over)
+    expected_cid = kwargs.pop("expected_cid", "ctr123")
+    expected_config_hash = kwargs.pop("expected_config_hash", env.config_hash())
+    snapshot_hash = kwargs.pop("expected_snapshot_hash")
+    snapshot_owner = kwargs.pop("snapshot_owner")
+    snapshot_mode = kwargs.pop("snapshot_mode")
     with mock.patch.object(dpl, "remote_exec", side_effect=local_remote):
         return rot.run_remote_apply(
             mode=mode, txn_id=txn_id, expected_old=expected_old, expected_new=expected_new,
             payload=payload, restart=restart, owner=owner, restart_gate=restart_gate,
-            expected_cid=kwargs.pop("expected_cid", "ctr123"),
-            expected_config_hash=kwargs.pop("expected_config_hash", env.config_hash()),
-            snapshot_hash=kwargs.pop("expected_snapshot_hash"),
-            snapshot_owner=kwargs.pop("snapshot_owner"),
-            snapshot_mode=kwargs.pop("snapshot_mode"),
-            **kwargs)
+            expected_runtime=expected_runtime,
+            expected_cid=expected_cid, expected_config_hash=expected_config_hash,
+            snapshot_hash=snapshot_hash, snapshot_owner=snapshot_owner,
+            snapshot_mode=snapshot_mode, **kwargs)
 
 
 def run_prepare_local(env, *, fresh_dir=None, uid=None, parent=None):
@@ -366,6 +387,31 @@ class LocalPathTests(OfflineTestCase):
                 with self.assertRaises(rot.RotateError):
                     rot._ensure_state_root()
 
+    def test_existing_parent_0755_allowed_not_chmodded(self):
+        # deploy.save_baseline 以默认 0755 创建 ~/.cache/relocation-mobile-readonly：不得强制 private
+        with tempfile.TemporaryDirectory() as td:
+            parent = os.path.join(td, "relocation-mobile-readonly")
+            os.mkdir(parent, 0o755)
+            root = os.path.join(parent, "rotations")
+            with mock.patch.object(rot, "STATE_ROOT", root), \
+                 mock.patch.object(rot, "STATE_MARKER", os.path.join(root, ".rotate-managed")), \
+                 mock.patch.object(rot, "STATE_LOCK", os.path.join(root, ".lock")):
+                rot._ensure_state_root()
+            self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(os.stat(parent).st_mode), 0o755)  # 未被 chmod
+
+    def test_existing_parent_group_writable_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            parent = os.path.join(td, "relocation-mobile-readonly")
+            os.mkdir(parent, 0o770)
+            os.chmod(parent, 0o770)  # 绕开 umask
+            root = os.path.join(parent, "rotations")
+            with mock.patch.object(rot, "STATE_ROOT", root), \
+                 mock.patch.object(rot, "STATE_MARKER", os.path.join(root, ".rotate-managed")), \
+                 mock.patch.object(rot, "STATE_LOCK", os.path.join(root, ".lock")):
+                with self.assertRaises(rot.RotateError):
+                    rot._ensure_state_root()
+
 
 class RemotePrepareTests(OfflineTestCase):
     def test_fresh_dir_initializes_marker_and_lock(self):
@@ -423,7 +469,269 @@ class RemotePrepareTests(OfflineTestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3/4. 远端 helper：CAS/身份/故障注入
+# 3. 远端只读原语：合成 subprocess 输出 -> 真实消费者 parse roundtrip（B1/B3）
+# ---------------------------------------------------------------------------
+
+def run_snippet_local(code, stdin=b""):
+    proc = subprocess.run([sys.executable, "-c", code], input=stdin,
+                          capture_output=True, timeout=30)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+class RemoteReadRoundtripTests(OfflineTestCase):
+    def setUp(self):
+        super().setUp()
+        self.env = HelperEnv()
+        self.addCleanup(self.env.cleaned)
+        self.owner = (self.env.uid, self.env.gid)
+
+    def _consume_read(self, path, stdout):
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(0, stdout)):
+            return rot.remote_read_exact(path, owner=self.owner, mode=0o600, root=self.env.root)
+
+    def _consume_stat(self, path, stdout):
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(0, stdout)):
+            return rot.remote_stat_hash(path, owner=self.owner, mode=0o600, root=self.env.root)
+
+    def test_read_0600_roundtrip_real_snippet(self):
+        code = rot.render_remote_read(self.env.target, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, err = run_snippet_local(code)
+        self.assertEqual(rc, 0, err.decode())
+        data, uid, gid, mode = self._consume_read(self.env.target, out)
+        self.assertEqual(data, self.env.old)
+        self.assertEqual((uid, gid), self.owner)
+        self.assertEqual(mode, 0o600)  # 十进制 384 必须被真实消费者解析为 0600
+
+    def test_read_0644_roundtrip_parses_decimal(self):
+        os.chmod(self.env.target, 0o644)
+        code = rot.render_remote_read(self.env.target, owner=self.owner, mode=None,
+                                      root=self.env.root)
+        rc, out, err = run_snippet_local(code)
+        self.assertEqual(rc, 0, err.decode())
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(0, out)):
+            data, _uid, _gid, mode = rot.remote_read_exact(
+                self.env.target, owner=self.owner, mode=0o644, root=self.env.root)
+        self.assertEqual(data, self.env.old)
+        self.assertEqual(mode, 0o644)  # 420 十进制 -> 0644
+
+    def test_read_0600_consumer_rejects_0644_mode(self):
+        os.chmod(self.env.target, 0o644)
+        code = rot.render_remote_read(self.env.target, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertNotEqual(rc, 0, "wide mode must be rejected by snippet gate")
+
+    def test_read_empty_roundtrip(self):
+        self.env._write(self.env.target, b"", 0o600)
+        code = rot.render_remote_read(self.env.target, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, err = run_snippet_local(code)
+        self.assertEqual(rc, 0, err.decode())
+        data, _uid, _gid, mode = self._consume_read(self.env.target, out)
+        self.assertEqual(data, b"")
+        self.assertEqual(mode, 0o600)
+
+    def test_read_missing_is_none(self):
+        missing = os.path.join(self.env.data, "nope.json")
+        code = rot.render_remote_read(missing, owner=self.owner, mode=0o600, root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertEqual(rc, 3)
+        self.assertEqual(out.decode().strip(), "MISSING")
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            self.assertIsNone(rot.remote_read_exact(missing, owner=self.owner, mode=0o600,
+                                                    root=self.env.root))
+
+    def test_read_active_empty_present_illegal(self):
+        self.env._write(self.env.active, b"   \n", 0o600)
+        code = rot.render_remote_read(self.env.active, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, err = run_snippet_local(code)
+        self.assertEqual(rc, 0, err.decode())
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.read_remote_active(uid=self.env.uid)
+
+    def test_read_symlink_and_dangling_rejected(self):
+        link = os.path.join(self.env.data, "link.json")
+        os.symlink(self.env.target, link)
+        dangling = os.path.join(self.env.data, "dangling.json")
+        os.symlink(os.path.join(self.env.data, "absent"), dangling)
+        for p in (link, dangling):
+            code = rot.render_remote_read(p, owner=self.owner, mode=0o600, root=self.env.root)
+            rc, out, _err = run_snippet_local(code)
+            self.assertNotEqual(rc, 0)
+            self.assertIn(b"SAFE_", out)
+            with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+                with self.assertRaises(rot.RotateError):
+                    rot.remote_read_exact(p, owner=self.owner, mode=0o600, root=self.env.root)
+
+    def test_read_directory_rejected(self):
+        code = rot.render_remote_read(self.env.data, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertNotEqual(rc, 0)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.remote_read_exact(self.env.data, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+
+    def test_read_wrong_owner_rejected(self):
+        wrong = (self.env.uid + 1, self.env.gid)
+        code = rot.render_remote_read(self.env.target, owner=wrong, mode=0o600,
+                                      root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertNotEqual(rc, 0)
+        self.assertIn(b"SAFE_OWNER", out)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.remote_read_exact(self.env.target, owner=wrong, mode=0o600,
+                                      root=self.env.root)
+
+    def test_read_malformed_output_rejected(self):
+        for bad in (b"notint 2 384 AAAA\n", b"1 2 384 !!!notbase64!!!\n",
+                    b"1 2 384 AAAA trailing\n"):
+            with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(0, bad)):
+                with self.assertRaises(rot.RotateError):
+                    rot.remote_read_exact(self.env.target, owner=self.owner, mode=0o600,
+                                          root=self.env.root)
+
+    def test_stat_roundtrip_real_snippet(self):
+        code = rot.render_remote_stat(self.env.snap, owner=self.owner, mode=0o600,
+                                      root=self.env.root)
+        rc, out, err = run_snippet_local(code)
+        self.assertEqual(rc, 0, err.decode())
+        info = self._consume_stat(self.env.snap, out)
+        self.assertEqual(info["hash"], self.env.snapshot_hash())
+        self.assertEqual((info["uid"], info["gid"]), self.owner)
+        self.assertEqual(info["mode"], 0o600)
+
+    def test_stat_missing_and_symlink(self):
+        missing = os.path.join(self.env.data, "nope.json")
+        code = rot.render_remote_stat(missing, owner=self.owner, mode=0o600, root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertEqual(rc, 3)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            self.assertIsNone(rot.remote_stat_hash(missing, owner=self.owner, mode=0o600,
+                                                   root=self.env.root))
+        link = os.path.join(self.env.data, "snaplink.json")
+        os.symlink(self.env.snap, link)
+        code = rot.render_remote_stat(link, owner=self.owner, mode=0o600, root=self.env.root)
+        rc, out, _err = run_snippet_local(code)
+        self.assertNotEqual(rc, 0)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.remote_stat_hash(link, owner=self.owner, mode=0o600, root=self.env.root)
+
+
+class RemoteProbeRoundtripTests(OfflineTestCase):
+    """首次 rotate 前 opdir 只读探测：真实片段 -> 真实消费者；绝不创建/修改任何内容。"""
+
+    def setUp(self):
+        super().setUp()
+        self.env = HelperEnv()
+        self.addCleanup(self.env.cleaned)
+
+    def _run_probe(self, **over):
+        kwargs = dict(directory=self.env.rot, marker=self.env.marker,
+                      value="relocation-mobile-readonly-rotate", active=self.env.active,
+                      parent=self.env.td, uid=self.env.uid, root=self.env.root)
+        kwargs.update(over)
+        code = rot.render_remote_probe(**kwargs)
+        return run_snippet_local(code)
+
+    def _consume(self, rc, out):
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            return rot.read_remote_active_initialized(root=self.env.root, parent=self.env.td)
+
+    def _tree(self):
+        out = {}
+        for dirpath, dirs, files in os.walk(self.env.td):
+            for name in dirs + files:
+                p = os.path.join(dirpath, name)
+                st = os.lstat(p)
+                out[os.path.relpath(p, self.env.td)] = (stat.S_IMODE(st.st_mode), st.st_size)
+        return out
+
+    def test_uninitialized_opdir_readonly(self):
+        import shutil
+        shutil.rmtree(self.env.rot)
+        before = self._tree()
+        rc, out, _err = self._run_probe()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), b"PROBE_UNINITIALIZED")
+        self.assertIsNone(self._consume(rc, out))
+        self.assertEqual(before, self._tree(), "探测不得创建/修改任何内容")
+
+    def test_initialized_absent_active(self):
+        before = self._tree()
+        rc, out, _err = self._run_probe()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.strip(), b"PROBE_ABSENT")
+        self.assertIsNone(self._consume(rc, out))
+        self.assertEqual(before, self._tree())
+
+    def test_initialized_active_txn_returned(self):
+        with open(self.env.active, "w") as fh:
+            fh.write(self.env.txn + "\n")
+        os.chmod(self.env.active, 0o600)
+        before = self._tree()
+        rc, out, _err = self._run_probe()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._consume(rc, out), self.env.txn)
+        self.assertEqual(before, self._tree())
+
+    def test_empty_active_illegal_not_absent(self):
+        with open(self.env.active, "w") as fh:
+            fh.write("   \n")
+        os.chmod(self.env.active, 0o600)
+        rc, out, _err = self._run_probe()
+        self.assertNotEqual(rc, 0)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.read_remote_active_initialized(root=self.env.root, parent=self.env.td)
+
+    def test_wrong_marker_rejected(self):
+        with open(self.env.marker, "w") as fh:
+            fh.write("wrong\n")
+        os.chmod(self.env.marker, 0o600)
+        rc, out, _err = self._run_probe()
+        self.assertNotEqual(rc, 0)
+        with mock.patch.object(dpl, "remote_exec", return_value=ExecResultStub(rc, out)):
+            with self.assertRaises(rot.RotateError):
+                rot.read_remote_active_initialized(root=self.env.root, parent=self.env.td)
+
+    def test_opdir_symlink_rejected(self):
+        real = self.env.rot + ".real"
+        os.rename(self.env.rot, real)
+        os.symlink(real, self.env.rot)
+        rc, out, _err = self._run_probe()
+        self.assertNotEqual(rc, 0)
+
+    def test_opdir_wrong_mode_rejected(self):
+        os.chmod(self.env.rot, 0o755)
+        rc, out, _err = self._run_probe()
+        self.assertNotEqual(rc, 0)
+
+    def test_active_is_directory_rejected(self):
+        with open(self.env.active, "w") as fh:
+            fh.write(self.env.txn + "\n")
+        os.remove(self.env.active)
+        os.mkdir(self.env.active, 0o700)
+        rc, out, _err = self._run_probe()
+        self.assertNotEqual(rc, 0)
+
+    def test_parent_writable_rejected(self):
+        os.chmod(self.env.td, 0o777)
+        try:
+            rc, out, _err = self._run_probe()
+        finally:
+            os.chmod(self.env.td, 0o700)
+        self.assertNotEqual(rc, 0)
+
+
+# ---------------------------------------------------------------------------
+# 4. 远端 helper：路径/身份/CAS/运行态/故障注入
 # ---------------------------------------------------------------------------
 
 class RemoteApplyHelperTests(OfflineTestCase):
@@ -454,14 +762,21 @@ class RemoteApplyHelperTests(OfflineTestCase):
             fh.write(self.env.txn + "\n")
         os.chmod(self.env.active, 0o600)
 
-    def _restart(self, **over):
+    def _restart(self, *, gate="stale", expected_hash=None, expected_runtime="running", **over):
         self._to_new()
+        h = expected_hash or hashlib.sha256(self.env.new).hexdigest()
         return run_remote_apply_local(
             self.env, mode="restart", txn_id=self.env.txn,
-            expected_old=hashlib.sha256(self.env.new).hexdigest(),
-            expected_new=hashlib.sha256(self.env.new).hexdigest(),
+            expected_old=h, expected_new=h,
             payload=b"", restart=self.env.restart_cmd(), owner=None,
-            restart_gate="stale", **over)
+            restart_gate=gate, expected_runtime=expected_runtime, **over)
+
+    def _observe(self, *, expected_hash=None, **over):
+        h = expected_hash or hashlib.sha256(self.env.old).hexdigest()
+        return run_remote_apply_local(
+            self.env, mode="observe", txn_id=self.env.txn,
+            expected_old=h, expected_new=h, payload=b"", restart=[], owner=None,
+            restart_gate="none", expected_runtime="any", **over)
 
     def test_apply_success(self):
         res = self._apply()
@@ -475,11 +790,7 @@ class RemoteApplyHelperTests(OfflineTestCase):
 
     def test_cas_mismatch_zero_write_zero_restart(self):
         with self.assertRaises(rot.RotateError) as cm:
-            run_remote_apply_local(
-                self.env, mode="apply", txn_id=self.env.txn, expected_old="0" * 64,
-                expected_new=hashlib.sha256(self.env.new).hexdigest(),
-                payload=self.env.new, restart=self.env.restart_cmd(),
-                owner=(self.env.uid, self.env.gid))
+            self._apply(expected_old="0" * 64)
         self.assertIn("CAS_OLD_MISMATCH", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
         self.assertFalse(os.path.exists(self.env.restart_log))
@@ -506,12 +817,21 @@ class RemoteApplyHelperTests(OfflineTestCase):
 
     def test_snapshot_hash_drift_stops(self):
         before = self.env.snapshot_hash()
-        changed = b'{"business":"changed"}\n'
-        open(self.env.snap, "wb").write(changed)
+        with open(self.env.snap, "wb") as fh:
+            fh.write(b'{"business":"changed"}\n')
         with self.assertRaises(rot.RotateError) as cm:
             self._apply(expected_snapshot_hash=before)
         self.assertIn("SNAPSHOT_MISMATCH", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+
+    def test_snapshot_same_hash_wide_mode_rejected(self):
+        before = self.env.snapshot_hash()
+        os.chmod(self.env.snap, 0o644)  # 内容 hash 不变，但属性宽
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply(expected_snapshot_hash=before)
+        self.assertIn("SNAPSHOT_ATTR", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
 
     def test_target_mode_abnormal_stops(self):
         os.chmod(self.env.target, 0o644)
@@ -521,8 +841,9 @@ class RemoteApplyHelperTests(OfflineTestCase):
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
 
     def test_target_owner_abnormal_stops(self):
-        with self.assertRaises(rot.RotateError):
+        with self.assertRaises(rot.RotateError) as cm:
             self._apply(target_owner=(self.env.uid + 1, self.env.gid))
+        self.assertIn("TARGET_OWNER", str(cm.exception))
 
     def test_unknown_dir_marker_missing_stops(self):
         os.unlink(self.env.marker)
@@ -530,6 +851,65 @@ class RemoteApplyHelperTests(OfflineTestCase):
             self._apply()
         self.assertIn("MARKER_MISSING", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+
+    def test_data_dir_wrong_mode_rejected(self):
+        os.chmod(self.env.data, 0o755)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_data_dir_wrong_owner_rejected(self):
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply(data_owner=(self.env.uid + 1, self.env.gid))
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+
+    def test_snapshots_dir_0755_accepted(self):
+        # 服务自建 snapshots 目录默认 0755：属主正确、无 group/other 写即可，不强制 0700
+        self.assertEqual(stat.S_IMODE(os.stat(self.env.snap_dir).st_mode), 0o755)
+        res = self._apply()
+        self.assertTrue(res["ok"])
+
+    def test_snapshots_dir_group_writable_rejected(self):
+        os.chmod(self.env.snap_dir, 0o775)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_snapshots_dir_symlink_rejected(self):
+        before = self.env.snapshot_hash()
+        real = self.env.snap_dir + ".real"
+        os.rename(self.env.snap_dir, real)
+        os.symlink(real, self.env.snap_dir)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply(expected_snapshot_hash=before)
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_ancestor_symlink_rejected_zero_read_zero_replace(self):
+        real = self.env.base + ".real"
+        os.rename(self.env.base, real)
+        os.symlink(real, self.env.base)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
+        self.assertFalse(os.path.exists(self.env.active))
+
+    def test_ancestor_dangling_symlink_rejected(self):
+        before = self.env.snapshot_hash()
+        real = self.env.base + ".real"
+        os.rename(self.env.base, real)
+        os.symlink(os.path.join(self.env.td, "absent"), self.env.base)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply(expected_snapshot_hash=before)
+        self.assertIn("DATA_DIR_BAD", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.restart_log))
 
     def test_lock_busy_stops(self):
         import fcntl
@@ -543,6 +923,22 @@ class RemoteApplyHelperTests(OfflineTestCase):
             fcntl.flock(holder, fcntl.LOCK_UN)
             os.close(holder)
 
+    def test_lock_wrong_mode_rejected(self):
+        os.chmod(self.env.lock, 0o644)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("LOCK_ATTR", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+
+    def test_active_wrong_mode_rejected(self):
+        with open(self.env.active, "w") as fh:
+            fh.write(self.env.txn + "\n")
+        os.chmod(self.env.active, 0o644)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("ACTIVE_ATTR", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+
     def test_active_other_stops(self):
         with open(self.env.active, "w") as fh:
             fh.write("b" * 32 + "\n")
@@ -552,33 +948,71 @@ class RemoteApplyHelperTests(OfflineTestCase):
         self.assertIn("ACTIVE_OTHER", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
 
-    def test_restart_gate_exited_requires_exited(self):
-        # running + gate exited -> 不重启也不写
-        self._to_new()
-        res = run_remote_apply_local(
-            self.env, mode="restart", txn_id=self.env.txn,
-            expected_old=hashlib.sha256(self.env.new).hexdigest(),
-            expected_new=hashlib.sha256(self.env.new).hexdigest(),
-            payload=b"", restart=self.env.restart_cmd(), owner=None,
-            restart_gate="exited", inspect_cmd=self.env.runtime("running"))
-        self.assertTrue(res["ok"])
-        self.assertFalse(res["restarted"])
+    def test_active_empty_present_illegal_not_absent(self):
+        # 文件存在但空/空白：非法，不得视为 absent
+        with open(self.env.active, "w") as fh:
+            fh.write("   \n")
+        os.chmod(self.env.active, 0o600)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply()
+        self.assertIn("ACTIVE_ATTR", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
         self.assertFalse(os.path.exists(self.env.restart_log))
 
-    def test_restart_gate_exited_running_restarts(self):
+    def test_helper_owners_use_uid(self):
+        # owner 无法在 CI 内切 uid，结构性断言 LOCK/ACTIVE/MARKER 的 safe_open owner=UID
+        code = rot.render_remote_apply(
+            mode="apply", txn_id=self.env.txn, expected_old="a" * 64, expected_new="b" * 64,
+            container="c", expected_cid="c", expected_config_hash="e" * 64,
+            restart=["true"], owner=None, target_owner=(1000, 1000),
+            expected_snapshot_hash="f" * 64, snapshot_owner=(1000, 1000), snapshot_mode=0o600,
+            root=self.env.root, uid=1234)
+        self.assertIn("so(LOCK, False, UID, 0o600)", code)
+        self.assertIn("read_nofollow(ACTIVE, UID, 0o600", code)
+        self.assertIn("verify_marker(MARKER, VALUE, UID)", code)
+
+    def test_restart_gate_exited_requires_exited(self):
+        # running + exited gate -> 拒绝（gate 必须 exited），零重启
         self._to_new()
-        res = run_remote_apply_local(
-            self.env, mode="restart", txn_id=self.env.txn,
-            expected_old=hashlib.sha256(self.env.new).hexdigest(),
-            expected_new=hashlib.sha256(self.env.new).hexdigest(),
-            payload=b"", restart=self.env.restart_cmd(), owner=None,
-            restart_gate="exited", inspect_cmd=self.env.runtime("exited"))
+        with self.assertRaises(rot.RotateError) as cm:
+            self._restart(gate="exited", expected_runtime="exited",
+                          inspect_cmd=self.env.runtime("running"))
+        self.assertIn("RUNTIME_MISMATCH", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_restart_gate_exited_restarts(self):
+        self._to_new()
+        res = self._restart(gate="exited", expected_runtime="exited",
+                            inspect_cmd=self.env.runtime("exited"))
         self.assertTrue(res["restarted"])
         self.assertTrue(os.path.exists(self.env.restart_log))
 
-    def test_restart_gate_stale_running_restarts(self):
-        res = self._restart()
+    def test_restart_gate_stale_requires_running(self):
+        self._to_new()
+        res = self._restart(gate="stale", expected_runtime="running")
         self.assertTrue(res["restarted"])
+
+    def test_restart_gate_paused_zero_restart(self):
+        self._to_new()
+        with self.assertRaises(rot.RotateError) as cm:
+            self._restart(gate="stale", expected_runtime="running",
+                          inspect_cmd=self.env.runtime("paused"))
+        self.assertIn("RUNTIME_MISMATCH", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_apply_paused_zero_replace_zero_restart(self):
+        with self.assertRaises(rot.RotateError) as cm:
+            self._apply(inspect_cmd=self.env.runtime("paused"))
+        self.assertIn("RUNTIME_MISMATCH", str(cm.exception))
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
+    def test_apply_dead_and_restarting_zero_replace(self):
+        for status in ("dead", "restarting", "unknown"):
+            with self.assertRaises(rot.RotateError):
+                self._apply(inspect_cmd=self.env.runtime(status))
+            self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
 
     def test_restart_failure_reports_changed(self):
         with self.assertRaises(rot.RotateError) as cm:
@@ -586,25 +1020,41 @@ class RemoteApplyHelperTests(OfflineTestCase):
         self.assertIn("RESTART_FAIL", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.new)
 
-    def test_clear_own_active(self):
+    def test_clear_own_active_deleted(self):
         with open(self.env.active, "w") as fh:
             fh.write(self.env.txn + "\n")
         os.chmod(self.env.active, 0o600)
-        res = run_remote_apply_local(
-            self.env, mode="clear", txn_id=self.env.txn, expected_old="", expected_new="",
-            payload=b"", restart=[], owner=None, restart_gate="none")
-        self.assertTrue(res["cleared"])
+        res = self._observe_clear()
+        self.assertEqual(res["cleared"], "deleted")
         self.assertFalse(os.path.exists(self.env.active))
 
-    def test_clear_other_active_not_cleared(self):
+    def _observe_clear(self):
+        return run_remote_apply_local(
+            self.env, mode="clear", txn_id=self.env.txn, expected_old="", expected_new="",
+            payload=b"", restart=[], owner=None, restart_gate="none",
+            expected_runtime="any")
+
+    def test_clear_absent_confirmed(self):
+        res = self._observe_clear()
+        self.assertEqual(res["cleared"], "absent")
+
+    def test_clear_other_active_stops(self):
         with open(self.env.active, "w") as fh:
             fh.write("b" * 32 + "\n")
         os.chmod(self.env.active, 0o600)
-        res = run_remote_apply_local(
-            self.env, mode="clear", txn_id=self.env.txn, expected_old="", expected_new="",
-            payload=b"", restart=[], owner=None, restart_gate="none")
-        self.assertFalse(res["cleared"])
+        with self.assertRaises(rot.RotateError) as cm:
+            self._observe_clear()
+        self.assertIn("ACTIVE_OTHER", str(cm.exception))
         self.assertTrue(os.path.exists(self.env.active))
+
+    def test_clear_lost_response_followup_absent_converges(self):
+        with open(self.env.active, "w") as fh:
+            fh.write(self.env.txn + "\n")
+        os.chmod(self.env.active, 0o600)
+        first = self._observe_clear()  # 第一次删除了 active（模拟回包丢失后再查）
+        self.assertEqual(first["cleared"], "deleted")
+        second = self._observe_clear()
+        self.assertEqual(second["cleared"], "absent")
 
     def test_payload_hash_mismatch(self):
         with self.assertRaises(rot.RotateError) as cm:
@@ -612,9 +1062,57 @@ class RemoteApplyHelperTests(OfflineTestCase):
         self.assertIn("PAYLOAD_HASH", str(cm.exception))
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
 
+    def test_observe_success_returns_limited_state(self):
+        res = self._observe()
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["runtime"], "running")
+        self.assertEqual(res["targetHash"], hashlib.sha256(self.env.old).hexdigest())
+        self.assertIsNone(res["active"])
+
+    def test_observe_busy_lock_stops(self):
+        import fcntl
+        holder = os.open(self.env.lock, os.O_RDWR)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with self.assertRaises(rot.RotateError) as cm:
+                self._observe()
+            self.assertIn("LOCK_BUSY", str(cm.exception))
+        finally:
+            fcntl.flock(holder, fcntl.LOCK_UN)
+            os.close(holder)
+
+    def test_observe_tree_unchanged(self):
+        def tree():
+            out = {}
+            for dirpath, _dirs, files in os.walk(self.env.td):
+                for name in files:
+                    p = os.path.join(dirpath, name)
+                    st = os.lstat(p)
+                    out[os.path.relpath(p, self.env.td)] = (
+                        stat.S_IMODE(st.st_mode), st.st_size, st.st_mtime_ns)
+            return out
+        before = tree()
+        self._observe()
+        self.assertEqual(before, tree())
+
+    def test_observe_missing_lock_rejected_not_recreated(self):
+        os.unlink(self.env.lock)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._observe()
+        self.assertIn("LOCK_MISSING", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.lock), "不得重建缺失的锁")
+
+    def test_observe_missing_opdir_rejected_not_recreated(self):
+        import shutil
+        shutil.rmtree(self.env.rot)
+        with self.assertRaises(rot.RotateError) as cm:
+            self._observe()
+        self.assertIn("DIR_OPEN_FAIL", str(cm.exception))
+        self.assertFalse(os.path.exists(self.env.rot), "不得重建缺失的 opdir")
+
 
 class RemoteApplyFaultInjectionTests(OfflineTestCase):
-    """注入 write/fsync/replace/dirsync 故障：状态保留、不假成功。"""
+    """注入 write/fsync/replace/dirsync 故障：状态保留、不假成功；断言替换确已发生。"""
 
     def setUp(self):
         super().setUp()
@@ -642,47 +1140,75 @@ class RemoteApplyFaultInjectionTests(OfflineTestCase):
             data_owner=kwargs["data_owner"], data_mode=kwargs["data_mode"],
             snapshot=kwargs["snapshot"], expected_snapshot_hash=kwargs["expected_snapshot_hash"],
             snapshot_owner=kwargs["snapshot_owner"], snapshot_mode=kwargs["snapshot_mode"],
-            cid_cmd=kwargs["cid_cmd"], inspect_cmd=kwargs["inspect_cmd"], uid=self.env.uid)
+            cid_cmd=kwargs["cid_cmd"], inspect_cmd=kwargs["inspect_cmd"], uid=self.env.uid,
+            root=self.env.root, expected_runtime="running")
+
+    def _json(self, out):
+        return json.loads(out.decode().strip().splitlines()[-1])
+
+    def _assert_replaced(self, original, code, needle):
+        self.assertIn(needle, original, "注入锚点未在生成源码中出现")
+        self.assertNotEqual(original, code, "注入 replace 未实际生效")
 
     def test_os_write_failure(self):
-        code = self._render().replace("w += os.write(fd, mv[w:])",
-                                      "raise OSError('inject-write')")
+        original = self._render()
+        code = original.replace("w += os.write(fd, mv[w:])", "raise OSError('inject-write')")
+        self._assert_replaced(original, code, "w += os.write(fd, mv[w:])")
         rc, out, _ = self._run_code(code, stdin=self.env.new)
-        data = json.loads(out.decode().strip().splitlines()[-1])
+        data = self._json(out)
         self.assertFalse(data["ok"])
         self.assertEqual(data["reason"], "WRITE_FAIL")
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
 
+    def test_temp_file_fsync_failure(self):
+        original = self._render()
+        code = original.replace("                os.fsync(fd)\n            finally:",
+                                "                raise OSError('inject-fsync')\n            finally:")
+        self._assert_replaced(original, code, "                os.fsync(fd)\n            finally:")
+        rc, out, _ = self._run_code(code, stdin=self.env.new)
+        data = self._json(out)
+        self.assertEqual(data["reason"], "WRITE_FAIL")
+        self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
+        self.assertFalse(os.path.exists(self.env.restart_log))
+
     def test_os_replace_failure(self):
-        code = self._render().replace(
+        original = self._render()
+        code = original.replace(
             "os.replace(tmp_name, os.path.basename(TARGET), src_dir_fd=dirfd, dst_dir_fd=dirfd)",
             "raise OSError('inject-replace')")
+        self._assert_replaced(original, code,
+                              "os.replace(tmp_name, os.path.basename(TARGET), src_dir_fd=dirfd, dst_dir_fd=dirfd)")
         rc, out, _ = self._run_code(code, stdin=self.env.new)
-        data = json.loads(out.decode().strip().splitlines()[-1])
+        data = self._json(out)
         self.assertEqual(data["reason"], "WRITE_FAIL")
         self.assertEqual(open(self.env.target, "rb").read(), self.env.old)
         self.assertFalse(os.path.exists(self.env.restart_log))
 
     def test_dirfsync_failure_after_replace(self):
-        code = self._render().replace(
+        original = self._render()
+        code = original.replace(
             "os.replace(tmp_name, os.path.basename(TARGET), src_dir_fd=dirfd, dst_dir_fd=dirfd)\n            os.fsync(dirfd)",
             "os.replace(tmp_name, os.path.basename(TARGET), src_dir_fd=dirfd, dst_dir_fd=dirfd)\n            raise OSError('inject-dirsync')")
+        self._assert_replaced(original, code, "os.fsync(dirfd)")
         rc, out, _ = self._run_code(code, stdin=self.env.new)
-        data = json.loads(out.decode().strip().splitlines()[-1])
+        data = self._json(out)
         self.assertEqual(data["reason"], "WRITE_FAIL")
-        # replace 已发生：文件为新值，但明确报告失败、不重启
         self.assertEqual(open(self.env.target, "rb").read(), self.env.new)
         self.assertFalse(os.path.exists(self.env.restart_log))
 
     def test_replace_recheck_toctou(self):
-        code = self._render().replace(
-            "pre, pst = read_nofollow(TARGET)",
-            "open(TARGET,'wb').write(b'tampered');\n            pre, pst = read_nofollow(TARGET)")
+        original = self._render()
+        needle = "pre_hash, pst = hash_nofollow(TARGET, tuple(TARGET_OWNER), TARGET_MODE)"
+        code = original.replace(
+            needle,
+            "open(TARGET,'wb').write(b'tampered');\n            " + needle)
+        self._assert_replaced(original, code, needle)
         rc, out, _ = self._run_code(code, stdin=self.env.new)
-        data = json.loads(out.decode().strip().splitlines()[-1])
+        data = self._json(out)
         self.assertEqual(data["reason"], "REPLACE_RECHECK")
         self.assertEqual(open(self.env.target, "rb").read(), b"tampered")
         self.assertFalse(os.path.exists(self.env.restart_log))
+
 
 
 # ---------------------------------------------------------------------------
@@ -746,7 +1272,8 @@ def noop_lock():
         rot._ensure_state_root()
         yield
     with mock.patch.object(rot, "local_lock", _lock), \
-         mock.patch.object(rot, "read_remote_active", return_value=None):
+         mock.patch.object(rot, "read_remote_active", return_value=None), \
+         mock.patch.object(rot, "read_remote_active_initialized", return_value=None):
         yield
 
 
@@ -786,19 +1313,22 @@ class TxnSchemaTests(OfflineTestCase):
             rot.validate_txn(txn)
 
     def test_cross_role_staging_secrets_rejected(self):
-        txn, _, ob, nb = full_txn()
+        # 合法长度值，确保不是被 secret 格式先挡，而是真正走到 digest 角色比较
+        long_a, long_b, long_c, long_d = "A" * 20, "B" * 20, "C" * 20, "D" * 20
+        txn, _, ob, nb = full_txn(secrets=(long_a, long_b, long_c, long_d))
         refs = txn["staging"]
+        table = {
+            refs["old_viewer"]: long_a, refs["old_upload"]: long_a,  # 串角色：upload 用 viewer 值
+            refs["new_viewer"]: long_c, refs["new_upload"]: long_d,
+        }
 
         def fake_get(service, account):
-            table = {
-                refs["old_viewer"]: "OV", refs["old_upload"]: "OV",  # 串角色：upload 用 viewer 值
-                refs["new_viewer"]: "NV", refs["new_upload"]: "NU",
-            }
             return table[service]
 
         with mock.patch.object(dpl, "keychain_get", side_effect=fake_get):
-            with self.assertRaises(rot.RotateError):
+            with self.assertRaises(rot.RotateError) as cm:
                 rot.assert_staging_matches(txn)
+        self.assertIn("摘要", str(cm.exception))
 
     def test_target_mutation_rejected(self):
         txn, _, _, _ = full_txn()
@@ -834,42 +1364,62 @@ class OrphanRecordTests(OfflineTestCase):
 
 
 class ForwardPathTests(OfflineTestCase):
-    def _patch_resume_common(self, txn, secrets, kind, *, tls_exc=False, formal=(None, None)):
+    def _patch_resume(self, txn, secrets, target_hash, *, tls_exc=False, formal=None):
+        if formal is None:
+            formal = (secrets[0], secrets[1])
         stack = contextlib.ExitStack()
         add = stack.enter_context
         add(mock.patch.object(rot, "_read_txn", return_value=txn))
         add(mock.patch.object(rot, "validate_txn", return_value=("ob", "nb")))
         add(mock.patch.object(rot, "assert_staging_matches", return_value=secrets))
         add(mock.patch.object(rot, "formal_pair", return_value=formal))
-        add(mock.patch.object(rot, "read_remote_active", return_value=None))
-        add(mock.patch.object(rot, "_current_cred_sha", return_value=kind))
-        add(mock.patch.object(rot, "reconfirm_identity"))
+        add(mock.patch.object(rot, "remote_observe", return_value={
+            "ok": True, "runtime": "running", "targetHash": target_hash, "active": None}))
+        add(mock.patch.object(rot, "_observe_expect", return_value={}))
         add(mock.patch.object(rot, "_write_txn"))
         add(mock.patch.object(rot, "remote_prepare_dir"))
         add(mock.patch.object(rot, "_apply_to_new"))
         add(mock.patch.object(rot, "_verify_against_bytes"))
-        if tls_exc:
-            add(mock.patch.object(rot, "wait_tls_matrix", side_effect=rot.RotateError("TLS 矩阵失败")))
-        else:
-            add(mock.patch.object(rot, "wait_tls_matrix"))
-        add(mock.patch.object(rot, "reconfirm_baseline"))
+        # 不整体 mock reconfirm_identity/baseline：mock 底层 inspect/hash/nginx，真实跑身份校验
+        add(mock.patch.object(rot, "container_identity",
+                              return_value=(txn["containerId"], txn["containerConfigHash"])))
+        add(mock.patch.object(rot, "remote_stat_hash", return_value={
+            "hash": txn["snapshotHash"], "uid": txn["snapshotOwner"][0],
+            "gid": txn["snapshotOwner"][1], "mode": txn["snapshotMode"]}))
+        add(mock.patch.object(rot, "remote_required_hash", return_value=txn["nginxVhostHash"]))
+        add(mock.patch.object(rot, "verify_approved_nginx_baseline",
+                              return_value=txn["nginxBaseline"]))
+        add(mock.patch.object(dpl, "container_state_ok", return_value=True))
         add(mock.patch.object(rot, "keychain_update_formal"))
         add(mock.patch.object(dpl, "keychain_get",
-                              side_effect=lambda service, account: secrets[2] if account == dpl.VIEWER_ACCOUNT else secrets[3]))
-        add(mock.patch.object(rot, "_remote_new_matches", return_value=True))
-        add(mock.patch.object(rot, "remote_clear_active", return_value={"cleared": True}))
+                              side_effect=lambda service, account: secrets[2]
+                              if account == dpl.VIEWER_ACCOUNT else secrets[3]))
+        add(mock.patch.object(rot, "remote_clear_active", return_value={"cleared": "deleted"}))
+        if tls_exc:
+            add(mock.patch.object(rot, "wait_tls_matrix",
+                                  side_effect=rot.RotateError("TLS 矩阵失败")))
+        else:
+            add(mock.patch.object(rot, "wait_tls_matrix"))
         return stack
 
     def test_resume_old_tls_fail_zero_formal_write(self):
         txn, secrets, ob, nb = full_txn()
         txn["phase"] = "prepared"
+        events = []
+
+        def tls_fail(*a, **k):
+            events.append("tls")
+            raise rot.RotateError("TLS 矩阵失败")
+
         with temp_state(), noop_lock():
-            stack = self._patch_resume_common(txn, secrets, txn["oldHash"], tls_exc=True)
+            stack = self._patch_resume(txn, secrets, txn["oldHash"])
             with stack:
-                keychain_update = mock.patch.object(rot, "keychain_update_formal")
-                with keychain_update as kc:
+                with mock.patch.object(rot, "wait_tls_matrix", side_effect=tls_fail), \
+                     mock.patch.object(rot, "keychain_update_formal") as kc:
                     with self.assertRaises(rot.RotateError):
                         rot.cmd_resume(mock.Mock(transaction=txn["transaction"]))
+                # 必须真的走到 TLS 且 TLS 失败；否则这里是假阳性
+                self.assertEqual(events, ["tls"])
                 kc.assert_not_called()
         self.assertEqual(txn["phase"], "failed")
 
@@ -878,21 +1428,25 @@ class ForwardPathTests(OfflineTestCase):
         txn["phase"] = "prepared"
         events = []
         with temp_state(), noop_lock():
-            stack = self._patch_resume_common(txn, secrets, txn["oldHash"],
-                                              formal=(secrets[0], secrets[1]))
+            stack = self._patch_resume(txn, secrets, txn["oldHash"],
+                                       formal=(secrets[0], secrets[1]))
             with stack:
-                with mock.patch.object(rot, "_apply_to_new", side_effect=lambda *a, **k: events.append("apply")), \
-                     mock.patch.object(rot, "wait_tls_matrix", side_effect=lambda *a, **k: events.append("tls")), \
-                     mock.patch.object(rot, "keychain_update_formal", side_effect=lambda *a, **k: events.append("formal")):
+                with mock.patch.object(rot, "_apply_to_new",
+                                       side_effect=lambda *a, **k: events.append("apply")), \
+                     mock.patch.object(rot, "wait_tls_matrix",
+                                       side_effect=lambda *a, **k: events.append("tls")), \
+                     mock.patch.object(rot, "keychain_update_formal",
+                                       side_effect=lambda *a, **k: events.append("formal")):
                     rc = rot.cmd_resume(mock.Mock(transaction=txn["transaction"]))
         self.assertEqual(rc, 0)
         self.assertLess(events.index("apply"), events.index("tls"))
         self.assertLess(events.index("tls"), events.index("formal"))
 
-    def test_commit_checks_remote_new_before_formal(self):
+    def test_commit_observe_expect_mismatch_blocks_formal(self):
         txn, secrets, ob, nb = full_txn()
         with temp_state(), noop_lock():
-            with mock.patch.object(rot, "_remote_new_matches", return_value=False), \
+            with mock.patch.object(rot, "remote_observe", return_value={
+                    "ok": True, "runtime": "running", "targetHash": "0" * 64, "active": None}), \
                  mock.patch.object(rot, "keychain_update_formal") as kc:
                 with self.assertRaises(rot.RotateError):
                     rot._commit_formal(txn, secrets, ob, nb)
@@ -908,45 +1462,75 @@ class ForwardPathTests(OfflineTestCase):
             if calls["n"] == 2:
                 raise rot.RotateError("second failed")
 
-        with mock.patch.object(rot, "_remote_new_matches", return_value=True), \
-             mock.patch.object(rot, "keychain_update_formal", side_effect=upd), \
-             mock.patch.object(dpl, "keychain_get", side_effect=lambda *a: secrets[2]), \
-             mock.patch.object(rot, "reconfirm_identity"):
-            with self.assertRaises(rot.RotateError):
-                rot._commit_formal(txn, secrets, ob, nb)
+        with temp_state(), noop_lock():
+            with mock.patch.object(rot, "remote_observe", return_value={
+                    "ok": True, "runtime": "running", "targetHash": txn["newHash"], "active": None}), \
+                 mock.patch.object(rot, "_observe_expect", return_value={}), \
+                 mock.patch.object(rot, "_write_txn"), \
+                 mock.patch.object(rot, "keychain_update_formal", side_effect=upd), \
+                 mock.patch.object(dpl, "keychain_get",
+                                   side_effect=lambda service, account: secrets[2]
+                                   if account == dpl.VIEWER_ACCOUNT else secrets[3]):
+                with self.assertRaises(rot.RotateError):
+                    rot._commit_formal(txn, secrets, ob, nb)
+        self.assertEqual(calls["n"], 2)
         self.assertNotEqual(txn["phase"], "complete")
 
 
 class ResumeStateTests(OfflineTestCase):
-    def _resume_new(self, *, state, full_ok, stale, formal=None, secrets=None):
+    def _resume_new(self, *, state, full_ok, stale, target_hash=None, secrets=None, active=None,
+                    formal=None, snapshot_hash=None, vhost_hash=None):
         txn, sec, ob, nb = full_txn()
         txn["phase"] = "applied"
         secrets = secrets or sec
+        formal = formal if formal is not None else (secrets[0], secrets[1])
+        target_hash = target_hash if target_hash is not None else txn["newHash"]
+        state_box = {"full_ok": full_ok}
         events = []
+
+        def do_restart(_t, gate, expected_hash, runtime):
+            events.append(("restart", gate, runtime))
+            self.assertEqual(expected_hash, txn["newHash"])
+            state_box["full_ok"] = True  # 重启后容器恢复 running/allowlist
+
+        def stat(path, **kw):
+            return {"hash": snapshot_hash or txn["snapshotHash"],
+                    "uid": txn["snapshotOwner"][0], "gid": txn["snapshotOwner"][1],
+                    "mode": txn["snapshotMode"]}
+
         with temp_state(), noop_lock():
             stack = contextlib.ExitStack()
             stack.enter_context(mock.patch.object(rot, "_read_txn", return_value=txn))
             stack.enter_context(mock.patch.object(rot, "validate_txn", return_value=(ob, nb)))
             stack.enter_context(mock.patch.object(rot, "assert_staging_matches", return_value=secrets))
-            stack.enter_context(mock.patch.object(rot, "formal_pair", return_value=(secrets[0], secrets[1])))
-            stack.enter_context(mock.patch.object(rot, "read_remote_active", return_value=None))
-            stack.enter_context(mock.patch.object(rot, "_current_cred_sha", return_value=txn["newHash"]))
+            stack.enter_context(mock.patch.object(rot, "formal_pair", return_value=formal))
+            stack.enter_context(mock.patch.object(rot, "remote_observe", return_value={
+                "ok": True, "runtime": state, "targetHash": target_hash, "active": active}))
+            stack.enter_context(mock.patch.object(rot, "_observe_expect", return_value={}))
             stack.enter_context(mock.patch.object(rot, "_write_txn"))
-            stack.enter_context(mock.patch.object(rot, "reconfirm_identity"))
+            # 真实跑 reconfirm_identity/baseline：只 mock 底层 inspect/hash/nginx
             stack.enter_context(mock.patch.object(
-                rot, "_restart_once",
-                side_effect=lambda *a, **k: events.append(("restart", a[1]))))
+                rot, "container_identity",
+                return_value=(txn["containerId"], txn["containerConfigHash"])))
+            stack.enter_context(mock.patch.object(rot, "remote_stat_hash", side_effect=stat))
+            stack.enter_context(mock.patch.object(
+                rot, "remote_required_hash", return_value=vhost_hash or txn["nginxVhostHash"]))
+            stack.enter_context(mock.patch.object(
+                rot, "verify_approved_nginx_baseline", return_value=txn["nginxBaseline"]))
+            stack.enter_context(mock.patch.object(rot, "_restart_once", side_effect=do_restart))
             stack.enter_context(mock.patch.object(rot, "remote_prepare_dir"))
-            stack.enter_context(mock.patch.object(rot, "wait_tls_matrix"))
-            stack.enter_context(mock.patch.object(rot, "reconfirm_baseline"))
-            stack.enter_context(mock.patch.object(rot, "keychain_update_formal"))
+            stack.enter_context(mock.patch.object(
+                rot, "wait_tls_matrix", side_effect=lambda *a: events.append("tls")))
+            stack.enter_context(mock.patch.object(
+                rot, "keychain_update_formal", side_effect=lambda *a: events.append("formal")))
             stack.enter_context(mock.patch.object(
                 dpl, "keychain_get",
-                side_effect=lambda service, account: secrets[2] if account == dpl.VIEWER_ACCOUNT else secrets[3]))
-            stack.enter_context(mock.patch.object(rot, "_remote_new_matches", return_value=True))
-            stack.enter_context(mock.patch.object(rot, "remote_clear_active", return_value={"cleared": True}))
-            stack.enter_context(mock.patch.object(dpl, "container_state_ok", return_value=full_ok))
-            stack.enter_context(mock.patch.object(rot, "container_runtime_state", return_value=state))
+                side_effect=lambda service, account: secrets[2]
+                if account == dpl.VIEWER_ACCOUNT else secrets[3]))
+            stack.enter_context(mock.patch.object(rot, "remote_clear_active",
+                                                  return_value={"cleared": "deleted"}))
+            stack.enter_context(mock.patch.object(
+                dpl, "container_state_ok", side_effect=lambda: state_box["full_ok"]))
             stack.enter_context(mock.patch.object(rot, "server_serves_old", return_value=stale))
             with stack:
                 try:
@@ -958,38 +1542,77 @@ class ResumeStateTests(OfflineTestCase):
     def test_running_with_stale_evidence_restarts_once(self):
         txn, rc, events = self._resume_new(state="running", full_ok=True, stale=True)
         self.assertEqual(rc, 0)
-        self.assertEqual([e[1] for e in events], ["stale"])
+        self.assertEqual([e for e in events if isinstance(e, tuple)],
+                         [("restart", "stale", "running")])
 
     def test_running_without_evidence_does_not_restart(self):
         txn, rc, events = self._resume_new(state="running", full_ok=True, stale=False)
         self.assertEqual(rc, 0)
-        self.assertEqual(events, [])
+        self.assertEqual([e for e in events if isinstance(e, tuple)], [])
 
-    def test_exited_with_identity_restarts_gate_exited(self):
+    def test_running_mixed_formal_state_commits(self):
+        # T921/T931：正式 Keychain 处于混合态（viewer new / upload old）也必须可继续提交
+        txn, sec, ob, nb = full_txn()
+        txn, rc, events = self._resume_new(state="running", full_ok=True, stale=False,
+                                           formal=(sec[2], sec[1]))
+        self.assertEqual(rc, 0)
+        self.assertEqual([e for e in events if isinstance(e, tuple)], [])
+        self.assertEqual(events.count("formal"), 2)
+        self.assertEqual(txn["phase"], "complete")
+
+    def test_exited_with_identity_restarts_once_then_tls_then_formal(self):
+        # S1889 回归：容器 stopped(exited) 时 resume 必须可达，exited 重启一次 -> TLS -> formal
         txn, rc, events = self._resume_new(state="exited", full_ok=False, stale=False)
         self.assertEqual(rc, 0)
-        self.assertEqual([e[1] for e in events], ["exited"])
+        self.assertEqual([e for e in events if isinstance(e, tuple)],
+                         [("restart", "exited", "exited")])
+        self.assertEqual(events.count("tls"), 1)
+        self.assertEqual(events.count("formal"), 2)
+        self.assertLess(events.index(("restart", "exited", "exited")), events.index("tls"))
+        self.assertLess(events.index("tls"), events.index("formal"))
+        self.assertEqual(txn["phase"], "complete")
+
+    def test_identity_vhost_drift_zero_restart_zero_formal(self):
+        txn, rc, events = self._resume_new(state="running", full_ok=True, stale=True,
+                                           vhost_hash="a" * 64)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
+        self.assertEqual(txn["phase"], "failed")
+
+    def test_identity_snapshot_drift_zero_restart_zero_formal(self):
+        txn, rc, events = self._resume_new(state="exited", full_ok=False, stale=False,
+                                           snapshot_hash="b" * 64)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
+        self.assertEqual(txn["phase"], "failed")
 
     def test_unknown_state_no_restart(self):
-        txn, _, _ = self._resume_new(state="unknown", full_ok=False, stale=False)
+        txn, rc, events = self._resume_new(state="unknown", full_ok=False, stale=False)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
+        self.assertEqual(txn["phase"], "failed")
+
+    def test_paused_state_no_restart(self):
+        txn, rc, events = self._resume_new(state="paused", full_ok=False, stale=False)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
         self.assertEqual(txn["phase"], "failed")
 
     def test_third_state_stops(self):
-        txn, sec, ob, nb = full_txn()
-        txn["phase"] = "applied"
-        with temp_state(), noop_lock():
-            with mock.patch.object(rot, "_read_txn", return_value=txn), \
-                 mock.patch.object(rot, "validate_txn", return_value=(ob, nb)), \
-                 mock.patch.object(rot, "assert_staging_matches", return_value=sec), \
-                 mock.patch.object(rot, "formal_pair", return_value=(sec[0], sec[1])), \
-                 mock.patch.object(rot, "read_remote_active", return_value=None), \
-                 mock.patch.object(rot, "_current_cred_sha", return_value="9" * 64), \
-                 mock.patch.object(rot, "_write_txn"):
-                with self.assertRaises(rot.RotateError):
-                    rot.cmd_resume(mock.Mock(transaction=txn["transaction"]))
+        txn, rc, events = self._resume_new(state="running", full_ok=True, stale=False,
+                                           target_hash="9" * 64)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
         self.assertEqual(txn["phase"], "failed")
 
     def test_active_mismatch_stops(self):
+        txn, rc, events = self._resume_new(state="running", full_ok=True, stale=False,
+                                           active="b" * 32)
+        self.assertIsNone(rc)
+        self.assertEqual(events, [])
+
+    def test_observe_failure_stops_zero_formal(self):
+        # 合成“另一进程持锁/观察失败”：resume 必须在 formal 前停止
         txn, sec, ob, nb = full_txn()
         txn["phase"] = "applied"
         with temp_state(), noop_lock():
@@ -997,12 +1620,57 @@ class ResumeStateTests(OfflineTestCase):
                  mock.patch.object(rot, "validate_txn", return_value=(ob, nb)), \
                  mock.patch.object(rot, "assert_staging_matches", return_value=sec), \
                  mock.patch.object(rot, "formal_pair", return_value=(sec[0], sec[1])), \
-                 mock.patch.object(rot, "read_remote_active", return_value="b" * 32):
+                 mock.patch.object(rot, "remote_observe",
+                                   side_effect=rot.RotateError("LOCK_BUSY")), \
+                 mock.patch.object(rot, "keychain_update_formal") as kc, \
+                 mock.patch.object(rot, "_write_txn"):
                 with self.assertRaises(rot.RotateError):
                     rot.cmd_resume(mock.Mock(transaction=txn["transaction"]))
+        kc.assert_not_called()
+        self.assertEqual(txn["phase"], "failed")
 
 
 class RollbackTests(OfflineTestCase):
+    def _patch_rb(self, txn, sec, ob, nb, *, target_hash, runtime="running",
+                  formal=None, restart_events=None, vhost_hash=None, snapshot_hash=None):
+        if formal is None:
+            formal = (sec[0], sec[1])
+        if restart_events is None:
+            restart_events = []
+        stack = contextlib.ExitStack()
+        add = stack.enter_context
+        add(mock.patch.object(rot, "_read_txn", return_value=txn))
+        add(mock.patch.object(rot, "validate_txn", return_value=(ob, nb)))
+        add(mock.patch.object(rot, "assert_staging_matches", return_value=sec))
+        add(mock.patch.object(rot, "formal_pair", return_value=formal))
+        add(mock.patch.object(rot, "remote_observe", return_value={
+            "ok": True, "runtime": runtime, "targetHash": target_hash, "active": None}))
+        add(mock.patch.object(rot, "_observe_expect", return_value={}))
+        add(mock.patch.object(rot, "remote_prepare_dir"))
+        # 真实跑 reconfirm_identity/baseline：只 mock 底层 inspect/hash/nginx
+        add(mock.patch.object(rot, "container_identity",
+                              return_value=(txn["containerId"], txn["containerConfigHash"])))
+        add(mock.patch.object(rot, "remote_stat_hash", return_value={
+            "hash": snapshot_hash or txn["snapshotHash"],
+            "uid": txn["snapshotOwner"][0], "gid": txn["snapshotOwner"][1],
+            "mode": txn["snapshotMode"]}))
+        add(mock.patch.object(rot, "remote_required_hash",
+                              return_value=vhost_hash or txn["nginxVhostHash"]))
+        add(mock.patch.object(rot, "verify_approved_nginx_baseline",
+                              return_value=txn["nginxBaseline"]))
+        add(mock.patch.object(dpl, "container_state_ok", return_value=True))
+        add(mock.patch.object(rot, "wait_tls_matrix"))
+        add(mock.patch.object(rot, "keychain_update_formal"))
+        add(mock.patch.object(dpl, "keychain_get",
+                              side_effect=lambda service, account: sec[0]
+                              if account == dpl.VIEWER_ACCOUNT else sec[1]))
+        add(mock.patch.object(rot, "remote_clear_active", return_value={"cleared": "deleted"}))
+        add(mock.patch.object(rot, "_write_txn"))
+        add(mock.patch.object(
+            rot, "_restart_once",
+            side_effect=lambda t, gate, h, rt: restart_events.append((gate, h, rt))))
+        return stack
+
     def test_formal_foreign_zero_server_write(self):
         txn, sec, ob, nb = full_txn()
         txn["phase"] = "complete"
@@ -1023,40 +1691,137 @@ class RollbackTests(OfflineTestCase):
         txn["phase"] = "complete"
         recorded = {}
         with temp_state(), noop_lock():
-            with mock.patch.object(rot, "_read_txn", return_value=txn), \
-                 mock.patch.object(rot, "validate_txn", return_value=(ob, nb)), \
-                 mock.patch.object(rot, "assert_staging_matches", return_value=sec), \
-                 mock.patch.object(rot, "formal_pair", return_value=(sec[0], sec[1])), \
-                 mock.patch.object(rot, "read_remote_active", return_value=None), \
-                 mock.patch.object(rot, "_current_cred_sha", return_value=txn["newHash"]), \
-                 mock.patch.object(rot, "reconfirm_identity"), \
-                 mock.patch.object(rot, "run_remote_apply", side_effect=lambda **k: recorded.update(k) or {"ok": True, "changed": True}), \
-                 mock.patch.object(rot, "remote_prepare_dir"), \
-                 mock.patch.object(rot, "reconfirm_baseline"), \
-                 mock.patch.object(rot, "wait_tls_matrix") as wtm, \
-                 mock.patch.object(rot, "keychain_update_formal"), \
-                 mock.patch.object(dpl, "keychain_get", side_effect=lambda service, account: sec[0] if account == dpl.VIEWER_ACCOUNT else sec[1]), \
-                 mock.patch.object(rot, "remote_clear_active", return_value={"cleared": True}), \
-                 mock.patch.object(rot, "_write_txn"):
-                rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["newHash"])
+            with stack:
+                with mock.patch.object(
+                        rot, "run_remote_apply",
+                        side_effect=lambda **k: recorded.update(k) or {"ok": True, "changed": True}), \
+                     mock.patch.object(rot, "wait_tls_matrix") as wtm:
+                    rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
         self.assertEqual(rc, 0)
         self.assertEqual(recorded["expected_old"], txn["newHash"])
         self.assertEqual(recorded["expected_new"], txn["oldHash"])
         self.assertEqual(recorded["payload"], ob)
+        self.assertEqual(recorded["expected_runtime"], "running")
         self.assertEqual(wtm.call_args.args[0], "old")
 
     def test_rollback_third_state_stops(self):
         txn, sec, ob, nb = full_txn()
         txn["phase"] = "complete"
         with temp_state(), noop_lock():
-            with mock.patch.object(rot, "_read_txn", return_value=txn), \
-                 mock.patch.object(rot, "validate_txn", return_value=(ob, nb)), \
-                 mock.patch.object(rot, "assert_staging_matches", return_value=sec), \
-                 mock.patch.object(rot, "formal_pair", return_value=(sec[0], sec[1])), \
-                 mock.patch.object(rot, "read_remote_active", return_value=None), \
-                 mock.patch.object(rot, "_current_cred_sha", return_value="9" * 64):
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash="9" * 64)
+            with stack:
                 with self.assertRaises(rot.RotateError):
                     rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(txn["phase"], "failed")
+
+    def test_rollback_vhost_drift_zero_server_write(self):
+        # 回滚前 reconfirm_identity 必须在任何 apply/restart/formal 前拦截 vhost 漂移
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["newHash"],
+                                   vhost_hash="a" * 64)
+            with stack:
+                with mock.patch.object(rot, "run_remote_apply") as rra, \
+                     mock.patch.object(rot, "keychain_update_formal") as kc, \
+                     mock.patch.object(rot, "_restart_once") as rs:
+                    with self.assertRaises(rot.RotateError):
+                        rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        rra.assert_not_called()
+        rs.assert_not_called()
+        kc.assert_not_called()
+        self.assertEqual(txn["phase"], "failed")
+
+    def test_rollback_snapshot_drift_zero_server_write(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["oldHash"],
+                                   snapshot_hash="b" * 64)
+            with stack:
+                with mock.patch.object(rot, "run_remote_apply") as rra, \
+                     mock.patch.object(rot, "keychain_update_formal") as kc, \
+                     mock.patch.object(rot, "_restart_once") as rs:
+                    with self.assertRaises(rot.RotateError):
+                        rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        rra.assert_not_called()
+        rs.assert_not_called()
+        kc.assert_not_called()
+
+    def test_rollback_disk_old_process_new_mixed_formal(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        events = []
+        with temp_state(), noop_lock():
+            # 磁盘 old + 进程 new（混合正式：viewer old / upload new）
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["oldHash"],
+                                   formal=(sec[0], sec[3]), restart_events=events)
+            with stack:
+                rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(events, [("stale", txn["oldHash"], "running")])
+        self.assertEqual(txn["phase"], "rolled_back")
+
+    def test_rollback_disk_old_process_old_mixed_formal(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        events = []
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["oldHash"],
+                                   formal=(sec[2], sec[1]), restart_events=events)
+            with stack:
+                rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(events, [("stale", txn["oldHash"], "running")])
+
+    def test_rollback_disk_old_exited_uses_exited_gate(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        events = []
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["oldHash"],
+                                   runtime="exited", restart_events=events)
+            with stack:
+                rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(events, [("exited", txn["oldHash"], "exited")])
+
+    def test_rollback_disk_old_unknown_runtime_stops(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        events = []
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["oldHash"],
+                                   runtime="unknown", restart_events=events)
+            with stack:
+                with self.assertRaises(rot.RotateError):
+                    rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(events, [])
+        self.assertEqual(txn["phase"], "failed")
+
+    def test_rollback_replace_interrupted_retry(self):
+        txn, sec, ob, nb = full_txn()
+        txn["phase"] = "complete"
+        calls = {"n": 0}
+
+        def ra(**k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise rot.RotateError("远端操作未成功（WRITE_FAIL）；保留恢复材料，不自动回滚")
+            return {"ok": True, "changed": True}
+
+        with temp_state(), noop_lock():
+            stack = self._patch_rb(txn, sec, ob, nb, target_hash=txn["newHash"])
+            with stack:
+                with mock.patch.object(rot, "run_remote_apply", side_effect=ra):
+                    with self.assertRaises(rot.RotateError):
+                        rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+                    self.assertEqual(txn["phase"], "failed")
+                    rc = rot.cmd_rollback(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(txn["phase"], "rolled_back")
 
 
 class RotatePreflightTests(OfflineTestCase):
@@ -1119,6 +1884,60 @@ class RotatePreflightTests(OfflineTestCase):
         self.assertEqual(events, ["online"])
         self.assertIn("baseline", err or "")
 
+    def _no_txn_dirs(self, root):
+        return [n for n in os.listdir(root) if rot.TXID_RE.match(n)]
+
+    def test_rotate_refuses_persistent_remote_active_before_mkdir(self):
+        with temp_state() as root, noop_lock():
+            with mock.patch.object(rot, "read_remote_active_initialized",
+                                   return_value="b" * 32):
+                with self.assertRaises(rot.RotateError):
+                    rot.cmd_rotate(None)
+            self.assertEqual(self._no_txn_dirs(root), [])
+
+    def test_precheck_read_error_leaves_no_txn_dir(self):
+        # B5：远端读预检失败必须发生在 mkdir 之前，不得残留空事务目录
+        with temp_state() as root, noop_lock():
+            with mock.patch.object(rot, "read_remote_credentials",
+                                   side_effect=rot.RotateError("远端读取失败")):
+                with self.assertRaises(rot.RotateError):
+                    rot.cmd_rotate(None)
+            self.assertEqual(self._no_txn_dirs(root), [])
+
+    def test_precheck_missing_credentials_leaves_no_txn_dir(self):
+        with temp_state() as root, noop_lock():
+            with mock.patch.object(rot, "read_remote_credentials", return_value=None):
+                with self.assertRaises(rot.RotateError):
+                    rot.cmd_rotate(None)
+            self.assertEqual(self._no_txn_dirs(root), [])
+
+    def test_precheck_old_secret_mismatch_leaves_no_txn_dir(self):
+        # 本地正式明文与远端摘要不符：同样在 mkdir 前失败
+        with temp_state() as root, noop_lock():
+            with mock.patch.object(rot, "read_remote_credentials",
+                                   return_value=(creds_bytes("OV" * 8, "OU" * 8), 1000, 1000, 0o600)), \
+                 mock.patch.object(dpl, "keychain_get",
+                                   side_effect=lambda *a: "WRONGVIEWER" + "X" * 8), \
+                 mock.patch.object(rot, "_verify_against_bytes",
+                                   side_effect=rot.RotateError("摘要不符")):
+                with self.assertRaises(rot.RotateError):
+                    rot.cmd_rotate(None)
+            self.assertEqual(self._no_txn_dirs(root), [])
+
+    def test_cleanup_unconfirmed_nonzero_no_ok_line(self):
+        # B5：凭证提交后 cleanup 未确认必须非零且不得打印 OK
+        txn, _, _, _ = full_txn()
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with mock.patch.object(rot, "_try_clear_active", return_value=False), \
+             mock.patch.object(rot, "_write_txn"):
+            with redirect_stdout(buf):
+                with self.assertRaises(rot.RotateError) as cm:
+                    rot._finish_cleanup_or_fail(txn, "ROTATE_OK %s" % txn["transaction"])
+        self.assertNotIn("ROTATE_OK", buf.getvalue())
+        self.assertIn("cleanup", str(cm.exception))
+
 
 class SecretLeakTests(OfflineTestCase):
     def test_remote_reason_unknown_not_echoed(self):
@@ -1167,6 +1986,97 @@ class SecretLeakTests(OfflineTestCase):
                     rot.cmd_rotate(None)
         for secret in (old_v, old_u, new_v, new_u):
             self.assertNotIn(secret, raw_written.get("raw", ""))
+
+
+class StrictJsonTests(OfflineTestCase):
+    def _raw(self):
+        return creds_bytes("VALIDVIEWERSECRET1", "VALIDUPLOADSECRET1")
+
+    def test_duplicate_top_level_key_rejected_no_leak(self):
+        d = json.loads(self._raw())
+        raw = (
+            '{"viewer": {"username": "viewer", "digest": "%s", "password": "LEAKSENTINEL"}, '
+            '"viewer": {"username": "viewer", "digest": "%s"}, '
+            '"upload": {"digest": "%s"}}'
+            % (d["viewer"]["digest"], d["viewer"]["digest"], d["upload"]["digest"])
+        ).encode()
+        with self.assertRaises(rot.RotateError) as cm:
+            rot.validate_credentials_bytes(raw)
+        self.assertIn("重复键", str(cm.exception))
+        self.assertNotIn("LEAKSENTINEL", str(cm.exception))
+
+    def test_duplicate_nested_key_rejected_no_leak(self):
+        d = json.loads(self._raw())
+        raw = (
+            '{"viewer": {"username": "viewer", "digest": "%s", '
+            '"password": "LEAKSENTINEL", "password": "LEAKSENTINEL"}, '
+            '"upload": {"digest": "%s"}}'
+            % (d["viewer"]["digest"], d["upload"]["digest"])
+        ).encode()
+        with self.assertRaises(rot.RotateError) as cm:
+            rot.validate_credentials_bytes(raw)
+        self.assertNotIn("LEAKSENTINEL", str(cm.exception))
+
+    def test_normal_material_contains_no_plaintext(self):
+        v, u = "PLAINTEXTV1234567", "PLAINTEXTU1234567"
+        raw = creds_bytes(v, u)
+        self.assertNotIn(v.encode(), raw)
+        self.assertNotIn(u.encode(), raw)
+        decoded = base64.b64decode(base64.b64encode(raw))
+        self.assertNotIn(v.encode(), decoded)
+        self.assertNotIn(u.encode(), decoded)
+
+    def test_cleanup_oserror_secret_not_echoed(self):
+        # B6：clear 抛 OSError 时只记录固定类别，绝不回显底层异常字符串
+        txn, _, _, _ = full_txn()
+        sentinel = "OSERRORLEAKSENTINEL"
+        with mock.patch.object(rot, "remote_clear_active",
+                               side_effect=OSError(sentinel)), \
+             mock.patch.object(rot, "_write_txn"), \
+             mock.patch.object(rot, "log") as lg:
+            active = rot._try_clear_active(txn)
+        self.assertFalse(active)
+        self.assertIs(txn["activeCleared"], False)
+        for call in lg.call_args_list:
+            self.assertNotIn(sentinel, " ".join(str(a) for a in call.args))
+
+
+class LocalLockBusyTests(OfflineTestCase):
+    def test_real_second_process_lock_blocks_resume_zero_formal(self):
+        # B4：另一个真实进程持有本地锁时，resume 必须在任何 remote/formal 动作前停止
+        txn, _, _, _ = full_txn()
+        txn["phase"] = "applied"
+        with temp_state() as root:
+            lock_path = os.path.join(root, ".lock")
+            code = (
+                "import fcntl, os, sys, time\n"
+                "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
+                "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                "sys.stdout.write('ready\\n')\n"
+                "sys.stdout.flush()\n"
+                "time.sleep(30)\n"
+            )
+            proc = subprocess.Popen([sys.executable, "-c", code, lock_path],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                assert proc.stdout is not None and proc.stderr is not None
+                line = proc.stdout.readline()
+                self.assertEqual(line.strip(), b"ready")
+                with mock.patch.object(rot, "_read_txn", return_value=txn), \
+                     mock.patch.object(rot, "remote_observe") as observe, \
+                     mock.patch.object(rot, "keychain_update_formal") as kc:
+                    with self.assertRaises(rot.RotateError) as cm:
+                        rot.cmd_resume(mock.Mock(transaction=txn["transaction"]))
+                self.assertIn("锁忙", str(cm.exception))
+                observe.assert_not_called()
+                kc.assert_not_called()
+            finally:
+                proc.kill()
+                proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
 
 
 class CurlSafetyTests(OfflineTestCase):
@@ -1259,6 +2169,29 @@ class StatusReadOnlyTests(OfflineTestCase):
         wt.assert_not_called()
         lock.assert_not_called()
         self.assertIn('"identityFields": "incomplete"', buf.getvalue())
+
+    def test_status_ssh_error_reports_unknown_not_missing(self):
+        # B5：远端 SSH/读取失败必须报 unknown，绝不误报 missing
+        txn, sec, ob, nb = full_txn()
+        with temp_state() as root:
+            d = os.path.join(root, txn["transaction"])
+            os.makedirs(d, 0o700)
+            with open(os.path.join(d, "txn.json"), "w") as fh:
+                json.dump(txn, fh)
+            os.chmod(os.path.join(d, "txn.json"), 0o600)
+            import io
+            from contextlib import redirect_stdout
+            buf = io.StringIO()
+            with mock.patch.object(rot, "_current_cred_sha",
+                                   side_effect=rot.RotateError("ssh down")), \
+                 mock.patch.object(dpl, "container_state_ok", return_value=True), \
+                 mock.patch.object(dpl, "keychain_exists", return_value=False):
+                with redirect_stdout(buf):
+                    rc = rot.cmd_status(mock.Mock(transaction=txn["transaction"]))
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn('"remote": "unknown"', out)
+        self.assertNotIn('"remote": "missing"', out)
 
 
 class CliContractTests(OfflineTestCase):

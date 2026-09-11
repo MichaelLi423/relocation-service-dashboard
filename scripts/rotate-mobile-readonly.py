@@ -122,8 +122,13 @@ REASON_ENUM = {
     "REPLACE_RECHECK", "WRITE_FAIL", "READBACK_MISMATCH", "TARGET_IDENTITY_AFTER",
     "CID_UNKNOWN", "CID_MISMATCH", "INSPECT_UNKNOWN", "CONFIG_MISMATCH",
     "SNAPSHOT_MISSING", "SNAPSHOT_MISMATCH", "SNAPSHOT_ATTR",
-    "RESTART_FAIL", "DATA_DIR_BAD", "DATA_MARKER_BAD",
+    "RESTART_FAIL", "DATA_DIR_BAD", "DATA_MARKER_BAD", "RUNTIME_MISMATCH",
+    "SAFE_PATH", "SAFE_ROOT", "SAFE_MISSING", "SAFE_OPEN", "SAFE_TYPE",
+    "SAFE_NLINK", "SAFE_OWNER", "SAFE_MODE",
 }
+
+# 远端 safe_open 的受信根：生产为 "/"；测试可注入临时根（macOS /var 为符号链接）。
+REMOTE_ROOT = "/"
 
 
 class RotateError(RuntimeError):
@@ -167,7 +172,8 @@ def _close_all(fds):
 
 
 def _secure_walk(path: str, *, expect_dir: bool, allow_missing: bool = False,
-                 file_mode: int | None = None, exact_mode: bool = False):
+                 file_mode: int | None = None, exact_mode: bool = False,
+                 allow_group_read: bool = False):
     """逐段打开校验：锚点以上的平台前缀按 canonical 路径打开（受信），锚点以下每段
     O_NOFOLLOW 且目录不得 group/world 可写；目标文件须普通、nlink=1、属主当前用户、
     mode 精确/无 group+other 位。符号链接（含悬空）与缺失（除非 allow_missing）一律拒绝。
@@ -202,7 +208,9 @@ def _secure_walk(path: str, *, expect_dir: bool, allow_missing: bool = False,
                 st = os.fstat(fd)
                 if st.st_uid != os.getuid():
                     raise RotateError("本地目录属主不符；拒绝")
-                if stat.S_IMODE(st.st_mode) & 0o077:
+                # allow_group_read：既有父目录可能是 deploy.save_baseline 默认 0755；
+                # 只拒绝 group/other 可写，不强制 0700（仅新增事务目录严格 0700）。
+                if stat.S_IMODE(st.st_mode) & (0o022 if allow_group_read else 0o077):
                     raise RotateError("本地目录权限过宽；拒绝")
                 retained = fd
                 return fd, st
@@ -229,7 +237,7 @@ def _secure_walk(path: str, *, expect_dir: bool, allow_missing: bool = False,
                 mode = stat.S_IMODE(st.st_mode)
                 if exact_mode and mode != file_mode:
                     raise RotateError("本地文件权限不符；拒绝")
-                if mode & 0o077:
+                if not allow_group_read and mode & 0o077:
                     raise RotateError("本地文件权限过宽；拒绝")
                 retained = nfd
                 return nfd, st
@@ -246,7 +254,7 @@ def _secure_walk(path: str, *, expect_dir: bool, allow_missing: bool = False,
             if last and expect_dir:
                 if st.st_uid != os.getuid():
                     raise RotateError("本地目录属主不符；拒绝")
-                if stat.S_IMODE(st.st_mode) & 0o077:
+                if stat.S_IMODE(st.st_mode) & (0o022 if allow_group_read else 0o077):
                     raise RotateError("本地目录权限过宽；拒绝")
                 retained = nfd
                 return nfd, st
@@ -268,9 +276,11 @@ def _secure_walk(path: str, *, expect_dir: bool, allow_missing: bool = False,
 
 
 def _assert_local_safe(path: str, *, expect_dir: bool, allow_missing: bool = False,
-                       file_mode: int | None = None, exact_mode: bool = False) -> None:
+                       file_mode: int | None = None, exact_mode: bool = False,
+                       allow_group_read: bool = False) -> None:
     fd, _st = _secure_walk(path, expect_dir=expect_dir, allow_missing=allow_missing,
-                           file_mode=file_mode, exact_mode=exact_mode)
+                           file_mode=file_mode, exact_mode=exact_mode,
+                           allow_group_read=allow_group_read)
     if fd is not None:
         try:
             os.close(fd)
@@ -285,9 +295,11 @@ def _ensure_state_root():
         parent = os.path.dirname(STATE_ROOT)
         if not os.path.isdir(parent):
             grand = os.path.dirname(parent)
-            _assert_local_safe(grand, expect_dir=True)
+            _assert_local_safe(grand, expect_dir=True, allow_group_read=True)
             os.mkdir(parent, MANAGED_DIR_MODE)
-        _assert_local_safe(parent, expect_dir=True)
+        # 既有父目录可能由 deploy.save_baseline 以默认 0755 创建：只校验属主与无 group/other 写，
+        # 不强制 private，也绝不 chmod/chown 既有目录。
+        _assert_local_safe(parent, expect_dir=True, allow_group_read=True)
         os.mkdir(STATE_ROOT, MANAGED_DIR_MODE)
     _assert_local_safe(STATE_ROOT, expect_dir=True)
     marker_exists = os.path.lexists(STATE_MARKER)
@@ -534,11 +546,36 @@ def secret_matches_digest(secret: str, digest: str) -> bool:
     return candidate == expected
 
 
-def validate_credentials_bytes(raw: bytes) -> dict:
+def _reject_duplicate_keys(pairs):
+    """json object_pairs_hook：任何层级出现重复键一律拒绝（普通 json.loads 会静默取后值，
+    可能用后到的合法 digest 掩盖前一个携带明文 password 的重复对象）。"""
+    seen = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise _DuplicateKey()
+        seen.add(key)
+    return dict(pairs)
+
+
+class _DuplicateKey(ValueError):
+    pass
+
+
+def _strict_json_object(raw: bytes, what: str):
     try:
-        data = json.loads(raw.decode("utf-8", "replace"))
+        text = raw.decode("utf-8")  # 严格 UTF-8：非法字节一律拒绝
+    except UnicodeDecodeError:
+        raise RotateError("%s 含非法 UTF-8 字节；停止" % what) from None
+    try:
+        return json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    except _DuplicateKey:
+        raise RotateError("%s 含重复键；拒绝（可能掩盖明文）" % what) from None
     except ValueError:
-        raise RotateError("远端凭证不是合法 JSON；停止") from None
+        raise RotateError("%s 不是合法 JSON；停止" % what) from None
+
+
+def validate_credentials_bytes(raw: bytes) -> dict:
+    data = _strict_json_object(raw, "远端凭证")
     if not isinstance(data, dict) or set(data.keys()) != {"viewer", "upload"}:
         raise RotateError("远端凭证顶层字段非法（必须恰为 viewer/upload）；停止")
     viewer = data.get("viewer")
@@ -633,8 +670,8 @@ def assert_staging_matches(txn: dict) -> tuple:
     _verify_against_bytes(old_u, old_bytes, "upload", "old")
     _verify_against_bytes(new_v, new_bytes, "viewer", "new")
     _verify_against_bytes(new_u, new_bytes, "upload", "new")
-    if len({old_v, new_v}) != 2 or len({old_u, new_u}) != 2:
-        raise RotateError("新旧凭证重复；拒绝")
+    if len({old_v, old_u, new_v, new_u}) != 4:
+        raise RotateError("新旧凭证存在重复（含 viewer/upload 交叉）；拒绝")
     return old_v, old_u, new_v, new_u
 
 
@@ -645,56 +682,132 @@ def formal_pair():
 
 
 # ---------------------------------------------------------------------------
-# 远端只读原语（无 follow 打开；仅 ENOENT 视为缺失）
+# 远端安全打开原语：从受信根逐段 dir_fd O_DIRECTORY/O_NOFOLLOW（祖先绝不 follow）
 # ---------------------------------------------------------------------------
 
-_REMOTE_READ_B64 = (
-    "import base64, os, stat, sys\n"
-    "path = __PATH__\n"
-    "try:\n"
-    "    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))\n"
-    "except FileNotFoundError:\n"
-    "    print('MISSING'); sys.exit(3)\n"
-    "except OSError:\n"
-    "    print('OPEN_FAIL'); sys.exit(4)\n"
-    "st = os.fstat(fd)\n"
-    "if not stat.S_ISREG(st.st_mode):\n"
-    "    print('NOTREG'); sys.exit(5)\n"
-    "if st.st_nlink != 1:\n"
-    "    print('NLINK'); sys.exit(6)\n"
-    "data = bytearray()\n"
-    "while True:\n"
-    "    b = os.read(fd, 65536)\n"
-    "    if not b:\n"
-    "        break\n"
-    "    data.extend(b)\n"
-    "os.close(fd)\n"
-    "print('%d %d %d %s' % (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), base64.b64encode(bytes(data)).decode()))\n"
+_REMOTE_SAFE = (
+    "import os, stat\n"
+    "class SafePathError(Exception):\n"
+    "    def __init__(self, kind):\n"
+    "        Exception.__init__(self, kind)\n"
+    "        self.kind = kind\n"
+    "\n"
+    "def _safe_walk(ROOT, path, is_dir, missing_ok):\n"
+    "    if not isinstance(path, str) or not path.startswith('/'):\n"
+    "        raise SafePathError('PATH')\n"
+    "    if path != ROOT and not path.startswith(ROOT.rstrip('/') + '/'):\n"
+    "        raise SafePathError('PATH')\n"
+    "    try:\n"
+    "        fd = os.open(ROOT, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0))\n"
+    "    except OSError:\n"
+    "        raise SafePathError('ROOT')\n"
+    "    rel = os.path.relpath(path, ROOT)\n"
+    "    parts = [] if rel == '.' else [p for p in rel.split('/') if p]\n"
+    "    if any(p == '..' for p in parts):\n"
+    "        os.close(fd); raise SafePathError('PATH')\n"
+    "    for i, comp in enumerate(parts):\n"
+    "        last = i == len(parts) - 1\n"
+    "        want_dir = (not last) or is_dir\n"
+    "        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)\n"
+    "        if want_dir:\n"
+    "            flags |= getattr(os, 'O_DIRECTORY', 0)\n"
+    "        try:\n"
+    "            nfd = os.open(comp, flags, dir_fd=fd)\n"
+    "        except FileNotFoundError:\n"
+    "            os.close(fd)\n"
+    "            if missing_ok and last:\n"
+    "                return None, None\n"
+    "            raise SafePathError('MISSING')\n"
+    "        except OSError:\n"
+    "            os.close(fd)\n"
+    "            raise SafePathError('OPEN')\n"
+    "        os.close(fd); fd = nfd\n"
+    "    st = os.fstat(fd)\n"
+    "    if is_dir and not stat.S_ISDIR(st.st_mode):\n"
+    "        os.close(fd); raise SafePathError('TYPE')\n"
+    "    if not is_dir and not stat.S_ISREG(st.st_mode):\n"
+    "        os.close(fd); raise SafePathError('TYPE')\n"
+    "    return fd, st\n"
+    "\n"
+    "def safe_open(ROOT, path, *, is_dir, owner=None, mode=None, exact_mode=True, nlink1=True, missing_ok=False):\n"
+    "    fd, st = _safe_walk(ROOT, path, is_dir, missing_ok)\n"
+    "    if fd is None:\n"
+    "        return None, None\n"
+    "    if (not is_dir) and nlink1 and st.st_nlink != 1:\n"
+    "        os.close(fd); raise SafePathError('NLINK')\n"
+    "    if owner is not None:\n"
+    "        if isinstance(owner, (tuple, list)):\n"
+    "            ok = (st.st_uid, st.st_gid) == tuple(owner)\n"
+    "        else:\n"
+    "            ok = st.st_uid == owner\n"
+    "        if not ok:\n"
+    "            os.close(fd); raise SafePathError('OWNER')\n"
+    "    if mode is not None:\n"
+    "        uma = stat.S_IMODE(st.st_mode)\n"
+    "        if (exact_mode and uma != mode) or ((not exact_mode) and (uma & 0o077)):\n"
+    "            os.close(fd); raise SafePathError('MODE')\n"
+    "    return fd, st\n"
 )
 
-_REMOTE_STAT_HASH = (
-    "import hashlib, os, stat, sys\n"
-    "path = __PATH__\n"
-    "try:\n"
-    "    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))\n"
-    "except FileNotFoundError:\n"
-    "    print('MISSING'); sys.exit(3)\n"
-    "except OSError:\n"
-    "    print('OPEN_FAIL'); sys.exit(4)\n"
-    "st = os.fstat(fd)\n"
-    "if not stat.S_ISREG(st.st_mode):\n"
-    "    print('NOTREG'); sys.exit(5)\n"
-    "if st.st_nlink != 1:\n"
-    "    print('NLINK'); sys.exit(6)\n"
-    "h = hashlib.sha256()\n"
-    "while True:\n"
-    "    b = os.read(fd, 65536)\n"
-    "    if not b:\n"
-    "        break\n"
-    "    h.update(b)\n"
-    "os.close(fd)\n"
-    "print('%s %d %d %d' % (h.hexdigest(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)))\n"
-)
+
+def _owner_repr(owner):
+    if owner is None:
+        return "None"
+    if isinstance(owner, (tuple, list)):
+        return repr(tuple(owner))
+    return repr(owner)
+
+
+def render_remote_read(path: str, *, owner=None, mode=None, root: str = "/") -> str:
+    """渲染只读读取片段（mode 一律十进制输出，与消费者 int(...,10) 一致）。"""
+    return (_REMOTE_SAFE
+            + "import base64, sys\n"
+            "ROOT = __ROOT__\n"
+            "PATH = __PATH__\n"
+            "OWNER = __OWNER__\n"
+            "MODE = __MODE__\n"
+            "try:\n"
+            "    fd, st = safe_open(ROOT, PATH, is_dir=False, owner=OWNER, mode=MODE, missing_ok=True)\n"
+            "except SafePathError as e:\n"
+            "    print('SAFE_' + e.kind); sys.exit(4)\n"
+            "if fd is None:\n"
+            "    print('MISSING'); sys.exit(3)\n"
+            "data = bytearray()\n"
+            "while True:\n"
+            "    b = os.read(fd, 65536)\n"
+            "    if not b:\n"
+            "        break\n"
+            "    data.extend(b)\n"
+            "os.close(fd)\n"
+            "print('%d %d %d %s' % (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), base64.b64encode(bytes(data)).decode()))\n"
+            ).replace("__ROOT__", repr(root)).replace("__PATH__", repr(path)) \
+             .replace("__OWNER__", _owner_repr(owner)).replace("__MODE__", repr(mode))
+
+
+def render_remote_stat(path: str, *, owner=None, mode=None, root: str = "/") -> str:
+    """渲染流式 sha256 + 属性片段（绝不回传正文；mode 十进制输出）。"""
+    return (_REMOTE_SAFE
+            + "import hashlib, sys\n"
+            "ROOT = __ROOT__\n"
+            "PATH = __PATH__\n"
+            "OWNER = __OWNER__\n"
+            "MODE = __MODE__\n"
+            "try:\n"
+            "    fd, st = safe_open(ROOT, PATH, is_dir=False, owner=OWNER, mode=MODE, missing_ok=True)\n"
+            "except SafePathError as e:\n"
+            "    print('SAFE_' + e.kind); sys.exit(4)\n"
+            "if fd is None:\n"
+            "    print('MISSING'); sys.exit(3)\n"
+            "h = hashlib.sha256()\n"
+            "while True:\n"
+            "    b = os.read(fd, 65536)\n"
+            "    if not b:\n"
+            "        break\n"
+            "    h.update(b)\n"
+            "os.close(fd)\n"
+            "print('%s %d %d %d' % (h.hexdigest(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)))\n"
+            ).replace("__ROOT__", repr(root)).replace("__PATH__", repr(path)) \
+             .replace("__OWNER__", _owner_repr(owner)).replace("__MODE__", repr(mode))
 
 
 def _remote_cmd(code: str) -> str:
@@ -702,27 +815,35 @@ def _remote_cmd(code: str) -> str:
     return "python3 -c " + shlex.quote("import base64;exec(base64.b64decode('%s'))" % b64)
 
 
-def remote_read_exact(path: str):
-    """无 follow 读取远端文件，返回 (bytes, uid, gid, mode) 或 None（仅确定缺失）。"""
-    res = deploy.remote_exec(_remote_cmd(_REMOTE_READ_B64.replace("__PATH__", repr(path))), timeout=60)
+def remote_read_exact(path: str, *, owner=None, mode=None, root=None):
+    """无 follow（含祖先）读取远端文件，返回 (bytes, uid, gid, mode) 或 None（仅确定缺失）。"""
+    if root is None:
+        root = REMOTE_ROOT
+    res = deploy.remote_exec(_remote_cmd(render_remote_read(path, owner=owner, mode=mode, root=root)),
+                             timeout=60)
     if res.rc == 3 and res.text().strip() == "MISSING":
         return None
     if res.timed_out or res.rc != 0:
         raise RotateError("远端文件读取失败（非缺失）；停止")
     parts = res.text().strip().split()
+    if len(parts) == 3:
+        parts.append("")  # 空文件 base64 为空串，split 后仅 3 段
     if len(parts) != 4:
         raise RotateError("远端文件属性输出异常；停止")
     try:
-        uid, gid, mode = int(parts[0]), int(parts[1]), int(parts[2], 8)
+        uid, gid, mode = int(parts[0], 10), int(parts[1], 10), int(parts[2], 10)
         data = base64.b64decode(parts[3], validate=True)
     except (ValueError, TypeError):
         raise RotateError("远端文件属性解析异常；停止") from None
     return data, uid, gid, mode
 
 
-def remote_stat_hash(path: str):
+def remote_stat_hash(path: str, *, owner=None, mode=None, root=None):
     """远端流式 sha256 + 属性；仅缺失返回 None；绝不回传文件正文。"""
-    res = deploy.remote_exec(_remote_cmd(_REMOTE_STAT_HASH.replace("__PATH__", repr(path))), timeout=60)
+    if root is None:
+        root = REMOTE_ROOT
+    res = deploy.remote_exec(_remote_cmd(render_remote_stat(path, owner=owner, mode=mode, root=root)),
+                             timeout=60)
     if res.rc == 3 and res.text().strip() == "MISSING":
         return None
     if res.timed_out or res.rc != 0:
@@ -731,35 +852,131 @@ def remote_stat_hash(path: str):
     if len(parts) != 4 or _HEX64.match(parts[0]) is None:
         raise RotateError("远端摘要输出异常；停止")
     try:
-        uid, gid, mode = int(parts[1]), int(parts[2]), int(parts[3], 8)
-    except ValueError:
+        uid, gid, mode = int(parts[1], 10), int(parts[2], 10), int(parts[3], 10)
+    except (ValueError, TypeError):
         raise RotateError("远端属性解析异常；停止") from None
     return {"hash": parts[0], "uid": uid, "gid": gid, "mode": mode}
 
 
-def remote_required_hash(path: str, what: str) -> str:
-    info = remote_stat_hash(path)
+def remote_required_hash(path: str, what: str, *, owner=None, mode=None) -> str:
+    info = remote_stat_hash(path, owner=owner, mode=mode)
     if info is None:
         raise RotateError("远端缺少%s；停止" % what)
     return info["hash"]
 
 
 def read_remote_credentials():
-    """返回 (raw, uid, gid, mode) 或 None（仅确定缺失）。"""
-    return remote_read_exact(REMOTE_CREDENTIALS)
+    """返回 (raw, uid, gid, mode) 或 None（仅确定缺失）；先做路径/属性门禁（1000:1000 精确 0600）。"""
+    return remote_read_exact(REMOTE_CREDENTIALS, owner=TARGET_OWNER, mode=TARGET_MODE)
 
 
-def read_remote_active():
-    data = remote_read_exact(ROTATE_ACTIVE_REMOTE)
+def read_remote_active(*, uid: int = 0):
+    data = remote_read_exact(ROTATE_ACTIVE_REMOTE, owner=uid, mode=0o600)
     if data is None:
         return None
     raw, _uid, _gid, _mode = data
     value = raw.decode("utf-8", "replace").strip()
     if value == "":
-        return None
+        # 文件存在但空/全空白：非法（不得静默视为 absent）
+        raise RotateError("远端 active 标记为空/空白；停止（人工核查）")
     if TXID_RE.match(value) is None:
         raise RotateError("远端 active 标记内容非法；停止")
     return value
+
+
+# 首次 rotate 前只读探测：父目录安全 + opdir 精确 ENOENT=未初始化；绝不创建目录。
+_REMOTE_PROBE = (
+    "import sys\n"
+    + _REMOTE_SAFE +
+    "ROOT = __ROOT__\n"
+    "PARENT = __PARENT__\n"
+    "DIR = __DIR__\n"
+    "MARKER = __MARKER__\n"
+    "VALUE = __VALUE__\n"
+    "ACTIVE = __ACTIVE__\n"
+    "UID = __UID__\n"
+    "\n"
+    "def fail():\n"
+    "    print('PROBE_BAD'); sys.exit(1)\n"
+    "\n"
+    "def done(marker):\n"
+    "    print(marker); sys.exit(0)\n"
+    "\n"
+    "def read_all(fd):\n"
+    "    data = bytearray()\n"
+    "    while True:\n"
+    "        b = os.read(fd, 65536)\n"
+    "        if not b:\n"
+    "            break\n"
+    "        data.extend(b)\n"
+    "    os.close(fd)\n"
+    "    return bytes(data)\n"
+    "\n"
+    "try:\n"
+    "    pfd, pst = safe_open(ROOT, PARENT, is_dir=True, owner=UID, mode=None)\n"
+    "except SafePathError:\n"
+    "    fail()\n"
+    "if stat.S_IMODE(pst.st_mode) & 0o022:\n"
+    "    os.close(pfd); fail()\n"
+    "os.close(pfd)\n"
+    "try:\n"
+    "    dfd, _dst = safe_open(ROOT, DIR, is_dir=True, owner=UID, mode=0o700, missing_ok=True)\n"
+    "except SafePathError:\n"
+    "    fail()\n"
+    "if dfd is None:\n"
+    "    done('PROBE_UNINITIALIZED')\n"
+    "os.close(dfd)\n"
+    "try:\n"
+    "    mfd, _mst = safe_open(ROOT, MARKER, is_dir=False, owner=UID, mode=0o600)\n"
+    "except SafePathError:\n"
+    "    fail()\n"
+    "if read_all(mfd).decode('utf-8', 'replace').strip() != VALUE:\n"
+    "    fail()\n"
+    "try:\n"
+    "    afd, _ast = safe_open(ROOT, ACTIVE, is_dir=False, owner=UID, mode=0o600, missing_ok=True)\n"
+    "except SafePathError:\n"
+    "    fail()\n"
+    "if afd is None:\n"
+    "    done('PROBE_ABSENT')\n"
+    "value = read_all(afd).decode('utf-8', 'replace').strip()\n"
+    "if value == '' or len(value) != 32 or any(c not in '0123456789abcdef' for c in value):\n"
+    "    fail()\n"
+    "print(value)\n"
+)
+
+
+def render_remote_probe(*, directory=ROTATE_DIR_REMOTE, marker=ROTATE_MARKER_REMOTE,
+                        value=ROTATE_MARKER_VALUE, active=ROTATE_ACTIVE_REMOTE,
+                        parent=os.path.dirname(ROTATE_DIR_REMOTE),
+                        uid=0, root=None) -> str:
+    if root is None:
+        root = REMOTE_ROOT
+    return (_REMOTE_PROBE
+            .replace("__ROOT__", repr(root))
+            .replace("__PARENT__", repr(parent))
+            .replace("__DIR__", repr(directory))
+            .replace("__MARKER__", repr(marker))
+            .replace("__VALUE__", repr(value))
+            .replace("__ACTIVE__", repr(active))
+            .replace("__UID__", repr(uid)))
+
+
+def read_remote_active_initialized(*, root=None, parent=None):
+    """只读探测远端 opdir：父目录安全 + opdir 精确 ENOENT=未初始化（无 active）；已存在则
+    严格校验 type/root 0700/marker 后读 active；symlink/权限/未知一律拒绝，绝不先创建。"""
+    if root is None:
+        root = REMOTE_ROOT
+    if parent is None:
+        parent = os.path.dirname(ROTATE_DIR_REMOTE)
+    res = deploy.remote_exec(_remote_cmd(render_remote_probe(root=root, parent=parent)), timeout=60)
+    if res.timed_out or res.rc != 0:
+        raise RotateError("远端轮换目录探测失败（路径/权限/内容非法）；停止")
+    text = res.text().strip()
+    if text in ("PROBE_UNINITIALIZED", "PROBE_ABSENT"):
+        return None
+    if TXID_RE.match(text) is None:
+        raise RotateError("远端 active 探测输出异常；停止")
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -786,6 +1003,9 @@ def container_runtime_state() -> str:
 
 
 def verify_approved_nginx_baseline() -> dict:
+    # 本地基线文件本身先做 no-symlink/普通文件门禁（组/其他可读允许，但不允许跟随链接）
+    if os.path.lexists(deploy.STATE_FILE):
+        _assert_local_safe(deploy.STATE_FILE, expect_dir=False, allow_group_read=True)
     baseline = deploy.load_baseline()
     if baseline is None:
         raise RotateError("缺少已批准 nginx 基线；拒绝（绝不重建）")
@@ -821,11 +1041,16 @@ def capture_baseline(txn_id: str) -> dict:
 
 
 def reconfirm_identity(txn: dict) -> None:
-    """身份/config/snapshot/nginx 基线（不要求容器 running）。"""
+    """身份/config/snapshot/nginx 基线（不要求容器 running）；快照按已记录属性精确门禁。"""
     cid, chash = container_identity()
     if cid != txn.get("containerId") or chash != txn.get("containerConfigHash"):
         raise RotateError("容器身份/配置在轮换前后变化；停止（保留恢复材料）")
-    snap = remote_stat_hash(SNAPSHOT_PATH)
+    snap_owner = txn.get("snapshotOwner")
+    snap_mode = txn.get("snapshotMode")
+    snap = remote_stat_hash(
+        SNAPSHOT_PATH,
+        owner=tuple(snap_owner) if isinstance(snap_owner, (list, tuple)) else None,
+        mode=snap_mode if isinstance(snap_mode, int) and not isinstance(snap_mode, bool) else None)
     if snap is None:
         raise RotateError("快照缺失；停止")
     if (snap["hash"] != txn.get("snapshotHash")
@@ -940,7 +1165,8 @@ def remote_prepare_dir() -> None:
 # ---------------------------------------------------------------------------
 
 _REMOTE_APPLY = (
-    "import fcntl, hashlib, json, os, stat, subprocess, sys\n"
+    "import fcntl, hashlib, json, subprocess, sys\n"
+    + _REMOTE_SAFE +
     "TARGET = __TARGET__\n"
     "TARGET_OWNER = __TARGET_OWNER__\n"
     "TARGET_MODE = __TARGET_MODE__\n"
@@ -970,6 +1196,8 @@ _REMOTE_APPLY = (
     "RESTART = __RESTART__\n"
     "OWNER = __OWNER__\n"
     "RESTART_GATE = __RESTART_GATE__\n"
+    "EXPECTED_RUNTIME = __EXPECTED_RUNTIME__\n"
+    "ROOT = __ROOT__\n"
     "UID = __UID__\n"
     "\n"
     "def sha(b):\n"
@@ -987,18 +1215,27 @@ _REMOTE_APPLY = (
     "    payload.update(extra)\n"
     "    out(payload)\n"
     "\n"
-    "def read_nofollow(path):\n"
-    "    try:\n"
-    "        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))\n"
-    "    except FileNotFoundError:\n"
+    "def so(path, is_dir, owner, mode, missing_ok=False):\n"
+    "    return safe_open(ROOT, path, is_dir=is_dir, owner=owner, mode=mode,\n"
+    "                     exact_mode=True, nlink1=True, missing_ok=missing_ok)\n"
+    "\n"
+    "def hash_nofollow(path, owner, mode, missing_ok=False):\n"
+    "    fd, st = so(path, False, owner, mode, missing_ok=missing_ok)\n"
+    "    if fd is None:\n"
     "        return None, None\n"
-    "    except OSError:\n"
-    "        fail('READ_OPEN_FAIL')\n"
-    "    st = os.fstat(fd)\n"
-    "    if not stat.S_ISREG(st.st_mode):\n"
-    "        os.close(fd); fail('READ_TYPE')\n"
-    "    if st.st_nlink != 1:\n"
-    "        os.close(fd); fail('READ_NLINK')\n"
+    "    h = hashlib.sha256()\n"
+    "    while True:\n"
+    "        b = os.read(fd, 65536)\n"
+    "        if not b:\n"
+    "            break\n"
+    "        h.update(b)\n"
+    "    os.close(fd)\n"
+    "    return h.hexdigest(), st\n"
+    "\n"
+    "def read_nofollow(path, owner, mode, missing_ok=False):\n"
+    "    fd, st = so(path, False, owner, mode, missing_ok=missing_ok)\n"
+    "    if fd is None:\n"
+    "        return None, None\n"
     "    data = bytearray()\n"
     "    while True:\n"
     "        b = os.read(fd, 65536)\n"
@@ -1008,46 +1245,51 @@ _REMOTE_APPLY = (
     "    os.close(fd)\n"
     "    return bytes(data), st\n"
     "\n"
-    "def open_dir(path, owner, mode):\n"
+    "def verify_op_dir():\n"
     "    try:\n"
-    "        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_NOFOLLOW', 0))\n"
-    "    except OSError:\n"
-    "        fail('DIR_OPEN_FAIL')\n"
-    "    st = os.fstat(fd)\n"
-    "    if not stat.S_ISDIR(st.st_mode):\n"
-    "        os.close(fd); fail('DIR_TYPE')\n"
-    "    if owner is not None:\n"
-    "        if isinstance(owner, (tuple, list)):\n"
-    "            ok_owner = (st.st_uid, st.st_gid) == tuple(owner)\n"
-    "        else:\n"
-    "            ok_owner = st.st_uid == owner\n"
-    "        if not ok_owner:\n"
-    "            os.close(fd); fail('DIR_OWNER')\n"
-    "    if mode is not None and stat.S_IMODE(st.st_mode) != mode:\n"
-    "        os.close(fd); fail('DIR_MODE')\n"
-    "    return fd\n"
+    "        fd, _st = so(DIR, True, UID, 0o700)\n"
+    "    except SafePathError as e:\n"
+    "        if e.kind in ('MISSING', 'OPEN', 'PATH', 'ROOT'):\n"
+    "            fail('DIR_OPEN_FAIL')\n"
+    "        if e.kind in ('TYPE', 'NLINK'):\n"
+    "            fail('DIR_TYPE')\n"
+    "        if e.kind == 'OWNER':\n"
+    "            fail('DIR_OWNER')\n"
+    "        fail('DIR_MODE')\n"
+    "    os.close(fd)\n"
     "\n"
-    "def verify_marker(path, value, owner=None):\n"
-    "    data, st = read_nofollow(path)\n"
+    "def verify_data_dir(path):\n"
+    "    try:\n"
+    "        fd, _st = so(path, True, DATA_OWNER, DATA_MODE)\n"
+    "    except SafePathError:\n"
+    "        fail('DATA_DIR_BAD')\n"
+    "    os.close(fd)\n"
+    "\n"
+    "def verify_shallow_dir(path):\n"
+    "    # 服务自建目录（如 snapshots，store.ts mkdirSync 递归通常 0755）：只要求属主正确、\n"
+    "    # 无 group/other 写；不强制 0700，绝不 chmod/chown，也不关闭检查。\n"
+    "    try:\n"
+    "        fd, st = so(path, True, DATA_OWNER, None)\n"
+    "    except SafePathError:\n"
+    "        fail('DATA_DIR_BAD')\n"
+    "    if stat.S_IMODE(st.st_mode) & 0o022:\n"
+    "        os.close(fd); fail('DATA_DIR_BAD')\n"
+    "    os.close(fd)\n"
+    "\n"
+    "def verify_marker(path, value, owner):\n"
+    "    try:\n"
+    "        data, st = read_nofollow(path, owner, 0o600)\n"
+    "    except SafePathError as e:\n"
+    "        fail('MARKER_MISSING' if e.kind == 'MISSING' else 'MARKER_ATTR')\n"
     "    if data is None:\n"
     "        fail('MARKER_MISSING')\n"
-    "    if stat.S_IMODE(st.st_mode) != 0o600:\n"
-    "        fail('MARKER_ATTR')\n"
-    "    if owner is not None:\n"
-    "        expected_uid = owner[0] if isinstance(owner, (tuple, list)) else owner\n"
-    "        if st.st_uid != expected_uid:\n"
-    "            fail('MARKER_ATTR')\n"
     "    if data.decode('utf-8', 'replace').strip() != value:\n"
     "        fail('MARKER_VALUE')\n"
     "\n"
-    "def verify_managed_dir():\n"
-    "    fd = open_dir(DIR, UID, 0o700)\n"
-    "    os.close(fd)\n"
-    "    verify_marker(MARKER, VALUE, UID)\n"
-    "\n"
     "def verify_business_base():\n"
-    "    fd = open_dir(DATA_BASE, DATA_OWNER, DATA_MODE)\n"
-    "    os.close(fd)\n"
+    "    verify_data_dir(DATA_BASE)\n"
+    "    verify_data_dir(TARGET_PARENT)\n"
+    "    verify_shallow_dir(os.path.dirname(SNAPSHOT))\n"
     "    verify_marker(DATA_MARKER, DATA_MARKER_VALUE, DATA_OWNER)\n"
     "\n"
     "def runtime_state():\n"
@@ -1083,64 +1325,87 @@ _REMOTE_APPLY = (
     "    return state\n"
     "\n"
     "def verify_snapshot():\n"
-    "    data, st = read_nofollow(SNAPSHOT)\n"
-    "    if data is None:\n"
+    "    try:\n"
+    "        h, st = hash_nofollow(SNAPSHOT, tuple(SNAPSHOT_OWNER), SNAPSHOT_MODE)\n"
+    "    except SafePathError as e:\n"
+    "        fail('SNAPSHOT_MISSING' if e.kind == 'MISSING' else 'SNAPSHOT_ATTR')\n"
+    "    if h is None:\n"
     "        fail('SNAPSHOT_MISSING')\n"
-    "    if sha(data) != EXPECTED_SNAPSHOT_HASH:\n"
+    "    if h != EXPECTED_SNAPSHOT_HASH:\n"
     "        fail('SNAPSHOT_MISMATCH')\n"
-    "    if (st.st_uid, st.st_gid) != tuple(SNAPSHOT_OWNER) or stat.S_IMODE(st.st_mode) != SNAPSHOT_MODE:\n"
-    "        fail('SNAPSHOT_ATTR')\n"
     "\n"
     "def verify_target_identity():\n"
-    "    data, st = read_nofollow(TARGET)\n"
-    "    if data is None:\n"
-    "        fail('TARGET_MISSING')\n"
-    "    if (st.st_uid, st.st_gid) != tuple(TARGET_OWNER):\n"
-    "        fail('TARGET_OWNER')\n"
-    "    if stat.S_IMODE(st.st_mode) != TARGET_MODE:\n"
+    "    try:\n"
+    "        h, st = hash_nofollow(TARGET, tuple(TARGET_OWNER), TARGET_MODE)\n"
+    "    except SafePathError as e:\n"
+    "        if e.kind == 'MISSING':\n"
+    "            fail('TARGET_MISSING')\n"
+    "        if e.kind in ('OPEN', 'PATH', 'ROOT'):\n"
+    "            fail('TARGET_SYMLINK')\n"
+    "        if e.kind in ('TYPE', 'NLINK'):\n"
+    "            fail('TARGET_NLINK' if e.kind == 'NLINK' else 'TARGET_TYPE')\n"
+    "        if e.kind == 'OWNER':\n"
+    "            fail('TARGET_OWNER')\n"
     "        fail('TARGET_MODE')\n"
-    "    return data, st\n"
+    "    if h is None:\n"
+    "        fail('TARGET_MISSING')\n"
+    "    return h, st\n"
     "\n"
     "def acquire_lock():\n"
     "    try:\n"
-    "        fd = os.open(LOCK, os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0))\n"
-    "    except FileNotFoundError:\n"
+    "        fd, st = so(LOCK, False, UID, 0o600)\n"
+    "    except SafePathError as e:\n"
+    "        if e.kind == 'MISSING':\n"
+    "            fail('LOCK_MISSING')\n"
+    "        if e.kind in ('OPEN', 'PATH', 'ROOT'):\n"
+    "            fail('LOCK_OPEN_FAIL')\n"
+    "        fail('LOCK_ATTR')\n"
+    "    if fd is None:\n"
     "        fail('LOCK_MISSING')\n"
-    "    except OSError:\n"
-    "        fail('LOCK_OPEN_FAIL')\n"
-    "    st = os.fstat(fd)\n"
-    "    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600:\n"
-    "        os.close(fd); fail('LOCK_ATTR')\n"
     "    try:\n"
     "        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
     "    except OSError:\n"
     "        os.close(fd); fail('LOCK_BUSY')\n"
     "    return fd\n"
     "\n"
-    "verify_managed_dir()\n"
+    "def read_active():\n"
+    "    try:\n"
+    "        raw, ast_ = read_nofollow(ACTIVE, UID, 0o600, missing_ok=True)\n"
+    "    except SafePathError:\n"
+    "        fail('ACTIVE_ATTR')\n"
+    "    if raw is None:\n"
+    "        return None\n"
+    "    value = raw.decode('utf-8', 'replace').strip()\n"
+    "    if value == '':\n"
+    "        fail('ACTIVE_ATTR')  # 存在但空/全空白：非法，不得视为 absent\n"
+    "    return value\n"
+    "\n"
+    "verify_op_dir()\n"
+    "verify_marker(MARKER, VALUE, UID)\n"
     "lock_fd = acquire_lock()\n"
     "try:\n"
     "    verify_business_base()\n"
-    "    active = None\n"
-    "    if os.path.lexists(ACTIVE):\n"
-    "        raw, ast_ = read_nofollow(ACTIVE)\n"
-    "        if raw is None or ast_ is None or stat.S_IMODE(ast_.st_mode) != 0o600:\n"
-    "            fail('ACTIVE_ATTR')\n"
-    "        active = raw.decode('utf-8', 'replace').strip() or None\n"
+    "    active = read_active()\n"
     "    if MODE == 'clear':\n"
     "        if active == TXN_ID:\n"
     "            os.unlink(ACTIVE)\n"
     "            dfd = os.open(DIR, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))\n"
     "            os.fsync(dfd)\n"
     "            os.close(dfd)\n"
-    "            out({'ok': True, 'cleared': True})\n"
-    "        out({'ok': True, 'cleared': False})\n"
+    "            out({'ok': True, 'cleared': 'deleted'})\n"
+    "        if active is None:\n"
+    "            out({'ok': True, 'cleared': 'absent'})\n"
+    "        fail('ACTIVE_OTHER')\n"
     "    if active is not None and active != TXN_ID:\n"
     "        fail('ACTIVE_OTHER')\n"
     "    verify_snapshot()\n"
     "    state = verify_container()\n"
-    "    cur, st = verify_target_identity()\n"
-    "    cur_hash = sha(cur)\n"
+    "    if EXPECTED_RUNTIME != 'any' and state != EXPECTED_RUNTIME:\n"
+    "        fail('RUNTIME_MISMATCH')\n"
+    "    if MODE == 'observe':\n"
+    "        cur_hash, _st = verify_target_identity()\n"
+    "        out({'ok': True, 'runtime': state, 'targetHash': cur_hash, 'active': active})\n"
+    "    cur_hash, st = verify_target_identity()\n"
     "    if cur_hash != EXPECTED_OLD:\n"
     "        fail('CAS_OLD_MISMATCH')\n"
     "    inode = st.st_ino\n"
@@ -1174,8 +1439,8 @@ _REMOTE_APPLY = (
     "                os.fsync(fd)\n"
     "            finally:\n"
     "                os.close(fd)\n"
-    "            pre, pst = read_nofollow(TARGET)\n"
-    "            if pre is None or pst.st_ino != inode or sha(pre) != EXPECTED_OLD:\n"
+    "            pre_hash, pst = hash_nofollow(TARGET, tuple(TARGET_OWNER), TARGET_MODE)\n"
+    "            if pre_hash is None or pst.st_ino != inode or pre_hash != EXPECTED_OLD:\n"
     "                fail('REPLACE_RECHECK')\n"
     "            os.replace(tmp_name, os.path.basename(TARGET), src_dir_fd=dirfd, dst_dir_fd=dirfd)\n"
     "            os.fsync(dirfd)\n"
@@ -1189,18 +1454,16 @@ _REMOTE_APPLY = (
     "            fail('WRITE_FAIL')\n"
     "        finally:\n"
     "            os.close(dirfd)\n"
-    "        back, bst = read_nofollow(TARGET)\n"
-    "        if back is None or sha(back) != EXPECTED_NEW:\n"
+    "        back_hash, bst = hash_nofollow(TARGET, tuple(TARGET_OWNER), TARGET_MODE)\n"
+    "        if back_hash is None or back_hash != EXPECTED_NEW:\n"
     "            fail('READBACK_MISMATCH')\n"
-    "        if bst.st_nlink != 1 or (bst.st_uid, bst.st_gid) != tuple(TARGET_OWNER) or stat.S_IMODE(bst.st_mode) != TARGET_MODE:\n"
-    "            fail('TARGET_IDENTITY_AFTER')\n"
     "        changed = True\n"
-    "        new_hash = sha(back)\n"
+    "        new_hash = back_hash\n"
     "        gate_ok = True\n"
     "    else:\n"
     "        gate_ok = False\n"
     "        if RESTART_GATE == 'stale':\n"
-    "            gate_ok = True\n"
+    "            gate_ok = (state == 'running')\n"
     "        elif RESTART_GATE == 'exited':\n"
     "            gate_ok = (state == 'exited')\n"
     "    if MODE == 'apply' or gate_ok:\n"
@@ -1230,11 +1493,14 @@ def render_remote_apply(*, mode, txn_id, expected_old, expected_new, container,
                         data_owner=DATA_OWNER, data_mode=DATA_MODE,
                         snapshot=SNAPSHOT_PATH, expected_snapshot_hash="",
                         snapshot_owner=(0, 0), snapshot_mode=0o600,
-                        cid_cmd=None, inspect_cmd=None, restart_gate="apply", uid=0) -> str:
+                        cid_cmd=None, inspect_cmd=None, restart_gate="apply", uid=0,
+                        expected_runtime="running", root=None) -> str:
     if cid_cmd is None:
         cid_cmd = ["docker", "inspect", "--format", "{{.Id}}", container]
     if inspect_cmd is None:
         inspect_cmd = ["docker", "inspect", container]
+    if root is None:
+        root = REMOTE_ROOT
     return (_REMOTE_APPLY
             .replace("__TARGET__", repr(target))
             .replace("__TARGET_OWNER__", repr(tuple(target_owner) if target_owner is not None else None))
@@ -1265,6 +1531,8 @@ def render_remote_apply(*, mode, txn_id, expected_old, expected_new, container,
             .replace("__RESTART__", repr(list(restart)))
             .replace("__OWNER__", repr(tuple(owner) if owner is not None else None))
             .replace("__RESTART_GATE__", repr(restart_gate))
+            .replace("__EXPECTED_RUNTIME__", repr(expected_runtime))
+            .replace("__ROOT__", repr(root))
             .replace("__UID__", repr(uid)))
 
 
@@ -1279,7 +1547,8 @@ def run_remote_apply(*, mode, txn_id, expected_old, expected_new, payload, conta
                      directory=ROTATE_DIR_REMOTE, marker=ROTATE_MARKER_REMOTE,
                      value=ROTATE_MARKER_VALUE, lock=ROTATE_LOCK_REMOTE,
                      active=ROTATE_ACTIVE_REMOTE, uid=0,
-                     cid_cmd=None, inspect_cmd=None) -> dict:
+                     cid_cmd=None, inspect_cmd=None, expected_runtime="running",
+                     root=None) -> dict:
     code = render_remote_apply(mode=mode, txn_id=txn_id, expected_old=expected_old,
                                expected_new=expected_new, container=container,
                                expected_cid=expected_cid, expected_config_hash=expected_config_hash,
@@ -1292,7 +1561,8 @@ def run_remote_apply(*, mode, txn_id, expected_old, expected_new, payload, conta
                                expected_snapshot_hash=snapshot_hash,
                                snapshot_owner=snapshot_owner, snapshot_mode=snapshot_mode,
                                cid_cmd=cid_cmd, inspect_cmd=inspect_cmd,
-                               restart_gate=restart_gate, uid=uid)
+                               restart_gate=restart_gate, uid=uid,
+                               expected_runtime=expected_runtime, root=root)
     res = deploy.remote_exec(_remote_cmd(code), stdin=payload, timeout=timeout)
     if res.timed_out:
         raise RotateError("远端操作超时：状态不确定；保留恢复材料，请人工核查（不自动重试/回滚）")
@@ -1319,7 +1589,35 @@ def remote_clear_active(txn_id: str, *, container, expected_cid, expected_config
                             expected_config_hash=expected_config_hash, restart=[],
                             owner=None, target_owner=TARGET_OWNER, snapshot_hash=snapshot_hash,
                             snapshot_owner=snapshot_owner, snapshot_mode=snapshot_mode,
-                            restart_gate="none", timeout=60, uid=uid)
+                            restart_gate="none", timeout=60, uid=uid,
+                            expected_runtime="any")
+
+
+def remote_observe(txn: dict, *, timeout: int = 60) -> dict:
+    """只读观察：打开既有受管锁（非阻塞），完整路径/身份/hash/snapshot 校验后返回有限状态；
+    绝不创建 active/目录/文件，绝不重启。用于恢复分类与正式提交前门禁。"""
+    return run_remote_apply(
+        mode="observe", txn_id=txn["transaction"], expected_old=txn["oldHash"],
+        expected_new=txn["oldHash"], payload=b"", container=CONTAINER,
+        expected_cid=txn["containerId"], expected_config_hash=txn["containerConfigHash"],
+        restart=[], owner=None, target_owner=TARGET_OWNER,
+        snapshot_hash=txn["snapshotHash"], snapshot_owner=txn["snapshotOwner"],
+        snapshot_mode=txn["snapshotMode"], restart_gate="none",
+        timeout=timeout, expected_runtime="any")
+
+
+def _observe_or_stop(txn: dict) -> dict:
+    try:
+        return remote_observe(txn)
+    except (RotateError, deploy.DeployError, OSError):
+        raise RotateError("远端只读观察失败（锁忙/缺失/路径/身份不确定）；停止（不继续）") from None
+
+
+def _observe_expect(txn: dict, expected_hash: str) -> dict:
+    obs = _observe_or_stop(txn)
+    if obs.get("targetHash") != expected_hash:
+        raise RotateError("远端凭证与预期摘要不符；停止（保留恢复材料，不写正式 Keychain）")
+    return obs
 
 
 # ---------------------------------------------------------------------------
@@ -1476,7 +1774,8 @@ def _remote_new_matches(txn: dict) -> bool:
     return sha256_hex(raw) == txn.get("newHash")
 
 
-def _apply_to_new(txn: dict, old_v, old_u, new_v, new_u, new_bytes: bytes) -> None:
+def _apply_to_new(txn: dict, old_v, old_u, new_v, new_u, new_bytes: bytes,
+                  expected_runtime: str = "running") -> None:
     txn["phase"] = "applying"
     _write_txn(txn)
     result = run_remote_apply(
@@ -1485,23 +1784,27 @@ def _apply_to_new(txn: dict, old_v, old_u, new_v, new_u, new_bytes: bytes) -> No
         expected_cid=txn["containerId"], expected_config_hash=txn["containerConfigHash"],
         restart=_restart_cmd(), owner=TARGET_OWNER, target_owner=TARGET_OWNER,
         snapshot_hash=txn["snapshotHash"], snapshot_owner=txn["snapshotOwner"],
-        snapshot_mode=txn["snapshotMode"], restart_gate="apply")
+        snapshot_mode=txn["snapshotMode"], restart_gate="apply",
+        expected_runtime=expected_runtime)
     txn["phase"] = "applied"
     txn["remoteResult"] = {"changed": bool(result.get("changed")),
                            "restarted": bool(result.get("restarted"))}
     _write_txn(txn)
 
 
-def _restart_once(txn: dict, gate: str) -> None:
+def _restart_once(txn: dict, gate: str, expected_hash: str, expected_runtime: str) -> None:
+    """显式给出预期磁盘摘要与运行态：forward 用 newHash，rollback 用 oldHash；
+    绝不以 newHash 去 CAS 磁盘上的 old。"""
     txn["phase"] = "verifying"
     _write_txn(txn)
     run_remote_apply(
-        mode="restart", txn_id=txn["transaction"], expected_old=txn["newHash"],
-        expected_new=txn["newHash"], payload=b"", container=CONTAINER,
+        mode="restart", txn_id=txn["transaction"], expected_old=expected_hash,
+        expected_new=expected_hash, payload=b"", container=CONTAINER,
         expected_cid=txn["containerId"], expected_config_hash=txn["containerConfigHash"],
         restart=_restart_cmd(), owner=None, target_owner=TARGET_OWNER,
         snapshot_hash=txn["snapshotHash"], snapshot_owner=txn["snapshotOwner"],
-        snapshot_mode=txn["snapshotMode"], restart_gate=gate)
+        snapshot_mode=txn["snapshotMode"], restart_gate=gate,
+        expected_runtime=expected_runtime)
     txn["phase"] = "applied"
     _write_txn(txn)
 
@@ -1523,16 +1826,15 @@ def _commit_formal(txn: dict, secrets, old_bytes: bytes, new_bytes: bytes) -> No
     _verify_against_bytes(old_u, old_bytes, "upload", "old")
     _verify_against_bytes(new_v, new_bytes, "viewer", "new")
     _verify_against_bytes(new_u, new_bytes, "upload", "new")
-    if not _remote_new_matches(txn):
-        raise RotateError("提交前远端凭证摘要非本事务 new；停止（不写正式 Keychain）")
+    # 正式提交前必须经过只读 observe（持锁、完整身份/hash/snapshot/路径门禁）
+    _observe_expect(txn, txn["newHash"])
     txn["phase"] = "committing"
     _write_txn(txn)
     keychain_update_formal(FORMAL_VIEWER[0], FORMAL_VIEWER[1], new_v, (old_v, new_v))
     keychain_update_formal(FORMAL_UPLOAD[0], FORMAL_UPLOAD[1], new_u, (old_u, new_u))
     if deploy.keychain_get(*FORMAL_VIEWER) != new_v or deploy.keychain_get(*FORMAL_UPLOAD) != new_u:
         raise RotateError("正式 Keychain 回读不一致；停止（不记录 complete）")
-    if not _remote_new_matches(txn):
-        raise RotateError("完成前远端凭证摘要非本事务 new；停止（不记录 complete）")
+    _observe_expect(txn, txn["newHash"])
     reconfirm_identity(txn)
     txn["phase"] = "complete"
     _write_txn(txn)
@@ -1540,22 +1842,31 @@ def _commit_formal(txn: dict, secrets, old_bytes: bytes, new_bytes: bytes) -> No
 
 
 def _try_clear_active(txn: dict) -> bool:
-    """仅在确认远端 active 属本事务且 clear 回包成功后才标记 activeCleared。"""
+    """clear 三态：deleted(本事务) / absent(锁内确认不存在) 视为完成；other 保留停止。"""
     try:
         result = remote_clear_active(
             txn["transaction"], container=CONTAINER, expected_cid=txn["containerId"],
             expected_config_hash=txn["containerConfigHash"], snapshot_hash=txn["snapshotHash"],
             snapshot_owner=txn["snapshotOwner"], snapshot_mode=txn["snapshotMode"])
-        if result.get("cleared") is True:
+        if result.get("cleared") in ("deleted", "absent"):
             txn["activeCleared"] = True
         else:
             txn["activeCleared"] = False
-            log("[rotate] 远端 active 标记未属本事务或未清除；保留恢复材料")
-    except (RotateError, deploy.DeployError, OSError) as err:
+            log("[rotate] 远端 active 标记状态未确认（其他事务/未知）；保留恢复材料")
+    except (RotateError, deploy.DeployError, OSError):
+        # 固定错误类别，绝不插值底层异常字符串（避免路径/敏感细节外泄）
         txn["activeCleared"] = False
-        log("[rotate] 警告：远端 active 标记未证实清除（%s）；保留恢复材料" % err)
+        log("[rotate] 警告：远端 active 标记未证实清除（固定错误类别）；保留恢复材料")
     _write_txn(txn)
     return bool(txn.get("activeCleared"))
+
+
+def _finish_cleanup_or_fail(txn: dict, ok_line: str) -> int:
+    """凭证已提交后仍须确认 cleanup；未确认一律非零固定报错，绝不整体 OK。"""
+    if not _try_clear_active(txn):
+        raise RotateError("凭证提交完成 cleanup 未确认；保留恢复材料（不整体成功）")
+    print(ok_line)
+    return 0
 
 
 def _classify(current_sha, txn) -> str:
@@ -1600,15 +1911,12 @@ def _fresh_txn_record(txn_id, old_bytes, new_bytes, old_data) -> dict:
 def cmd_rotate(_args) -> int:
     with local_lock():
         _assert_no_active_txn()
-        remote_active = read_remote_active()
+        # 首次轮换时 opdir 尚不存在：只读探测，精确 ENOENT=未初始化（无 active），绝不先建目录。
+        remote_active = read_remote_active_initialized()
         if remote_active is not None:
             raise RotateError("远端存在持久 active 事务（%s）；拒绝启动新事务" % remote_active)
-        txn_id = secrets.token_hex(16)
-        txn_dir = _txn_dir(txn_id)
-        os.mkdir(txn_dir, MANAGED_DIR_MODE)
-        os.chmod(txn_dir, MANAGED_DIR_MODE)
-        _assert_local_safe(txn_dir, expect_dir=True)
 
+        # B5：mkdir 前完成全部只读预检与本地生成；任何失败绝不留下空事务目录
         info = read_remote_credentials()
         if info is None:
             raise RotateError("远端缺少凭证；无法轮换（不做任何写入）")
@@ -1620,14 +1928,19 @@ def cmd_rotate(_args) -> int:
         _verify_against_bytes(old_u, old_bytes, "upload", "old")
         new_v = deploy.generate_viewer_password()
         new_u = deploy.generate_upload_token()
-        if len({old_v, new_v}) != 2 or len({old_u, new_u}) != 2:
-            raise RotateError("新凭证与旧凭证重复；拒绝（重试生成）")
+        if len({old_v, old_u, new_v, new_u}) != 4:
+            raise RotateError("新旧凭证存在重复（含 viewer/upload 交叉）；拒绝（重试生成）")
         new_bytes = new_credentials_bytes(new_v, new_u)
 
-        # 尽早落合法初始化记录；此后失败准确标 prepare_failed，绝不误导 resume
+        txn_id = secrets.token_hex(16)
+        txn_dir = _txn_dir(txn_id)
+        os.mkdir(txn_dir, MANAGED_DIR_MODE)
+        os.chmod(txn_dir, MANAGED_DIR_MODE)
+        _assert_local_safe(txn_dir, expect_dir=True)
+        # mkdir 后立刻落合法初始化记录（明确未切换、不可盲 resume）；此后失败准确标 prepare_failed
         txn = _fresh_txn_record(txn_id, old_bytes, new_bytes, old_data)
         _write_txn(txn)
-        log("[rotate] 事务 %s 已创建（阶段 preparing）" % txn_id)
+        log("[rotate] 事务 %s 已创建（阶段 preparing，尚未切换凭证）" % txn_id)
         try:
             preflight_online(old_v, old_u)
             txn.update(capture_baseline(txn_id))
@@ -1656,9 +1969,7 @@ def cmd_rotate(_args) -> int:
             txn["phase"] = "failed"
             _write_txn(txn)
             raise
-        _try_clear_active(txn)
-        print("ROTATE_OK %s phase=%s" % (txn_id, txn["phase"]))
-        return 0
+        return _finish_cleanup_or_fail(txn, "ROTATE_OK %s phase=%s" % (txn_id, txn["phase"]))
 
 
 def cmd_resume(args) -> int:
@@ -1666,8 +1977,7 @@ def cmd_resume(args) -> int:
     if txn.get("phase") in TERMINAL_PHASES:
         with local_lock():
             if txn.get("activeCleared") is not True:
-                cleared = _try_clear_active(txn)
-                if cleared:
+                if _try_clear_active(txn):
                     print("RESUME_CLEARED %s phase=%s" % (txn["transaction"], txn["phase"]))
                     return 0
                 raise RotateError("active 标记未证实清除；保留恢复材料（不输出 CLEARED）")
@@ -1683,37 +1993,45 @@ def cmd_resume(args) -> int:
             formal_v, formal_u = formal_pair()
             if formal_v not in (old_v, new_v) or formal_u not in (old_u, new_u):
                 raise RotateError("正式 Keychain 状态未知；停止（不写服务器）")
-            remote_active = read_remote_active()
-            if remote_active is not None and remote_active != txn["transaction"]:
+            # B4：恢复分类前先经只读 observe（持既有锁；busy/missing/unknown 一律停止）
+            obs = _observe_or_stop(txn)
+            if obs.get("active") not in (None, txn["transaction"]):
                 raise RotateError("远端 active 事务非本事务；拒绝 resume")
-            current = _current_cred_sha()
+            current = obs.get("targetHash")
             kind = _classify(current, txn)
+            runtime = obs.get("runtime")
             if kind in ("third", "missing"):
                 raise RotateError("远端凭证为第三套/缺失；无法安全继续（人工核查）")
+            # 恢复分类后、任何 apply/restart 前，只复核完整身份/config/snapshot/nginx/vhost
+            # 历史基线（不要求容器 running）；从而覆盖 exited 停机的 resume 路径。
             reconfirm_identity(txn)
             if kind == "old":
+                # 磁盘仍为旧凭证：必须先切到 new。apply 明确要求 running。
+                if runtime != "running":
+                    raise RotateError("磁盘为旧凭证但容器运行态 %s；拒绝 apply（要求 running）" % runtime)
                 remote_prepare_dir()
-                _apply_to_new(txn, old_v, old_u, new_v, new_u, new_bytes)
+                _apply_to_new(txn, old_v, old_u, new_v, new_u, new_bytes,
+                              expected_runtime="running")
                 _verify_server(txn, "new", secrets_now)
             else:
-                state = container_runtime_state()
-                full_ok = deploy.container_state_ok()
-                if full_ok:
+                # 磁盘已是 new：按 observe 到的运行态显式分支；未知态一律停止。
+                if runtime == "exited":
+                    _restart_once(txn, "exited", txn["newHash"], "exited")
+                elif runtime == "running":
+                    if not deploy.container_state_ok():
+                        raise RotateError("容器运行但状态不满足安全 allowlist；拒绝 restart")
                     if server_serves_old(old_v, old_u, new_v, new_u):
-                        _restart_once(txn, "stale")
-                elif state == "exited":
-                    _restart_once(txn, "exited")
+                        _restart_once(txn, "stale", txn["newHash"], "running")
                 else:
-                    raise RotateError("容器状态 %s 且无明确旧态证据；拒绝 restart" % state)
+                    raise RotateError("容器运行态 %s 不接受 restart；停止" % runtime)
+                # 重启后保留完整基线校验（此时容器应已 running）+ TLS，再进正式提交。
                 _verify_server(txn, "new", secrets_now)
             _commit_formal(txn, secrets_now, old_bytes, new_bytes)
         except (RotateError, deploy.DeployError, OSError):
             txn["phase"] = "failed"
             _write_txn(txn)
             raise
-        _try_clear_active(txn)
-        print("RESUME_OK %s phase=%s" % (txn["transaction"], txn["phase"]))
-        return 0
+        return _finish_cleanup_or_fail(txn, "RESUME_OK %s phase=%s" % (txn["transaction"], txn["phase"]))
 
 
 def cmd_rollback(args) -> int:
@@ -1739,20 +2057,27 @@ def cmd_rollback(args) -> int:
             # rollback 严禁先改服务器再发现正式 foreign
             if formal_v not in (old_v, new_v) or formal_u not in (old_u, new_u):
                 raise RotateError("正式 Keychain 状态未知；拒绝 rollback（不写服务器）")
-            remote_active = read_remote_active()
-            if remote_active is not None and remote_active != txn["transaction"]:
+            # B4：恢复分类前先经只读 observe
+            obs = _observe_or_stop(txn)
+            if obs.get("active") not in (None, txn["transaction"]):
                 raise RotateError("远端 active 事务非本事务；拒绝 rollback")
-            current = _current_cred_sha()
+            current = obs.get("targetHash")
             kind = _classify(current, txn)
             if kind == "third":
                 raise RotateError("远端凭证为第三套；拒绝 rollback（人工核查）")
             if kind == "missing":
                 raise RotateError("远端凭证缺失；无法 rollback（人工核查）")
+            # 回滚分类后、任何 apply/restart 前补齐历史 nginx/vhost/身份基线门禁（不要求 running）；
+            # 后置完整 reconfirm_baseline 保留。
             reconfirm_identity(txn)
+            runtime = obs.get("runtime")
             txn["phase"] = "rolling_back"
             _write_txn(txn)
             remote_prepare_dir()
             if kind == "new":
+                # 磁盘 new -> 写回 old；apply 需明确运行态（running/exited）
+                if runtime not in ("running", "exited"):
+                    raise RotateError("容器运行态 %s 不接受 restore-apply；停止" % runtime)
                 run_remote_apply(
                     mode="apply", txn_id=txn["transaction"], expected_old=txn["newHash"],
                     expected_new=txn["oldHash"], payload=old_bytes, container=CONTAINER,
@@ -1760,17 +2085,27 @@ def cmd_rollback(args) -> int:
                     expected_config_hash=txn["containerConfigHash"], restart=_restart_cmd(),
                     owner=TARGET_OWNER, target_owner=TARGET_OWNER,
                     snapshot_hash=txn["snapshotHash"], snapshot_owner=txn["snapshotOwner"],
-                    snapshot_mode=txn["snapshotMode"], restart_gate="apply")
+                    snapshot_mode=txn["snapshotMode"], restart_gate="apply",
+                    expected_runtime=runtime)
             else:
-                _restart_once(txn, "stale")
+                # 磁盘已是 old：按运行态重启，显式 expected=oldHash，绝不用 newHash 去 CAS
+                if runtime == "running":
+                    _restart_once(txn, "stale", txn["oldHash"], "running")
+                elif runtime == "exited":
+                    _restart_once(txn, "exited", txn["oldHash"], "exited")
+                else:
+                    raise RotateError("容器运行态 %s 不接受 restart；停止" % runtime)
             txn["phase"] = "rollback_applied"
             _write_txn(txn)
             reconfirm_baseline(txn)
             wait_tls_matrix("old", old_v, old_u, new_v, new_u)
+            # 正式回写前后都必须 observe 且确认磁盘/属性为 oldHash
+            _observe_expect(txn, txn["oldHash"])
             keychain_update_formal(FORMAL_VIEWER[0], FORMAL_VIEWER[1], old_v, (old_v, new_v))
             keychain_update_formal(FORMAL_UPLOAD[0], FORMAL_UPLOAD[1], old_u, (old_u, new_u))
             if deploy.keychain_get(*FORMAL_VIEWER) != old_v or deploy.keychain_get(*FORMAL_UPLOAD) != old_u:
                 raise RotateError("正式 Keychain 回滚回读不一致；停止（不记录 rolled_back）")
+            _observe_expect(txn, txn["oldHash"])
             reconfirm_identity(txn)
             txn["phase"] = "rolled_back"
             _write_txn(txn)
@@ -1778,9 +2113,7 @@ def cmd_rollback(args) -> int:
             txn["phase"] = "failed"
             _write_txn(txn)
             raise
-        _try_clear_active(txn)
-        print("ROLLBACK_OK %s phase=rolled_back" % txn["transaction"])
-        return 0
+        return _finish_cleanup_or_fail(txn, "ROLLBACK_OK %s phase=rolled_back" % txn["transaction"])
 
 
 def _safe_secret_for(txn, key):
@@ -1818,8 +2151,10 @@ def cmd_status(args) -> int:
     try:
         current = _current_cred_sha()
     except (RotateError, deploy.DeployError, OSError):
-        current = None
-    report["remote"] = _classify(current, txn)
+        # SSH/解析/属性错误：独立 unknown，绝不误报 missing，也不据此声称 ready
+        report["remote"] = "unknown"
+    else:
+        report["remote"] = _classify(current, txn)
     report["complete"] = "yes" if txn.get("phase") in TERMINAL_PHASES else "no"
     report["identityFields"] = "present" if all(
         k in txn for k in ("containerId", "containerConfigHash", "snapshotHash", "nginxVhostHash")) else "incomplete"

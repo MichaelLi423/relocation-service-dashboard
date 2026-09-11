@@ -1,9 +1,10 @@
 # 移动只读发布 · 云端部署（mobile-readonly-deployment）
 
-> 本文档与 `scripts/deploy-mobile-readonly.py` 配套（openspec tasks 9.x 部署闸门 / D9）。
-> **状态：生产已上线（2026-09-09，部分完成）** —— 凭据/首容器/loopback 角色/HTTP-01 证书/TLS/首份空冒烟
-> 已按本 runbook 执行并回填证据（§8）；任务 9.1/9.2 已勾选，Windows 首次真实业务发布、实体手机验收与
-> **凭证轮换** 仍未完成（§9「人工待办」，任务 9.3/9.4 保持未勾选）。站点为独立 vhost + acme.sh 托管，
+> 本文档与 `scripts/deploy-mobile-readonly.py` 配套（openspec tasks 9.x 部署闸门 / D9）；凭证轮换使用
+> 独立工具 `scripts/rotate-mobile-readonly.py`（见 §10）。
+> **状态：生产已上线（2026-09-09 首次上线；2026-09-11 完成一次真实凭证轮换并经用户实机确认业务发布）** ——
+> 凭据/首容器/loopback 角色/HTTP-01 证书/TLS/首份受管空冒烟已按本 runbook 执行并回填证据（§8）；
+> 2026-09-11 轮换证据见 §10，任务 9.4 已勾选、9.3 待轮换后的客户端恢复确认。站点为独立 vhost + acme.sh 托管，
 > **未**登记为 1Panel GUI 同域站点/证书（SSH 路径为权威）；本运行未读取安全组规则 API、无任何
 > DNS/安全组/防火墙写入。
 > 本机私有查看口令/上传 token **永不写入本文件**（见「凭据」）；本文件不含任何 secret。
@@ -179,7 +180,7 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 | DNS（workbench.michaelli.site） | A `8.162.13.22`、TTL 600（权威 10 分钟）；无 AAAA/CNAME | DONE（2026-09-09 实测：权威 NS `dns31.hichina.com`=120.76.107.59，RD=0 且 AA=True 的 A 记录 `8.162.13.22`、TTL 600 精确等于配置值（非缓存），AAAA/CNAME 均无；80/443 外部真实可达——外部 HTTP-01 challenge 与正常 HTTPS 浏览器均成功；本运行未读取安全组规则 API，也未做任何 DNS/安全组/防火墙写入） |
 | 凭据 | Keychain 两条目存在；远端仅有 digest | DONE（本机 Keychain 两条目；服务器仅 scrypt 摘要，无明文） |
 
-## 9. 生产现状与人工待办（2026-09-09）
+## 9. 生产现状与人工待办（2026-09-11）
 
 **部署形态边界**
 - 站点以独立 nginx vhost + acme.sh 托管并交由既有 cron 续期，**不要**再创建同名的
@@ -202,14 +203,57 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 - `install` 对既有容器仅在独立完整 allowlist 校验通过时跳过 create，属安全幂等路径；
   不承诺一般化自动升级。容器自有校验逻辑当前正确。
 
-**凭证轮换（未实现/未执行）**
-- 「未实现」指**部署助手没有自动化轮换子命令**、且轮换流程尚未演练；这不是说服务本身无法轮换——
-  服务支持管理员经人工授权后替换 digest 并仅重启自有服务/更新本机 Keychain。本文不提供未受保护的现成命令。
-- 轮换需人工授权 + 人工操作：先验证当前可用，再替换远端 digest（仅自有 credentials.json
-  与 Keychain 更新），只允许对自有服务执行，严禁覆盖未知 digest、把生产密钥写入 argv/chat/仓库。
-- 本阶段不提供、也不建议「直接覆盖/再生成生产摘要」的自动化捷径。
-- 部署验证：本地 93 项 Python mock 用例通过、真实 curl/redirect 校验通过、凭据/容器/loopback/
-  TLS/首份空冒烟通过；最新 UI 类型检查与 3 项发布者 E2E 等见 `docs/mobile-readonly-acceptance.md`。
+**凭证轮换（独立工具；2026-09-11 已执行一次真实轮换）**
+- 历史（2026-09-09）：部署助手无自动化轮换子命令、轮换流程未演练，本 runbook 当时不提供现成命令；
+  服务本身可经人工授权替换 digest 并仅重启自有服务/更新本机 Keychain。
+- 现状：已提供独立工具 `scripts/rotate-mobile-readonly.py`（`rotate`/`status`/`resume`/`rollback`），
+  其安全边界、2026-09-11 真实执行证据与保留的恢复材料见 §10。轮换只允许对自有服务执行，
+  严禁覆盖未知 digest、严禁把生产密钥写入 argv/chat/仓库；`rotate` 已在生产授权执行一次，
+  `resume`/`rollback` **未**在生产演练，任何异常一律停止并由人工以只读 `status` 判定。
+- 部署验证：轮换工具离线用例 148 项 + 部署助手用例 93 项通过（failguard 保证不发起未 mock 的真实外部调用）；
+  真实 curl/redirect 校验、凭据/容器/loopback/TLS/首份受管空冒烟通过；最新 UI 类型检查与发布者 E2E 见
+  `docs/mobile-readonly-acceptance.md`。
 
 > 以上证据只标记实际完成项；未执行/待部署负责人确认项保持 PENDING/未勾选，不因上线而假装全部完成。
 > 明文/密钥禁止出现在本文件、聊天或仓库；私密取回命令仅在受信本机终端执行并注意终端会打印明文。
+
+## 10. 凭证轮换工具与 2026-09-11 真实执行（独立工具，仅自有资源）
+
+本节面向操作人员，说明独立轮换工具 `scripts/rotate-mobile-readonly.py` 的用途、安全边界与一次
+已授权真实执行的结果；**不含**任何口令/token/Authorization/digest 明文。
+
+### 10.1 工具定位与安全边界
+
+- 该工具独立于 `deploy-mobile-readonly.py`，**只负责凭证轮换**，不替代部署/探针/冒烟；
+  不得用于 `credentials --reuse`、`probe-tls`、`smoke` 等其它用途。
+- 四个子命令：
+  - `rotate`：发起一次轮换（生成新凭证、暂存、写远端摘要、重启自有容器、验证、提交正式 Keychain）。
+  - `status --transaction <ID>`：**只读**判定本地事务阶段与远端状态，不写文件、不取锁、不生成凭证、不清锁。
+  - `resume --transaction <ID>`：从失败/中断点继续未完成事务。
+  - `rollback --transaction <ID>`：将远端摘要与正式 Keychain 回写到旧凭证。
+- 仅允许轮换**自有** `relocation-mobile-readonly` 服务：只替换自有 `credentials.json` 的摘要并重启
+  自有容器；绝不触碰主站、既有 vhost/证书、DNS、安全组、防火墙、镜像或业务快照。
+- 任何异常/超时/状态不确定一律**停止并保留恢复材料**，不自动重试、不自动回滚；由人工以只读
+  `status` 判定后再决定 `resume`/`rollback`。
+- 明文只存在于内存、`security -i` 的 stdin、curl 配置 stdin 与 Keychain；绝不进入 argv/环境变量/
+  明文文件/聊天/日志，也不打印口令、token、Authorization 或 digest 值。
+- 现状：截至 2026-09-11，仅 `rotate` 在生产实际执行过一次；`resume`/`rollback` **未在生产演练**。
+
+### 10.2 2026-09-11 真实执行证据（脱敏）
+
+- 经人工授权执行一次：`python3 scripts/rotate-mobile-readonly.py rotate`，退出码 0，输出
+  `ROTATE_OK 7a2e614374318c85759e7ef35112db68 phase=complete`（事务 ID 为随机 hex，非 secret）。
+- 过程证据：verify 阶段 TLS 角色矩阵 + nginx 基线核对通过，新凭证生效；commit 阶段正式 Keychain
+  更新并回读一致，恢复材料保留。
+- 影响范围：仅替换自有凭证摘要并重启自有 `relocation-mobile-readonly` 容器；未发生 PUT 写业务，
+  未生成/替换任何快照，既有真实 `current.json` 快照哈希与容器配置不变。
+- 角色矩阵（正常 TLS，无响应正文/secret 输出）：旧 viewer/upload 均失效；新 viewer `HEAD /`=200、
+  新 upload `GET /api/meta`=200、upload 业务 `GET /api/overview`=403、viewer `GET /api/publish`=403、
+  upload `GET /api/publish`=405。
+- 恢复材料：本地轮换事务目录 `~/.cache/relocation-mobile-readonly/rotations` 及 4 条临时 Keychain
+  条目保留；本文不记录其具体 secret/digest 值。
+- 离线验证：本轮轮换相关 148 项 Python 用例与部署侧 93 项用例全部通过（failguard 保证不发起
+  未 mock 的真实外部调用）。
+- 历史诚实说明：早期第一轮轮换用例曾漏 mock，导致执行过一次**只读**的 `docker inspect`（未写任何
+  远端状态）；随后已收紧轮换工具测试的离线 failguard，此后不再发生未 mock 的真实外部调用。
+  相关安全修复与本文档更新尚未提交。
