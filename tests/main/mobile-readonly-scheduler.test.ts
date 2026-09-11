@@ -180,21 +180,37 @@ async function enableConfigured(runtime: MobileReadonlyPublishRuntime): Promise<
 }
 
 describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止语义（tasks 4.1）', () => {
-  it('start 触发一次立即检查（含变化时上传），随后按约 2 分钟周期调度', async () => {
+  it('启动检查 + 用户启用即时检查 + 120s 周期：启用返回即时结果、既有定时器不被取消/重复，变化仅按周期增量发布一次', async () => {
     const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
     try {
-      await enableConfigured(ctx.runtime);
+      // 1) 禁用状态先 start：立即任务触发后不发布，排入单一 120s 周期。
       ctx.runtime.start();
-      expect(ctx.timer.pendingDelays).toEqual([0]); // 启动检查一次（立即）
-
+      expect(ctx.timer.pendingDelays).toEqual([0]);
       await ctx.timer.fireNext();
-      expect(ctx.uploads.length).toBe(1);
-      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]); // ~2 分钟周期
+      expect(ctx.uploads.length).toBe(0);
+      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
 
-      // 无写入 → 下一周期不重复上传（无 meta、无 upload）。
+      // 2) 配置并 await setEnabled(true)：即时检查真实发布并返回成功 DTO；
+      //    既有 120s 定时器保持原样（不取消、不重复追加）。
+      await ctx.runtime.configure({ target: 'https://publish.example.com', token: 'secret-token-1' });
+      const enabled = await ctx.runtime.setEnabled(true);
+      expect(enabled.lastSuccessfulAt).toBe(FIXED_ISO);
+      expect(enabled.lastFailedCode).toBeNull();
+      expect(ctx.uploads.length).toBe(1);
+      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+
+      // 3) 产生一笔合成业务变化 → 触发已排定的 120s 周期，恰好增量发布一次；
+      //    仍只保留单一 120s 下一周期，无重复定时器。
+      seedSyntheticProject(ctx.db, { index: 4 });
+      await ctx.timer.fireNext();
+      expect(ctx.uploads.length).toBe(2);
+      expect(ctx.runtime.getStatus().lastFailedCode).toBeNull();
+      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+
+      // 4) 无新变化 → 下一定时周期不重复上传。
       const metaBefore = ctx.readMetaCalls();
       await ctx.timer.fireNext();
-      expect(ctx.uploads.length).toBe(1);
+      expect(ctx.uploads.length).toBe(2);
       expect(ctx.readMetaCalls()).toBe(metaBefore);
       expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
     } finally {
@@ -221,28 +237,27 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
     }
   });
 
-  it('首个定时周期远程传输失败如实可见，下一自动周期无需人工介入即补发布（不再有 OS 离线短路）', async () => {
+  it('首个自动周期远程传输失败如实可见，下一自动周期无需人工介入即补发布（不再有 OS 离线短路）', async () => {
     const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
     try {
-      await enableConfigured(ctx.runtime);
       let transportFails = true;
       const healthyUpload = ctx.remote.upload;
       ctx.remote.upload = async (body) => {
         if (transportFails) return { kind: 'transport', code: 'TIMEOUT' };
         return healthyUpload(body);
       };
-      ctx.runtime.start();
-      expect(ctx.timer.pendingDelays).toEqual([0]);
-
-      // 首个周期：实际传输失败（非离线预检）→ 无成功发布且失败码可见，并继续排入下一周期。
-      await ctx.timer.fireNext();
+      // setEnabled(true) 现立即受控执行首个周期：实际传输失败（非离线预检）→
+      // 无成功发布且失败码可见。
+      await ctx.runtime.configure({ target: 'https://publish.example.com', token: 'secret-token-1' });
+      await ctx.runtime.setEnabled(true);
       expect(ctx.uploads.length).toBe(0);
       expect(ctx.runtime.getStatus().lastFailedCode).not.toBeNull();
       expect(ctx.runtime.getStatus().lastSuccessfulAt).toBeNull();
-      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
 
       // 下一自动定时周期：恢复传输后自动补发布并清除失败码，无需人工 checkNow。
       transportFails = false;
+      ctx.runtime.start();
+      expect(ctx.timer.pendingDelays).toEqual([0]);
       await ctx.timer.fireNext();
       expect(ctx.uploads.length).toBe(1);
       expect(ctx.runtime.getStatus().lastFailedCode).toBeNull();
@@ -256,7 +271,6 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
   it('single-flight：同一时刻至多一个发布周期，新变化排队到后续周期', async () => {
     const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
     try {
-      await enableConfigured(ctx.runtime);
       let started = deferred<void>();
       let gate = deferred<void>();
       let inflight = 0;
@@ -272,15 +286,16 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
         return { kind: 'accepted' };
       };
 
-      const first = ctx.runtime.checkNow();
+      // setEnabled(true) 的即时检查即为首个（被挂起的）周期；期间再 checkNow 必须排队。
+      await ctx.runtime.configure({ target: 'https://publish.example.com', token: 'secret-token-1' });
+      const enabling = ctx.runtime.setEnabled(true);
       await started.promise;
       const second = ctx.runtime.checkNow();
       gate.resolve();
-      await first;
+      await enabling;
       await second;
 
-      // 两个并发的周期未并发上传（上传期间 maxInflight=1，仅一次 upload 调用）；
-      // 第二个排队周期结束后看到无变化，不再发起 meta/upload。
+      // 两个并发的周期未并发上传（上传期间 maxInflight=1，仅一次 upload 调用）。
       expect(maxInflight).toBe(1);
       expect(uploadCalls).toBe(1);
       expect(ctx.readMetaCalls()).toBe(1);
@@ -312,7 +327,6 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
   it('在途 upload 未决时 stop，旧 upload 随后 reject 不推进成功/失败，也不再续排定时器或发请求', async () => {
     const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
     try {
-      await enableConfigured(ctx.runtime);
       const started = deferred<void>();
       const gate = deferred<MobileReadonlyPublishOutcome>();
       let uploadCalls = 0;
@@ -326,16 +340,18 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
         return healthyUpload(body);
       };
 
+      // setEnabled(true) 的即时检查即为被挂起的首个周期；start 建立定时器以备断言 stop 取消。
+      await ctx.runtime.configure({ target: 'https://publish.example.com', token: 'secret-token-1' });
       ctx.runtime.start();
       expect(ctx.timer.pendingDelays).toEqual([0]);
-      const fire = ctx.timer.fireNext();
+      const enabling = ctx.runtime.setEnabled(true);
       await started.promise;
-      // 上传在途 → 本周期尚未完成，因此还没有续排下一周期。
-      expect(ctx.timer.pendingDelays).toEqual([]);
+      // 上传在途 → 本周期尚未完成。
+      expect(ctx.timer.pendingDelays).toEqual([0]);
 
       ctx.runtime.stop();
       gate.reject(new Error('late-stop-upload-secret'));
-      await fire;
+      await enabling;
       await settle();
 
       const status = ctx.runtime.getStatus();
@@ -479,13 +495,12 @@ describe('授权变更在途周期失效（issue5）', () => {
         remoteFactory: () => remote,
       });
       await runtime.configure({ target: 'https://publish.example.com', token: 'tok' });
-      await runtime.setEnabled(true);
-
-      const cycle = runtime.checkNow();
+      // setEnabled(true) 的即时检查即为被挂起的首个周期；期间停用须中止且不写旧状态。
+      const enabling = runtime.setEnabled(true);
       await metaStarted;
       await runtime.setEnabled(false);
       metaGate.resolve(unpublishedMetaResult());
-      await cycle;
+      await enabling;
 
       expect(uploadCalls).toBe(0);
       expect(metaCalls).toBe(1);
@@ -717,13 +732,12 @@ describe('授权变更在途周期失效（issue5）', () => {
         remoteFactory: () => remote,
       });
       await runtime.configure({ target: 'https://publish.example.com', token: 'tok-decrypt' });
-      await runtime.setEnabled(true);
-
-      const cycle = runtime.checkNow();
+      // setEnabled(true) 的即时检查即为被挂起的首个周期；期间解密失败须中止。
+      const enabling = runtime.setEnabled(true);
       await metaStarted;
       state.failDecrypt = true;
       metaGate.resolve(unpublishedMetaResult());
-      await cycle;
+      await enabling;
 
       expect(uploadCalls).toBe(0);
       const status = runtime.getStatus();
@@ -782,13 +796,12 @@ describe('授权变更在途周期失效（issue5）', () => {
         remoteFactory: () => remote,
       });
       await runtime.configure({ target: 'https://publish.example.com', token: 'tok-storage' });
-      await runtime.setEnabled(true);
-
-      const cycle = runtime.checkNow();
+      // setEnabled(true) 的即时检查即为被挂起的首个周期；期间加密后端不可用须中止。
+      const enabling = runtime.setEnabled(true);
       await metaStarted;
       state.available = false;
       metaGate.resolve(unpublishedMetaResult());
-      await cycle;
+      await enabling;
 
       expect(uploadCalls).toBe(0);
       const status = runtime.getStatus();

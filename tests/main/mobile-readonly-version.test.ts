@@ -309,8 +309,8 @@ describe('三分支恢复与有界重试（tasks 4.4）', () => {
         remoteFactory: () => remoteOverride,
       });
       await enableConfigured(ctx.runtime);
+      // setEnabled(true) 现会立即受控执行首个周期；不再额外 checkNow 造成双重周期。
       // 首次周期：元数据读取失败 → 不上传、不推进指纹。
-      await ctx.runtime.checkNow();
       expect(uploadCalls).toBe(0);
       expect(metaFails).toBe(1);
       expect(lastSuccessfulFingerprintOf(ctx.dir)).toBeNull();
@@ -339,9 +339,9 @@ describe('三分支恢复与有界重试（tasks 4.4）', () => {
         remoteFactory: () => remoteOverride,
       });
       await enableConfigured(ctx.runtime);
-      await ctx.runtime.checkNow();
 
-      // 每次分支 2（同版本重传）消耗一次尝试，最后达到上限并停止。
+      // setEnabled(true) 已受控执行首个周期：每次分支 2（同版本重传）消耗一次尝试，
+      // 最后达到上限并停止。
       expect(uploadBodies.length).toBe(MOBILE_READONLY_MAX_ATTEMPTS_PER_TICK);
       const status = ctx.runtime.getStatus();
       expect(status.lastFailedCode).toBe('RETRY_LIMIT');

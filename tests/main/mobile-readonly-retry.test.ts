@@ -84,12 +84,12 @@ describe('失败不阻断本地，下一周期自动重试（tasks 4.8）', () =
         remoteFactory: () => remote,
       });
       await runtime.configure({ target: 'https://publish.example.com', token: 'token-1' });
-      await runtime.setEnabled(true);
 
-      // 上传失败周期：记录失败码，不影响本地继续写业务。
+      // 上传失败周期：setEnabled(true) 现会立即受控执行首个周期（记录失败码），
+      // 不影响本地继续写业务。
       health.uploadFails = true;
       health.metaFails = true;
-      await runtime.checkNow();
+      await runtime.setEnabled(true);
       expect(runtime.getStatus().lastFailedCode).toBe('META_READ_FAILED');
       expect(runtime.getStatus().lastSuccessfulAt).toBeNull();
 

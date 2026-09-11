@@ -1,7 +1,7 @@
 {
   "name": "relocation-service-workbench",
   "productName": "搬迁服务工作台",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "搬迁服务工作台 - 个人使用的 Windows 桌面应用（Electron + React + TypeScript + 本地 SQLite）",
   "author": "搬迁服务工作台团队",
   "main": ".webpack/main",

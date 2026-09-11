@@ -558,8 +558,19 @@ export function createMobileReadonlyPublishRuntime(
       }
       if (!enabled) pending = null;
       authorizationGeneration += 1;
-      // 重新启用视为一次新的外发窗口：先读元数据核对远端（避免停机期间远端丢数据不被发现）。
-      if (enabled) recoveryConfirmed = false;
+      if (enabled) {
+        // 重新启用视为一次新的外发窗口：先读元数据核对远端（避免停机期间远端丢数据不被发现）。
+        recoveryConfirmed = false;
+        // 用户显式启用后立即受控执行一次检查：让 IPC 在返回前同步等到首个
+        // success/failure 状态，UI 无需依赖后续 120s 后台周期才有可观测结果。
+        // - setEnabled 不在周期串行链上，checkNow 会排在链尾等待在途周期，顺序正常；
+        // - 网络单请求有界（内建 30s 超时）且失败以内建码返回而非抛出，等待时间有界；
+        // - 等待期间用户若停用/换目标/换 token，authorizationGeneration 递增使在途检查
+        //   不写入旧授权状态，最终返回 runtime.getStatus() 的当前状态；
+        // - 本调用不触碰既有 120s 定时器（checkNow 不取消也不重复 scheduleNext），
+        //   启动时已启用不额外触发（仅用户显式启用走此路径）。
+        await runtime.checkNow();
+      }
       return runtime.getStatus();
     },
     getStatus(): MobileReadonlyStatusDto {

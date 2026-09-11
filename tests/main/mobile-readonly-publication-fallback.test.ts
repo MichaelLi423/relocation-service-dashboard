@@ -172,7 +172,7 @@ describe('readFingerprint 抛错兜底（bounded 修复 B）', () => {
       });
       await enableConfigured(runtime);
 
-      await runtime.checkNow();
+      // setEnabled(true) 已立即受控执行首个周期：readFingerprint 抛错 → 固定兜底码。
       const failed = runtime.getStatus();
       expect(failed.lastFailedCode).toBe('LOCAL_SNAPSHOT_FAILED');
       expect(failed.lastFailedAt).toBe(FIXED_ISO);
@@ -238,19 +238,20 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
           return remote;
         },
       });
-      await enableConfigured(runtime);
+      await runtime.configure({ target: 'https://publish.example.com', token: 'token-fallback' });
       runtime.start();
       expect(timer.pendingDelays).toEqual([0]);
 
-      // 首个自动周期：factory 抛错 → 固定兜底码，且未阻断后续调度。
-      await timer.fireNext();
+      // setEnabled(true) 立即受控执行首个周期：factory 抛错 → 固定兜底码。
+      await runtime.setEnabled(true);
       expect(runtime.getStatus().lastFailedCode).toBe('LOCAL_PUBLICATION_FAILED');
       expect(metaCalls).toBe(0);
       expect(JSON.stringify(runtime.getStatus())).not.toContain(rawSecret);
       expect(resultsText(dir)).not.toContain(rawSecret);
-      expect(timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+      // 即时检查不触碰既有定时器：start 的首轮仍待触发。
+      expect(timer.pendingDelays).toEqual([0]);
 
-      // 下一自动周期（无人工 checkNow）：factory 恢复 → 成功发布并清除失败码。
+      // 下一自动定时周期（无人工 checkNow）：factory 恢复 → 成功发布并清除失败码。
       await timer.fireNext();
       expect(uploads.length).toBe(1);
       expect(runtime.getStatus().lastFailedCode).toBeNull();
@@ -300,20 +301,21 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
         safeStorage: mockSafeStorage(),
         remoteFactory: () => remote,
       });
-      await enableConfigured(runtime);
+      await runtime.configure({ target: 'https://publish.example.com', token: 'token-fallback' });
       runtime.start();
       expect(timer.pendingDelays).toEqual([0]);
 
-      // 首个自动周期：readMeta 意外 reject → 固定兜底码且不保存原始 message/code。
-      await timer.fireNext();
+      // setEnabled(true) 立即受控执行首个周期：readMeta 意外 reject → 固定兜底码，
+      // 且不保存原始 message/code。
+      await runtime.setEnabled(true);
       expect(runtime.getStatus().lastFailedCode).toBe('LOCAL_PUBLICATION_FAILED');
       expect(JSON.stringify(runtime.getStatus())).not.toContain(rawSecret);
       expect(JSON.stringify(runtime.getStatus())).not.toContain('RAW_CODE');
       expect(resultsText(dir)).not.toContain(rawSecret);
       expect(resultsText(dir)).not.toContain('RAW_CODE');
-      expect(timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+      expect(timer.pendingDelays).toEqual([0]);
 
-      // 下一自动周期（无人工 checkNow）：元数据恢复 → 成功发布并清除失败码。
+      // 下一自动定时周期（无人工 checkNow）：元数据恢复 → 成功发布并清除失败码。
       await timer.fireNext();
       expect(uploads.length).toBe(1);
       expect(runtime.getStatus().lastFailedCode).toBeNull();
@@ -364,8 +366,7 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
       });
       await enableConfigured(runtime);
 
-      // 周期 1：捕获候选 P1 后 upload 意外 reject。
-      await runtime.checkNow();
+      // 周期 1（setEnabled 的即时检查）：捕获候选 P1 后 upload 意外 reject。
       expect(runtime.getStatus().lastFailedCode).toBe('LOCAL_PUBLICATION_FAILED');
       expect(uploads.length).toBe(1);
       const originalBody = uploads[0];
@@ -446,13 +447,13 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
         safeStorage: mockSafeStorage(),
         remoteFactory: () => remote,
       });
-      await enableConfigured(runtime);
-
-      const cycle = runtime.checkNow();
+      await runtime.configure({ target: 'https://publish.example.com', token: 'token-fallback' });
+      // setEnabled 的即时检查即为被挂起的首个周期；期间停用 → 代际失效，旧 reject 不写状态。
+      const enabling = runtime.setEnabled(true);
       await started.promise;
       await runtime.setEnabled(false);
       gate.reject(new Error(rawSecret));
-      await cycle;
+      await enabling;
 
       const status = runtime.getStatus();
       expect(status.enabled).toBe(false);
@@ -467,7 +468,6 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
       // 重新启用：旧候选已被停用清除，新周期按当前状态重新捕获（新 publicationId）并成功。
       const oldPublicationId = uploads[0].protocol.publicationId;
       await runtime.setEnabled(true);
-      await runtime.checkNow();
       expect(uploads.length).toBe(uploadsBefore + 1);
       expect(uploads[uploadsBefore].protocol.publicationId).not.toBe(oldPublicationId);
       expect(runtime.getStatus().lastSuccessfulAt).toBe(FIXED_ISO);
@@ -521,13 +521,12 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
         remoteFactory,
       });
       await runtime.configure({ target: 'https://a.example', token: 'tok-a' });
-      await runtime.setEnabled(true);
-
-      const cycle = runtime.checkNow();
+      // setEnabled 的即时检查即为被挂起的首个周期；期间换目标 → 代际失效。
+      const enabling = runtime.setEnabled(true);
       await started.promise;
       await runtime.configure({ target: 'https://b.example', token: 'tok-b' });
       gate.reject(new Error(rawSecret));
-      await cycle;
+      await enabling;
 
       const status = runtime.getStatus();
       expect(status.target).toBe('https://b.example');
@@ -537,7 +536,7 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
 
       // 换目标后旧在途候选不得复用：新目标周期必须生成新 publicationId。
       const oldPublicationId = uploads[0].protocol.publicationId;
-      await runtime.checkNow();
+      await runtime.setEnabled(true);
       expect(uploads.length).toBe(2);
       expect(targets[1]).toBe('https://b.example');
       expect(uploads[1].protocol.publicationId).not.toBe(oldPublicationId);
@@ -594,14 +593,12 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
         remoteFactory,
       });
       await runtime.configure({ target, token: 'token-old' });
-      await runtime.setEnabled(true);
-
-      const cycle = runtime.checkNow();
+      // setEnabled 的即时检查即为被挂起的首个周期；期间同目标仅换 token → 代际失效。
+      const enabling = runtime.setEnabled(true);
       await started.promise;
-      // 同目标、仅换 token → 代际失效；在途旧 upload 随后 reject 不得写入新状态。
       await runtime.configure({ target, token: 'token-new' });
       gate.reject(new Error(rawSecret));
-      await cycle;
+      await enabling;
 
       const status = runtime.getStatus();
       expect(status.target).toBe(target);
@@ -611,12 +608,101 @@ describe('未分类异常固定兜底码（bounded 修复 C）', () => {
       expect(resultsTextIfPresent(dir)).not.toContain(rawSecret);
 
       const oldPublicationId = uploads[0].protocol.publicationId;
-      await runtime.checkNow();
+      await runtime.setEnabled(true);
       expect(uploads.length).toBe(2);
       expect(factoryCredentials[factoryCredentials.length - 1]).toEqual({ target, token: 'token-new' });
       expect(uploads[1].protocol.publicationId).not.toBe(oldPublicationId);
       expect(runtime.getStatus().lastSuccessfulAt).toBe(FIXED_ISO);
       expect(resultsText(dir)).not.toContain('token-old');
+    } finally {
+      closeDatabase(db);
+    }
+  });
+});
+
+describe('启用立即受控执行一次检查（setEnabled(true) 返回即含即时结果）', () => {
+  it('成功：setEnabled(true) 返回的 DTO 已带 lastSuccessfulAt，并保留既有 120s 定时器不取消/不重复', async () => {
+    const { db, dir } = setupDb();
+    try {
+      const uploads: MobileReadonlyUploadBody[] = [];
+      let published = false;
+      const remote: MobileReadonlyRemote = {
+        readMeta: async () =>
+          published
+            ? {
+                ok: true,
+                metadata: {
+                  published: true,
+                  currentVersion: uploads.length,
+                  publicationId: uploads[uploads.length - 1].protocol.publicationId,
+                  publishedAt: FIXED_ISO,
+                  dataAsOf: FIXED_ISO,
+                  fingerprint: fingerprintOf(uploads[uploads.length - 1]),
+                },
+              }
+            : unpublishedMetaResult(),
+        upload: async (body) => {
+          uploads.push(body);
+          published = true;
+          return { kind: 'accepted' };
+        },
+      };
+      const timer = new ManualTimer();
+      const runtime = createMobileReadonlyPublishRuntime({
+        storageDir: dir,
+        db: () => db,
+        clock: new FixedClock(FIXED_ISO),
+        timer,
+        safeStorage: mockSafeStorage(),
+        remoteFactory: () => remote,
+      });
+      await runtime.configure({ target: 'https://publish.example.com', token: 'token-fallback' });
+      runtime.start();
+      expect(timer.pendingDelays).toEqual([0]);
+
+      // 不手动 checkNow：setEnabled 的返回 DTO 即为即时 success 结果。
+      const dto = await runtime.setEnabled(true);
+      expect(dto.enabled).toBe(true);
+      expect(dto.lastSuccessfulAt).toBe(FIXED_ISO);
+      expect(dto.lastFailedCode).toBeNull();
+      expect(uploads.length).toBe(1);
+      // 即时检查不取消/不重复既有 120s（此处尚为启动首轮 [0]）。
+      expect(timer.pendingDelays).toEqual([0]);
+
+      // 启动首轮触发后无新变化不上传；调度继续保持单一 120s 周期，无永久中断。
+      await timer.fireNext();
+      expect(uploads.length).toBe(1);
+      expect(runtime.getStatus().lastSuccessfulAt).toBe(FIXED_ISO);
+      expect(timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+    } finally {
+      closeDatabase(db);
+    }
+  });
+
+  it('元数据读取失败：setEnabled(true) 返回 DTO 为 META_READ_FAILED、无上传且无成功时间', async () => {
+    const { db, dir } = setupDb();
+    try {
+      let uploadCalls = 0;
+      const remote: MobileReadonlyRemote = {
+        readMeta: async () => ({ ok: false, code: 'META_READ_FAILED' }),
+        upload: async () => {
+          uploadCalls += 1;
+          return { kind: 'accepted' };
+        },
+      };
+      const runtime = createMobileReadonlyPublishRuntime({
+        storageDir: dir,
+        db: () => db,
+        clock: new FixedClock(FIXED_ISO),
+        timer: new ManualTimer(),
+        safeStorage: mockSafeStorage(),
+        remoteFactory: () => remote,
+      });
+      await runtime.configure({ target: 'https://publish.example.com', token: 'token-fallback' });
+      const dto = await runtime.setEnabled(true);
+      expect(dto.lastFailedCode).toBe('META_READ_FAILED');
+      expect(dto.lastSuccessfulAt).toBeNull();
+      expect(uploadCalls).toBe(0);
     } finally {
       closeDatabase(db);
     }

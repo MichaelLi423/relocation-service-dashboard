@@ -358,7 +358,9 @@ describe('桌面重启恢复（tasks 4.7）', () => {
     try {
       seedSyntheticProject(db, { index: 0 });
       const server = makeServer();
-      // 先建立 B 配置/token 并启用（持久化 enabled=true；不发布，不产生结果文件）。
+      // 先建立 B 配置/token 并启用（持久化 enabled=true）。setEnabled(true) 现会立即
+      // 受控执行首个周期；此处令元数据读取失败以保持「不产生成功发布/结果文件」的前置，
+      // 结果文件随后仍被旧格式内容覆盖。
       const runtime0 = createMobileReadonlyPublishRuntime({
         storageDir: dir,
         db: () => db,
@@ -368,8 +370,10 @@ describe('桌面重启恢复（tasks 4.7）', () => {
         remoteFactory: () => createRemote(server),
       });
       await runtime0.configure({ target: 'https://b.example', token: 'token-b' });
+      server.metaResult = 'failing';
       await runtime0.setEnabled(true);
       runtime0.stop();
+      server.metaResult = 'ok';
 
       // 手工写入无 target 绑定的旧格式结果：声称成功指纹=当前、时间为更早的 T。
       const current = readCurrentMobileReadonlyFingerprint(db);

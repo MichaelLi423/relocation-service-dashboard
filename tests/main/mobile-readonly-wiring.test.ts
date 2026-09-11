@@ -108,23 +108,33 @@ function setupDb(seed: (db: DatabaseSync) => void): { db: DatabaseSync; dir: str
 }
 
 describe('生产接线不依赖 OS 在线状态（bounded 修复 A）', () => {
-  it('模拟 OS 离线但假 HTTPS 成功：生产接线仍发布，且不调用 net.isOnline', async () => {
+  it('模拟 OS 离线但假 HTTPS 成功：启用即时检查后，生产默认定时器在业务变化时增量发布，且不调用 net.isOnline', async () => {
     harness.reset();
     const { db, dir } = setupDb((database) => seedSyntheticProject(database, { index: 0 }));
+    let bridge: ReturnType<typeof createMobileReadonlyPublicationBridge> | null = null;
     try {
-      const bridge = createMobileReadonlyPublicationBridge({ userDataDir: dir, db: () => db });
+      bridge = createMobileReadonlyPublicationBridge({ userDataDir: dir, db: () => db });
       expect(bridge.degraded()).toBe(false);
       await bridge.configure({ target: 'https://publish.example.com', token: 'token-wiring-prod' });
-      await bridge.setEnabled(true);
 
+      // 用户显式启用即受控执行一次检查：记录即时结果与基线上传数（避免用已成立条件等待）。
+      const enabled = await bridge.setEnabled(true);
+      expect(enabled.lastSuccessfulAt).not.toBeNull();
+      const uploadsAfterEnable = harness.uploads.length;
+      expect(uploadsAfterEnable).toBe(1);
+
+      // 产生一笔合成业务变化，随后启动**生产默认定时器**（非手动 timer），
+      // 等待默认路径的启动即时任务真正把上传数推到严格大于基线。
+      seedSyntheticProject(db, { index: 4 });
       bridge.start();
-      await waitFor(() => harness.uploads.length === 1);
+      await waitFor(() => harness.uploads.length > uploadsAfterEnable);
 
+      expect(harness.uploads.length).toBe(uploadsAfterEnable + 1);
       expect(harness.netIsOnline).not.toHaveBeenCalled();
       expect(bridge.getStatus().lastSuccessfulAt).not.toBeNull();
       expect(bridge.getStatus().lastFailedCode).toBeNull();
-      bridge.stop();
     } finally {
+      bridge?.stop();
       closeDatabase(db);
     }
   });

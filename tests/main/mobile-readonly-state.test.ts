@@ -455,8 +455,8 @@ describe('状态与配置持久化（tasks 4.6）', () => {
           }),
       });
       await runtime.configure({ target: 'https://publish.example.com', token: secretToken });
+      // setEnabled(true) 现会立即受控执行首个周期（不再额外 checkNow 造成双重周期）。
       await runtime.setEnabled(true);
-      await runtime.checkNow();
 
       // 上传阶段传输失败 + 恢复读取失败 → 归一化底层码 NETWORK_ERROR（非任意文本、非启动阶段码）。
       const status = runtime.getStatus();
@@ -523,8 +523,8 @@ describe('状态与配置持久化（tasks 4.6）', () => {
           }),
       });
       await runtime.configure({ target: 'https://publish.example.com', token: secretToken });
+      // setEnabled(true) 现会立即受控执行首个周期（不再额外 checkNow 造成双重周期）。
       await runtime.setEnabled(true);
-      await runtime.checkNow();
 
       // 阶段语义：PUT 的任意文本先被客户端归一为 NETWORK_ERROR；因恢复元数据有效走到
       // 「同版本重传」有界上限 → 最终失败码 RETRY_LIMIT（仍是无泄漏的规范化码）。
