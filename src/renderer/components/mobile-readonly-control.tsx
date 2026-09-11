@@ -20,6 +20,7 @@ const FAILURE_LABELS: Record<string, string> = {
   NOT_ENABLED: "发布尚未启用",
   STATE_WRITE_FAILED: "发布结果无法保存到本机，当前状态仅保留在内存中",
   LOCAL_SNAPSHOT_FAILED: "本次只读快照生成失败",
+  LOCAL_PUBLICATION_FAILED: "发布过程发生异常，将在下一周期重试",
   META_READ_FAILED: "无法读取云端发布版本",
   UNAUTHORIZED: "上传凭证校验失败，请检查配置",
   UPLOAD_REJECTED: "云端未接受本次发布",

@@ -17,6 +17,7 @@ import {
 } from '../../src/main/mobile-readonly/runtime';
 import type {
   MobileReadonlyMetaResult,
+  MobileReadonlyPublishOutcome,
   MobileReadonlyRemote,
   MobileReadonlyRemoteFactory,
 } from '../../src/main/mobile-readonly/remote';
@@ -50,10 +51,12 @@ function mockSafeStorage(): MobileReadonlySafeStorage {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 class ManualTimer implements MobileReadonlyTimer {
@@ -105,11 +108,10 @@ interface RuntimeCtx {
   readMetaCalls: () => number;
   timer: ManualTimer;
   remote: MobileReadonlyRemote;
-  setOnline: (value: boolean) => void;
   close: () => void;
 }
 
-function setupRuntime(seed: (db: DatabaseSync) => void, options: { online?: boolean } = {}): RuntimeCtx {
+function setupRuntime(seed: (db: DatabaseSync) => void): RuntimeCtx {
   const dir = makeTempDir('mobile-readonly-scheduler-');
   dirs.push(dir);
   const { db } = bootstrapDatabase({ dataDir: dir });
@@ -117,7 +119,6 @@ function setupRuntime(seed: (db: DatabaseSync) => void, options: { online?: bool
   const uploads: Array<{ publicationId: string }> = [];
   let metaCalls = 0;
   let unpublished = true;
-  let online = options.online ?? true;
   let fingerprint: MobileReadonlyFingerprint | null = null;
   const readMeta = async (): Promise<MobileReadonlyMetaResult> => {
     metaCalls += 1;
@@ -161,7 +162,6 @@ function setupRuntime(seed: (db: DatabaseSync) => void, options: { online?: bool
     timer,
     safeStorage: mockSafeStorage(),
     remoteFactory,
-    isOnline: () => online,
   });
   return {
     db,
@@ -170,9 +170,6 @@ function setupRuntime(seed: (db: DatabaseSync) => void, options: { online?: bool
     readMetaCalls: () => metaCalls,
     timer,
     remote,
-    setOnline: (value) => {
-      online = value;
-    },
     close: () => closeDatabase(db),
   };
 }
@@ -224,18 +221,33 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
     }
   });
 
-  it('断网时不发请求，恢复联网后下一周期自动补发布', async () => {
-    const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }), { online: false });
+  it('首个定时周期远程传输失败如实可见，下一自动周期无需人工介入即补发布（不再有 OS 离线短路）', async () => {
+    const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
     try {
       await enableConfigured(ctx.runtime);
-      await ctx.runtime.checkNow();
-      expect(ctx.uploads.length).toBe(0);
-      expect(ctx.readMetaCalls()).toBe(0);
+      let transportFails = true;
+      const healthyUpload = ctx.remote.upload;
+      ctx.remote.upload = async (body) => {
+        if (transportFails) return { kind: 'transport', code: 'TIMEOUT' };
+        return healthyUpload(body);
+      };
+      ctx.runtime.start();
+      expect(ctx.timer.pendingDelays).toEqual([0]);
 
-      ctx.setOnline(true);
-      await ctx.runtime.checkNow();
-      expect(ctx.readMetaCalls()).toBe(1);
+      // 首个周期：实际传输失败（非离线预检）→ 无成功发布且失败码可见，并继续排入下一周期。
+      await ctx.timer.fireNext();
+      expect(ctx.uploads.length).toBe(0);
+      expect(ctx.runtime.getStatus().lastFailedCode).not.toBeNull();
+      expect(ctx.runtime.getStatus().lastSuccessfulAt).toBeNull();
+      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
+
+      // 下一自动定时周期：恢复传输后自动补发布并清除失败码，无需人工 checkNow。
+      transportFails = false;
+      await ctx.timer.fireNext();
       expect(ctx.uploads.length).toBe(1);
+      expect(ctx.runtime.getStatus().lastFailedCode).toBeNull();
+      expect(ctx.runtime.getStatus().lastSuccessfulAt).toBe(FIXED_ISO);
+      expect(ctx.timer.pendingDelays).toEqual([MOBILE_READONLY_PERIODIC_INTERVAL_MS]);
     } finally {
       ctx.close();
     }
@@ -292,6 +304,49 @@ describe('调度器：启动一次 + 周期 ≈2 分钟 + single-flight + 停止
       // 直接 checkNow 在 stopped 状态下立即返回、不发起请求。
       await ctx.runtime.checkNow();
       expect(ctx.readMetaCalls()).toBe(1);
+    } finally {
+      ctx.close();
+    }
+  });
+
+  it('在途 upload 未决时 stop，旧 upload 随后 reject 不推进成功/失败，也不再续排定时器或发请求', async () => {
+    const ctx = setupRuntime((db) => seedSyntheticProject(db, { index: 0 }));
+    try {
+      await enableConfigured(ctx.runtime);
+      const started = deferred<void>();
+      const gate = deferred<MobileReadonlyPublishOutcome>();
+      let uploadCalls = 0;
+      const healthyUpload = ctx.remote.upload;
+      ctx.remote.upload = async (body) => {
+        uploadCalls += 1;
+        if (uploadCalls === 1) {
+          started.resolve();
+          return gate.promise; // 真实未决 Promise：cycle 尚未完成
+        }
+        return healthyUpload(body);
+      };
+
+      ctx.runtime.start();
+      expect(ctx.timer.pendingDelays).toEqual([0]);
+      const fire = ctx.timer.fireNext();
+      await started.promise;
+      // 上传在途 → 本周期尚未完成，因此还没有续排下一周期。
+      expect(ctx.timer.pendingDelays).toEqual([]);
+
+      ctx.runtime.stop();
+      gate.reject(new Error('late-stop-upload-secret'));
+      await fire;
+      await settle();
+
+      const status = ctx.runtime.getStatus();
+      expect(status.lastFailedCode).toBeNull(); // 旧授权异常不得写入失败
+      expect(status.lastSuccessfulAt).toBeNull(); // 成功也不得推进
+      expect(ctx.timer.pendingDelays).toEqual([]); // stop 后不再续排
+      expect(uploadCalls).toBe(1); // 在途请求本身已发出，但无后续
+
+      await ctx.runtime.checkNow(); // stopped → 立即返回
+      expect(uploadCalls).toBe(1); // 仍无后续请求
+      expect(ctx.timer.pendingDelays).toEqual([]);
     } finally {
       ctx.close();
     }

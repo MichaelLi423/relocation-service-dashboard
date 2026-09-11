@@ -97,8 +97,6 @@ export interface MobileReadonlyRuntimeOptions {
   io?: MobileReadonlyFileIo;
   /** 远程客户端工厂（上传/元数据均只走此工厂返回的 remote）。 */
   remoteFactory: MobileReadonlyRemoteFactory;
-  /** 网络在线适配器（默认恒 true）。 */
-  isOnline?: () => boolean;
   /** 周期检查间隔（默认 MOBILE_READONLY_PERIODIC_INTERVAL_MS）。 */
   periodicIntervalMs?: number;
   /** 每 tick 三分支重试上限（默认 MOBILE_READONLY_MAX_ATTEMPTS_PER_TICK）。 */
@@ -128,7 +126,6 @@ export function createMobileReadonlyPublishRuntime(
 ): MobileReadonlyPublishRuntime {
   const io: MobileReadonlyFileIo = options.io ?? realMobileReadonlyFileIo;
   const clock: Clock = options.clock ?? new SystemClock();
-  const isOnline = options.isOnline ?? (() => true);
   const periodicIntervalMs = options.periodicIntervalMs ?? MOBILE_READONLY_PERIODIC_INTERVAL_MS;
   const maxAttemptsPerTick = options.maxAttemptsPerTick ?? MOBILE_READONLY_MAX_ATTEMPTS_PER_TICK;
 
@@ -324,103 +321,127 @@ export function createMobileReadonlyPublishRuntime(
 
   async function performCycle(): Promise<void> {
     if (stopped) return;
-    if (!isOnline()) return;
 
     const auth = authorizationState();
     if (!auth.enabled) return;
     const generation = authorizationGeneration;
-    const remote = options.remoteFactory({ target: auth.target as string, token: auth.token as string });
 
-    const currentFingerprint = readFingerprint();
-    const baselineMatches =
-      pending === null &&
-      sameMobileReadonlyFingerprint(memoryResults.lastSuccessfulFingerprint, currentFingerprint);
+    try {
+      // 不做 OS 在线预检：直接发起实际请求，以真实 HTTPS 结果为准（联网判断由请求本身决定）。
+      const remote = options.remoteFactory({ target: auth.target as string, token: auth.token as string });
 
-    // 无在途候选、本地基线一致且本实例已「恢复确认」→ 周期无变化，不打扰远端
-    // （如实保留最近发布状态；确认只由 基线+远端同指纹一致 或 候选成功/幂等 建立）。
-    if (recoveryConfirmed && baselineMatches) {
-      return;
-    }
-
-    // 启动/重启/恢复一律先读非业务版本元数据（三分支恢复的前提）；即使持久化指纹与当前一致，
-    // 也要确认远端仍发布了同一指纹（远端丢文件/清空必须保守重发，含空集合）。
-    // 注意：元数据读取成功本身不构成确认（远端可能尚未发布/同版本待重传）。
-    const metaResult = await remote.readMeta();
-    if (!isAuthorizationCurrent(generation)) return;
-    if (!metaResult.ok) {
-      recordFailure(MOBILE_READONLY_REMOTE_CODES.META_READ_FAILED);
-      return; // 保留 pending/未确认，下一周期再试，不推进成功指纹
-    }
-    const metadata = metaResult.metadata;
-
-    // 本地基线==当前指纹 且 远端仍发布同一指纹 → 一致：无需上传，也不改写最近成功状态。
-    if (baselineMatches && metadata.published && sameMobileReadonlyFingerprint(metadata.fingerprint, currentFingerprint)) {
-      recoveryConfirmed = true;
-      return;
-    }
-    // 其余情形（远端尚未发布/远端丢数据/本地持久化基线缺失或不同）→ 保守捕获当前快照并发布。
-    // 绝不因「远端刚好同指纹」就在没有本地持久化成功/在途候选时凭空确认成功。
-
-    let candidate = pending;
-    if (candidate === null) {
-      if (!isAuthorizationCurrent(generation)) return;
-      candidate = tryCapture(metadata.currentVersion);
-      if (candidate === null) return;
-    }
-    let attempts = 0;
-    while (attempts < maxAttemptsPerTick) {
-      attempts += 1;
-      const outcome = await remote.upload(uploadBody(candidate));
-      if (!isAuthorizationCurrent(generation)) return;
-
-      if (outcome.kind === 'accepted') {
-        pending = null;
-        recordAccepted(candidate.fingerprint);
-        return;
-      }
-      if (outcome.kind === 'rejected') {
-        pending = candidate;
-        recordFailure(outcome.code);
+      let currentFingerprint: MobileReadonlyFingerprint;
+      try {
+        currentFingerprint = readFingerprint();
+      } catch {
+        // 本地指纹读取失败：不读元数据/不上传/不推进成功指纹；授权仍当前时如实记录，
+        // 不持久化原始异常（message/业务内容/路径），下一周期可恢复。
+        if (isAuthorizationCurrent(generation)) {
+          recordFailure(MOBILE_READONLY_LOCAL_CODES.LOCAL_SNAPSHOT_FAILED);
+        }
         return;
       }
 
-      // transport（结果不确定）先读元数据；conflict 已携带元数据。
-      let reconcile: MobileReadonlyPublishMetadata;
-      if (outcome.kind === 'conflict') {
-        reconcile = outcome.metadata;
-      } else {
-        const meta2 = await remote.readMeta();
+      const baselineMatches =
+        pending === null &&
+        sameMobileReadonlyFingerprint(memoryResults.lastSuccessfulFingerprint, currentFingerprint);
+
+      // 无在途候选、本地基线一致且本实例已「恢复确认」→ 周期无变化，不打扰远端
+      // （如实保留最近发布状态；确认只由 基线+远端同指纹一致 或 候选成功/幂等 建立）。
+      if (recoveryConfirmed && baselineMatches) {
+        return;
+      }
+
+      // 启动/重启/恢复一律先读非业务版本元数据（三分支恢复的前提）；即使持久化指纹与当前一致，
+      // 也要确认远端仍发布了同一指纹（远端丢文件/清空必须保守重发，含空集合）。
+      // 注意：元数据读取成功本身不构成确认（远端可能尚未发布/同版本待重传）。
+      const metaResult = await remote.readMeta();
+      if (!isAuthorizationCurrent(generation)) return;
+      if (!metaResult.ok) {
+        recordFailure(MOBILE_READONLY_REMOTE_CODES.META_READ_FAILED);
+        return; // 保留 pending/未确认，下一周期再试，不推进成功指纹
+      }
+      const metadata = metaResult.metadata;
+
+      // 本地基线==当前指纹 且 远端仍发布同一指纹 → 一致：无需上传，也不改写最近成功状态。
+      if (baselineMatches && metadata.published && sameMobileReadonlyFingerprint(metadata.fingerprint, currentFingerprint)) {
+        recoveryConfirmed = true;
+        return;
+      }
+      // 其余情形（远端尚未发布/远端丢数据/本地持久化基线缺失或不同）→ 保守捕获当前快照并发布。
+      // 绝不因「远端刚好同指纹」就在没有本地持久化成功/在途候选时凭空确认成功。
+
+      let candidate = pending;
+      if (candidate === null) {
         if (!isAuthorizationCurrent(generation)) return;
-        if (!meta2.ok) {
-          pending = candidate;
-          recordFailure(meta2.code);
+        candidate = tryCapture(metadata.currentVersion);
+        if (candidate === null) return;
+      }
+      // 进入上传前即持有候选：即使 remote.upload 意外 reject，也保留下轮以同一 publicationId/
+      // 内容/expectedCurrentVersion 读取元数据幂等恢复，不生成第三候选。
+      pending = candidate;
+      let attempts = 0;
+      while (attempts < maxAttemptsPerTick) {
+        attempts += 1;
+        const outcome = await remote.upload(uploadBody(candidate));
+        if (!isAuthorizationCurrent(generation)) return;
+
+        if (outcome.kind === 'accepted') {
+          pending = null;
+          recordAccepted(candidate.fingerprint);
           return;
         }
-        reconcile = meta2.metadata;
-      }
+        if (outcome.kind === 'rejected') {
+          pending = candidate;
+          recordFailure(outcome.code);
+          return;
+        }
 
-      // 三分支：
-      if (reconcile.publicationId === candidate.publicationId) {
-        // (1) 已被接受：确认成功并保存候选捕获时指纹。
-        pending = null;
-        recordAccepted(candidate.fingerprint);
-        return;
+        // transport（结果不确定）先读元数据；conflict 已携带元数据。
+        let reconcile: MobileReadonlyPublishMetadata;
+        if (outcome.kind === 'conflict') {
+          reconcile = outcome.metadata;
+        } else {
+          const meta2 = await remote.readMeta();
+          if (!isAuthorizationCurrent(generation)) return;
+          if (!meta2.ok) {
+            pending = candidate;
+            recordFailure(meta2.code);
+            return;
+          }
+          reconcile = meta2.metadata;
+        }
+
+        // 三分支：
+        if (reconcile.publicationId === candidate.publicationId) {
+          // (1) 已被接受：确认成功并保存候选捕获时指纹。
+          pending = null;
+          recordAccepted(candidate.fingerprint);
+          return;
+        }
+        if (reconcile.currentVersion === candidate.expectedCurrentVersion) {
+          // (2) 版本未前进 → 原样重传同一候选（publicationId/内容/expectedCurrentVersion 不变）。
+          continue;
+        }
+        // (3) 版本前进且 publicationId 不同 → 冲突：重新捕获候选、以元数据当前版本为新 expected。
+        if (!isAuthorizationCurrent(generation)) return;
+        const fresh = tryCapture(reconcile.currentVersion);
+        if (fresh === null) return;
+        candidate = fresh;
+        pending = candidate;
       }
-      if (reconcile.currentVersion === candidate.expectedCurrentVersion) {
-        // (2) 版本未前进 → 原样重传同一候选（publicationId/内容/expectedCurrentVersion 不变）。
-        continue;
-      }
-      // (3) 版本前进且 publicationId 不同 → 冲突：重新捕获候选、以元数据当前版本为新 expected。
       if (!isAuthorizationCurrent(generation)) return;
-      const fresh = tryCapture(reconcile.currentVersion);
-      if (fresh === null) return;
-      candidate = fresh;
+      // 单 tick 内达到有界重试上限：保留候选（未确认），下周期再试，不产生死循环。
       pending = candidate;
+      recordFailure(MOBILE_READONLY_REMOTE_CODES.RETRY_LIMIT);
+    } catch {
+      // 未分类异常（remoteFactory/上传/元数据等意外 reject）：仅在授权代际仍当前（未停止/未停用/
+      // 目标与 token 未变）时记录固定本地兜底码，不保存原始 message/error.code/业务内容；
+      // 保留 pending 候选供下周期按 meta 幂等恢复，旧授权异常绝不污染新配置状态。
+      if (isAuthorizationCurrent(generation)) {
+        recordFailure(MOBILE_READONLY_LOCAL_CODES.LOCAL_PUBLICATION_FAILED);
+      }
     }
-    if (!isAuthorizationCurrent(generation)) return;
-    // 单 tick 内达到有界重试上限：保留候选（未确认），下周期再试，不产生死循环。
-    pending = candidate;
-    recordFailure(MOBILE_READONLY_REMOTE_CODES.RETRY_LIMIT);
   }
 
   /** 捕获候选失败（本地读取问题）→ 记录失败并返回 null（不外发任何内容）。 */

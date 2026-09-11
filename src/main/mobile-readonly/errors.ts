@@ -32,6 +32,8 @@ export const MOBILE_READONLY_LOCAL_CODES = {
   NOT_ENABLED: 'NOT_ENABLED',
   STATE_WRITE_FAILED: 'STATE_WRITE_FAILED',
   LOCAL_SNAPSHOT_FAILED: 'LOCAL_SNAPSHOT_FAILED',
+  /** 发布周期未分类异常（remoteFactory/上传/元数据等意外 reject）的固定本地兜底码。 */
+  LOCAL_PUBLICATION_FAILED: 'LOCAL_PUBLICATION_FAILED',
 } as const;
 export type MobileReadonlyLocalCode = (typeof MOBILE_READONLY_LOCAL_CODES)[keyof typeof MOBILE_READONLY_LOCAL_CODES];
 

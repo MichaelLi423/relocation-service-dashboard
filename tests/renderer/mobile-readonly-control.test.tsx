@@ -125,6 +125,14 @@ describe("桌面发布云端控制", () => {
     expect(dialog.getByText("失败时间", { selector: "dt" }).nextElementSibling?.textContent).not.toBe("尚无记录");
     expect((dialog.getByRole("button", { name: "重新配置" }) as HTMLButtonElement).disabled).toBe(true);
   });
+  it("LOCAL_PUBLICATION_FAILED 显示固定兜底文案且仅一次代码后缀", async () => {
+    const api = bridge(fixture({ configured: true, enabled: true, target: "https://synthetic.invalid", issue: null,
+      lastFailedCode: "LOCAL_PUBLICATION_FAILED" }));
+    const dialog = await open(api);
+    const line = dialog.getByText(/发布过程发生异常，将在下一周期重试/);
+    expect(line.textContent).toBe("发布过程发生异常，将在下一周期重试（LOCAL_PUBLICATION_FAILED）");
+    expect(line.textContent?.match(/LOCAL_PUBLICATION_FAILED/g)?.length).toBe(1);
+  });
   it.each(["credential_unavailable", "config_corrupt", "runtime_unavailable"] as const)("%s 不允许启用", async (issue) => {
     await open(bridge(fixture({ configured: true, issue })));
     expect((screen.getByRole("button", { name: "启用发布" }) as HTMLButtonElement).disabled).toBe(true);
