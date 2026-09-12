@@ -621,10 +621,10 @@ async function handleRequest(
       }
       return;
     }
-    // 意外错误：不向客户端泄漏堆栈/请求体；日志只给规范化错误（无业务内容/密钥）。
+    // 意外错误：一律固定安全响应（code=INTERNAL），绝不向客户端泄漏堆栈/异常 message/
+    // 请求体/凭证；异常本身也不写入任何日志通道（无业务内容/密钥）。
     if (!res.writableEnded) {
-      const safeMessage = error instanceof Error && error.message.length > 0 ? error.message : '未知错误';
-      writeError(res, new MobileReadonlyHttpError(500, 'INTERNAL', `服务器内部错误：${safeMessage.slice(0, 80)}`));
+      writeError(res, new MobileReadonlyHttpError(500, 'INTERNAL', '服务器内部错误'));
     }
   }
 }

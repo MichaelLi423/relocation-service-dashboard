@@ -289,6 +289,36 @@ describe('请求体上限与中断/超时防护（7.5）', () => {
   });
 });
 
+describe('意外异常固定 500 安全响应（不泄漏内部信息）', () => {
+  it('未规范化异常一律 500 INTERNAL 固定文案：响应不含异常 message/哨兵，正常错误不受影响', async () => {
+    const service = await startFresh();
+    const sentinel = 'sentinel-secret-9f8e7d2c-should-never-leak';
+    // 注入未规范化异常：模拟 store 内部意外抛错（非 MobileReadonlyHttpError）。
+    service.running.store.currentEnvelope = () => {
+      throw new Error(`unexpected internal failure: ${sentinel}`);
+    };
+
+    const res = await doFetch(service.baseUrl, '/api/overview', { headers: { Authorization: basicAuthHeader() } });
+    expect(res.status).toBe(500);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const raw = await res.text();
+    expect(raw).not.toContain(sentinel);
+    expect(raw).not.toContain('unexpected internal failure');
+    expect(raw).not.toContain('internal failure');
+    const body = JSON.parse(raw) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('INTERNAL');
+    expect(body.error.message).toBe('服务器内部错误');
+    expect(Object.keys(body.error).sort()).toEqual(['code', 'message']);
+
+    // 正常规范化错误不受影响：未知接口仍按原 code/message 返回 404。
+    const notFound = await doFetch(service.baseUrl, '/api/no-such-endpoint', { headers: { Authorization: basicAuthHeader() } });
+    expect(notFound.status).toBe(404);
+    const notFoundBody = (await notFound.json()) as { error: { code: string; message: string } };
+    expect(notFoundBody.error.code).toBe('NOT_FOUND');
+    expect(notFoundBody.error.message).toBe('接口不存在');
+  });
+});
+
 describe('上传响应线类型 { result, metadata }（7.1/共享 wire）', () => {
   it('committed 200 / 幂等 200 / conflict 409 均为共享 MobileReadonlyPublishResult 形状', async () => {
     const service = await startFresh();

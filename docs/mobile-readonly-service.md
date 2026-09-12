@@ -4,11 +4,11 @@
 实现：`src/server/mobile-readonly/**`、`webpack.mobile-readonly.config.ts`、
 `Dockerfile.mobile-readonly`、`tests/server/**`。
 
-> 生产现状（2026-09-09）：服务已以 `relocation-mobile-readonly:1766c8f-amd64` 容器在线运行于
+> 生产现状（2026-09-11 更新）：服务已以 `relocation-mobile-readonly:1766c8f-amd64` 容器在线运行于
 > `https://workbench.michaelli.site`（内部 127.0.0.1:8082，仅自有 data bind + /tmp tmpfs）；
-> 凭证/证书/TLS/首份空冒烟（V1 空集合）已执行，Windows 首次真实业务发布与实体手机验收待人工。
-> 本文档描述的端点/线协议不变；部署细节见 `docs/mobile-readonly-deployment.md`，勿以旧版
-> 「服务待构建/仅本地测试」表述代替上文。
+> 凭证/证书/TLS/受管空冒烟已执行；2026-09-09 首次上线，2026-09-11 完成两轮真实凭证轮换并经用户
+> 实机确认真实业务发布，生产当前为真实业务快照（非空 V1）。本文档描述的端点/线协议不变；部署细节见
+> `docs/mobile-readonly-deployment.md`，勿以旧版「服务待构建/仅本地测试」表述代替上文。
 
 ## 1. 定位与运行形态
 
@@ -240,3 +240,36 @@ metadata 与 data 取自**同一次缓存包络捕获**（同版本、不混新�
   达到上限后的新请求立即返回 `503 AUTH_BUSY`（零排队、不堆积线程池任务），
   连接在整体 `MOBILE_READONLY_REQUEST_TIMEOUT_MS` 内超时断开；校验期间超时丢弃迟到结果，绝不向已结束连接再写响应。
   摘要生成/CLI（一次性）仍使用同步 scrypt。
+
+## 9. 部署使用步骤
+已部署并完成在线联调/验收
+服务地址：https://workbench.michaelli.site
+- HTTPS 证书有效，已配置自动续期（公网入口 TLS 在 OpenResty 终止，后端仅 127.0.0.1:8082）。
+- 生产已发布真实业务快照（2026-09-11 用户实机确认）；最初用于冒烟验证的空 V1 只是历史状态。
+- 不需要你调整防火墙或 DNS，也不要开放 8082。
+- UI 曾重点复核（128 项测试、3 项发布 E2E、22 项真实键鼠检查通过，历史记录）。
+- 相关改动已推送到 dev；当前最新提交为 3ad6e76（本说明更新前），此前 UI 改动提交为 8fd445d。
+1. 取用两份凭证
+在当前这台 Mac 的“钥匙串访问”中搜索 workbench.michaelli.site，分别查看：
+用途	钥匙串服务名称
+手机查看密码	relocation-workbench:workbench.michaelli.site:viewer
+Windows 上传 token	relocation-workbench:workbench.michaelli.site:upload
+不要把密码或 token 发到聊天中。 将它们通过你自己的安全渠道带到对应设备，两者不能混用。
+上表两条为**正式**条目（日常读写应使用它们）。凭证轮换事务可能另建临时 Keychain 条目并保留用于恢复，那些**不是**日常使用条目，不要误用。
+2. 配置 Windows
+拉取最新 dev 后，以 Squirrel Setup（当前版本 0.1.1）覆盖安装/升级：
+1. 打开 数据管理 → 发布云端 → 配置发布。
+2. HTTPS 服务地址填写：
+https://workbench.michaelli.site
+3. “独立上传凭证”填写 upload 条目的 token。
+4. 保存配置，再点击 启用发布；启用会立即检查一次并返回成功/失败状态。
+5. 保持桌面程序运行、电脑联网，等待“最近成功发布”出现时间。
+保存配置本身不会自动启用发布；启用后约每 2 分钟继续检查一次变化。
+3. 用手机验证
+打开上述地址，浏览器提示认证时输入：
+- 用户名：*viewer*
+- 密码：钥匙串 viewer 条目的密码
+若生产尚未发布或为空集合，看到“已发布，暂无项目”是正常的；当前生产已发布真实业务数据。发布成功后，请用一条合成测试数据验证：桌面修改后，手机保持前台，不手动刷新，能自动看到更新。
+完成后告诉我两项结果即可：
+- Windows 是否出现最近成功发布时间；若失败，只提供错误码。
+- 手机是否能登录，并自动看到测试数据更新。

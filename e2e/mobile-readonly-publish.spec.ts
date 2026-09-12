@@ -142,21 +142,17 @@ test('P1 桌面发布端到端 + 手机自动可见（空首发→建档→改�
     expect(await publishPanelField(page, '配置情况')).toBe('已配置');
     expect(await publishPanelField(page, '发布开关')).toBe('已停用');
     expect(await publishPanelField(page, '发布目标')).toContain('https://127.0.0.1');
-    // —— 显式启用 ——
-    await clickEnable(page);
-
-    // 手机页面先打开（服务尚无任何发布）—— 用于验证“未发布 → 已发布空快照”与后续自动更新
+    // 手机页面先打开（启用前服务尚无任何发布）—— 用于验证“未发布 → 已发布空快照”与后续自动更新
     phone = await openMobileReadonlyPage(browser, service.baseUrl, { width: 390, height: 844 });
     await expect(phone.page.getByRole('heading', { name: '尚未发布数据' })).toBeVisible();
-    await closePublishPanel(page);
 
-    // —— 空库首次发布（周期 120s 自然触发）：桌面状态最近成功 ——
-    await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
+    // —— 显式启用：runtime 立即受控执行一次检查，空库首发空快照（V1），不依赖 120s 周期 ——
+    await clickEnable(page);
+    await closePublishPanel(page);
     await waitForServerVersion(service.baseUrl, 1, 60_000);
     await assertSuccessStatus(page);
-    await expect(phone.page.getByRole('heading', { name: '尚未发布数据' })).toBeVisible();
 
-    // 手机周期检查（≤60s 自动触发）→ 空快照已发布（与“尚未发布”区分）
+    // 手机周期检查（≤60s 自动触发，仍不手动刷新/不按检查按钮）→ 空快照已发布（与“尚未发布”区分）
     await phoneAdvanceAndExpect(phone, MOBILE_CHECK_INTERVAL_MS, '已发布 · V1');
     await expect(phone.page.getByRole('heading', { name: '已发布，暂无项目' })).toBeVisible();
 
@@ -261,12 +257,12 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
     await createBatchQuickRecord(page, { company: deleteCompany });
     await createBatchQuickRecord(page, { company: keepCompany });
 
-    // 首次发布：项目 + 两条批次（服务在线）
+    // 启用时已立即首发空快照（V1）；本周期发布项目 + 两条批次（V2，服务在线）
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
-    await waitForServerVersion(service.baseUrl, 1, 60_000);
+    await waitForServerVersion(service.baseUrl, 2, 60_000);
     const projectIdBefore = (await queryProjectsHttp(service.baseUrl, { q: originalName }))[0]!.id;
-    const batchesV1 = await queryRecordsHttp(service.baseUrl, projectIdBefore, 'batches');
-    expect(batchesV1.some((row) => row.transportCompany === deleteCompany)).toBeTruthy();
+    const batchesAfterProjectPublish = await queryRecordsHttp(service.baseUrl, projectIdBefore, 'batches');
+    expect(batchesAfterProjectPublish.some((row) => row.transportCompany === deleteCompany)).toBeTruthy();
     await assertSuccessStatus(page);
 
     // 关闭服务前先固定本服务的 origin/端口：重启必须复用同一端口（桌面 target 已保存该 origin，
@@ -293,23 +289,23 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
     expect(restarted.baseUrl).toBe(originalOrigin);
     // 桌面未重建/未重配：面板「发布目标」（非 secret）仍是同一 origin，等待自然 120s 周期触发。
     expect(await openPanelAndRead(page, '发布目标')).toBe(originalOrigin);
-    await waitForServerVersion(restarted.baseUrl, 1, 30_000); // 恢复后的当前版本仍为 1
+    await waitForServerVersion(restarted.baseUrl, 2, 30_000); // 恢复后的当前版本为 2（启用首发 V1 + 项目周期 V2）
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
-    await waitForServerVersion(restarted.baseUrl, 2, 60_000);
+    await waitForServerVersion(restarted.baseUrl, 3, 60_000);
     const projectsAfterRecovery = await queryProjectsHttp(restarted.baseUrl, { q: renamedName });
     expect(projectsAfterRecovery.length).toBeGreaterThanOrEqual(1);
     const projectId = projectsAfterRecovery[0]!.id;
-    const batchesV2 = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
-    expect(batchesV2.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
+    const batchesAfterRecovery = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
+    expect(batchesAfterRecovery.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
     await assertSuccessStatus(page);
 
-    // 真实 UI 删除一条批次记录（window.confirm 接受）→ 下一周期全量替换快照
+    // 真实 UI 删除一条批次记录（window.confirm 接受）→ 下一周期全量替换快照（V4）
     await deleteBatchRecordByCompany(page, deleteCompany);
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
-    await waitForServerVersion(restarted.baseUrl, 3, 60_000);
-    const batchesV3 = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
-    expect(batchesV3.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
-    expect(batchesV3.some((row) => row.transportCompany === deleteCompany)).toBeFalsy();
+    await waitForServerVersion(restarted.baseUrl, 4, 60_000);
+    const batchesAfterDelete = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
+    expect(batchesAfterDelete.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
+    expect(batchesAfterDelete.some((row) => row.transportCompany === deleteCompany)).toBeFalsy();
     await assertSuccessStatus(page);
   } finally {
     if (service) await closeFixtureService(service);

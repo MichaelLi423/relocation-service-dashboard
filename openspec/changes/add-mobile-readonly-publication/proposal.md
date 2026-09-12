@@ -5,7 +5,7 @@
 ## What Changes
 
 - 桌面端只读发布（默认关闭、显式启用）：主进程从本机 SQLite 的**单一一致事务**内遍历全部搬迁项目与全部六类关联记录（有界分页逐页收集，非首屏），按**设计文档白名单契约**（封闭字段表）提取只读快照，全量替换上传。停用即停止后续检查与上传。
-- 变化检测与周期：应用启动检查一次、运行且联网时约每 2 分钟检查；以 `contentGenerationId`（恢复/代际轮换）与 `businessRevision`（同代际内增长）作为"与上次已发布候选是否不同"的指纹，任一不同才发布。无写入不上传，桌面如实标记"最近发布/最后成功时间"而不伪称实时。
+- 变化检测与周期：应用启动检查一次、运行且联网时约每 2 分钟检查；负责人显式启用时立即受控执行一次 single-flight 检查并向 UI 返回该次 success/failure 状态（保留既有启动检查与约 2 分钟周期；不承诺固定总完成时限）。以 `contentGenerationId`（恢复/代际轮换）与 `businessRevision`（同代际内增长）作为"与上次已发布候选是否不同"的指纹，任一不同才发布。无写入不上传，桌面如实标记"最近发布/最后成功时间"而不伪称实时。
 - 上传与一致性：发布端 single-flight（同一时刻仅一个进行中候选）；上传协议与业务快照**分层**（`protocol` 携带 `publicationId`/`expectedCurrentVersion`，`snapshot` 为业务白名单快照）；`expectedCurrentVersion` 条件替换（服务端仅比较相等才提交）；上传有限超时；失败记录规范化错误码（不保存任意服务响应/网络内容）并在下一周期重试，不阻断本地。上传成功后保存的是**候选捕获时的指纹**，不重新读取上传完成时刻的最新修订（期间新写入归下一轮）。
 - 云端轻量只读服务（单 Node 进程 + 文件包络，无数据库/Redis/队列）：唯一权威文件 `current.json` = `{currentVersion, publicationId, publishedAt, snapshot}`，一次原子 rename 提交；启动读文件恢复，内存仅缓存，从未提交无文件无版本 0；校验（snapshot 封闭白名单含嵌套未知 key 拒绝、金额/日期格式、`expectedCurrentVersion`、`publicationId`）后原子替换；**幂等仅对当前存储 `publicationId` 生效**（重复当前 ID 返回成功且不改版本/publishedAt；更早候选按冲突处理，无历史库）；冲突/响应丢失由上传凭证读取**非业务版本元数据**端点恢复（明确返回当前 `publicationId`），上传凭证不能读业务数据。
 - 首次未发布与合法空快照分离：首次允许空快照；已发布后数据清空或恢复空库必须发布**空集合**（空快照是合法发布）；手机页面区分"尚未发布"与"已发布但无数据"。
@@ -32,4 +32,5 @@
 - 桌面主进程新增 `mobile-readonly` 发布模块（配置/快照/调度/上传/状态）；复用 `WorkbenchReadRepository` 的分页方法在单事务内全量收集；不引入网络到领域层/渲染层。新增 IPC：状态读取仅暴露 configured 与最近结果，不返回 secret。
 - 手机只读入口为独立 web（区别于桌面单体 `workbench-v2.tsx`，不依赖 `window.workbench`），经云端有界读取端点取数。
 - 云端：单 Node 进程 + `snapshots/current.json`（原子替换）+ 内部监听。部署闸门：公网安全组、`workbench.michaelli.site` A 记录（8.162.13.22，TTL 10 分钟）、1Panel 反代新站点独立 LE 证书、OpenResty 容器到内部服务（8082 为待检查候选）网络可达性、预上线阶段仅用子域名定向解析测试且不动既有 `michaelli.site`/`www`。部署时逐项实际验收，不在此 change 承诺。
+- 凭证轮换为独立工具：使用本机受管事务目录与远端受管控制资源，以 CAS 仅替换既有的自有凭证摘要文件并仅重启自有容器；明文 secret 绝不进入普通文件/日志/文档/命令输出，摘要恢复材料以 mode 0600 存于受管事务目录；跨系统非原子，`resume`/`rollback` 一律人工授权。
 - `verify:matrix` 仍只扫正式基线 `openspec/specs/`，本 change delta 由 `openspec validate --strict` 独立验证。

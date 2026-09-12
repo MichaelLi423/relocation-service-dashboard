@@ -2,11 +2,11 @@
 
 > 本文档与 `scripts/deploy-mobile-readonly.py` 配套（openspec tasks 9.x 部署闸门 / D9）；凭证轮换使用
 > 独立工具 `scripts/rotate-mobile-readonly.py`（见 §10）。
-> **状态：生产已上线（2026-09-09 首次上线；2026-09-11 完成一次真实凭证轮换并经用户实机确认业务发布）** ——
+> **状态：生产已上线（2026-09-09 首次上线；2026-09-11 完成两轮真实凭证轮换，并经用户实机确认真实业务发布）** ——
 > 凭据/首容器/loopback 角色/HTTP-01 证书/TLS/首份受管空冒烟已按本 runbook 执行并回填证据（§8）；
-> 2026-09-11 轮换证据见 §10，任务 9.4 已勾选、9.3 待轮换后的客户端恢复确认。站点为独立 vhost + acme.sh 托管，
-> **未**登记为 1Panel GUI 同域站点/证书（SSH 路径为权威）；本运行未读取安全组规则 API、无任何
-> DNS/安全组/防火墙写入。
+> 生产当前为真实业务快照（非首版空 V1）；轮换与客户端恢复证据见 §10，任务 9.3/9.4 均已勾选。站点为独立
+> vhost + acme.sh 托管，**未**登记为 1Panel GUI 同域站点/证书（SSH 路径为权威）；本运行未读取安全组规则
+> API、无任何 DNS/安全组/防火墙写入。
 > 本机私有查看口令/上传 token **永不写入本文件**（见「凭据」）；本文件不含任何 secret。
 
 ## 0. 已核验环境事实（据上线前勘察，勿在脚本外改动）
@@ -180,6 +180,15 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 | DNS（workbench.michaelli.site） | A `8.162.13.22`、TTL 600（权威 10 分钟）；无 AAAA/CNAME | DONE（2026-09-09 实测：权威 NS `dns31.hichina.com`=120.76.107.59，RD=0 且 AA=True 的 A 记录 `8.162.13.22`、TTL 600 精确等于配置值（非缓存），AAAA/CNAME 均无；80/443 外部真实可达——外部 HTTP-01 challenge 与正常 HTTPS 浏览器均成功；本运行未读取安全组规则 API，也未做任何 DNS/安全组/防火墙写入） |
 | 凭据 | Keychain 两条目存在；远端仅有 digest | DONE（本机 Keychain 两条目；服务器仅 scrypt 摘要，无明文） |
 
+### 8.1 2026-09-11 起的后续事实（与上表 2026-09-09 快照区分）
+
+- 2026-09-11 完成两轮真实凭证轮换（第一轮 `7a2e614374318c85759e7ef35112db68`，随后第二轮
+  `a7c9daf8231e53117a753c6eefa4b806`），仅替换自有摘要并重启自有容器；详见 §10。
+- 轮换后 Windows 以新 upload token 恢复发布、手机以新 viewer 恢复查看，经**用户/Coding Agent 确认**
+  （[非仓库自动化证据]）；相关测试通过但属证据性质，**非** E2E、**非**可重放自动测试。
+- 生产当前为真实业务快照，不再是最初的空 V1。**未发生** DNS 切换与旧服务迁移
+  （`workbench.michaelli.site` 自始独立解析）；也未创建同域 1Panel GUI 站点/证书条目。
+
 ## 9. 生产现状与人工待办（2026-09-11）
 
 **部署形态边界**
@@ -190,10 +199,13 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 - 权威 DNS 与公网可达性已实测（见 §8 DNS 行）：A `8.162.13.22`、TTL 600 为权威应答（非缓存），
   AAAA/CNAME 无；80/443 外部可达。**无需再做 DNS/安全组/防火墙改动**；本运行未读取安全组规则 API。
 - 8082 仅绑定 `127.0.0.1` loopback 供本机 OpenResty 反代，公网**无需也不应**放行 8082。
-- 桌面生产发布通道尚未启用：Windows 编译安装后需在「数据管理 → 发布云端 → 配置发布」
-  填写 URL `https://workbench.michaelli.site`（origin，不带 /api）与 **upload token**（非 viewer 密码），
-  保存后再显式启用并保持运行在线；手机 Basic 用户 `viewer` + viewer 密码（非 token）。
-  首个真实发布前手机预期为空 V1。手动检查只查看最近成功/失败等非 secret 状态，不取回密码/项目业务值。
+- 桌面生产发布通道已启用并完成真实业务发布（2026-09-11 用户实机确认）：Windows 在
+  「数据管理 → 发布云端 → 配置发布」填写 URL `https://workbench.michaelli.site`（固定 HTTPS origin，
+  不带 `/api`；且 origin 之外不得带 query/hash/路径）与 **upload token**（非 viewer 密码），
+  保存后显式启用——**启用即立即检查一次并返回该次成功/失败状态**，其后保持运行在线约每 2 分钟继续检查；
+  手机 Basic 用户 `viewer` + viewer 密码（非 token）。
+  生产当前为真实业务快照，**不再**是首版空 V1；手动检查只查看最近成功/失败等非 secret 状态，
+  不取回密码/项目业务值。
 
 **cmd_preflight 为「首次安装专用」**
 - 当前实现会**有意拒绝已存在的自有容器**（即使配置匹配也 STOP），这是 first-install 闸门，
@@ -203,12 +215,12 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 - `install` 对既有容器仅在独立完整 allowlist 校验通过时跳过 create，属安全幂等路径；
   不承诺一般化自动升级。容器自有校验逻辑当前正确。
 
-**凭证轮换（独立工具；2026-09-11 已执行一次真实轮换）**
+**凭证轮换（独立工具；2026-09-11 已完成两轮真实轮换）**
 - 历史（2026-09-09）：部署助手无自动化轮换子命令、轮换流程未演练，本 runbook 当时不提供现成命令；
   服务本身可经人工授权替换 digest 并仅重启自有服务/更新本机 Keychain。
 - 现状：已提供独立工具 `scripts/rotate-mobile-readonly.py`（`rotate`/`status`/`resume`/`rollback`），
   其安全边界、2026-09-11 真实执行证据与保留的恢复材料见 §10。轮换只允许对自有服务执行，
-  严禁覆盖未知 digest、严禁把生产密钥写入 argv/chat/仓库；`rotate` 已在生产授权执行一次，
+  严禁覆盖未知 digest、严禁把生产密钥写入 argv/chat/仓库；`rotate` 已在生产授权执行**两轮**，
   `resume`/`rollback` **未**在生产演练，任何异常一律停止并由人工以只读 `status` 判定。
 - 部署验证：轮换工具离线用例 148 项 + 部署助手用例 93 项通过（failguard 保证不发起未 mock 的真实外部调用）；
   真实 curl/redirect 校验、凭据/容器/loopback/TLS/首份受管空冒烟通过；最新 UI 类型检查与发布者 E2E 见
@@ -217,10 +229,10 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
 > 以上证据只标记实际完成项；未执行/待部署负责人确认项保持 PENDING/未勾选，不因上线而假装全部完成。
 > 明文/密钥禁止出现在本文件、聊天或仓库；私密取回命令仅在受信本机终端执行并注意终端会打印明文。
 
-## 10. 凭证轮换工具与 2026-09-11 真实执行（独立工具，仅自有资源）
+## 10. 凭证轮换工具与 2026-09-11 两轮真实执行（独立工具，仅自有资源）
 
-本节面向操作人员，说明独立轮换工具 `scripts/rotate-mobile-readonly.py` 的用途、安全边界与一次
-已授权真实执行的结果；**不含**任何口令/token/Authorization/digest 明文。
+本节面向操作人员，说明独立轮换工具 `scripts/rotate-mobile-readonly.py` 的用途、安全边界与**两轮**
+已授权真实执行的结果；**不含**任何口令/token/Authorization 或 digest 值。
 
 ### 10.1 工具定位与安全边界
 
@@ -237,9 +249,10 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
   `status` 判定后再决定 `resume`/`rollback`。
 - 明文只存在于内存、`security -i` 的 stdin、curl 配置 stdin 与 Keychain；绝不进入 argv/环境变量/
   明文文件/聊天/日志，也不打印口令、token、Authorization 或 digest 值。
-- 现状：截至 2026-09-11，仅 `rotate` 在生产实际执行过一次；`resume`/`rollback` **未在生产演练**。
+- 现状：截至 2026-09-11，`rotate` 已在生产授权执行**两轮**（见 10.2/10.3）；`resume`/`rollback`
+  **未在生产演练**。
 
-### 10.2 2026-09-11 真实执行证据（脱敏）
+### 10.2 第一轮真实执行证据（2026-09-11，脱敏）
 
 - 经人工授权执行一次：`python3 scripts/rotate-mobile-readonly.py rotate`，退出码 0，输出
   `ROTATE_OK 7a2e614374318c85759e7ef35112db68 phase=complete`（事务 ID 为随机 hex，非 secret）。
@@ -256,4 +269,13 @@ security find-generic-password -s 'relocation-workbench:workbench.michaelli.site
   未 mock 的真实外部调用）。
 - 历史诚实说明：早期第一轮轮换用例曾漏 mock，导致执行过一次**只读**的 `docker inspect`（未写任何
   远端状态）；随后已收紧轮换工具测试的离线 failguard，此后不再发生未 mock 的真实外部调用。
-  相关安全修复与本文档更新尚未提交。
+  相关轮换安全修复已随提交 `256e7e4` 落地；其后 `429d595`（发布静默跳过/异常漏记修复）与
+  `3ad6e76`（启用发布立即检查与安装包版本）为最新提交（当前最新 `3ad6e76`）。
+
+### 10.3 第二轮轮换与客户端恢复（2026-09-11，脱敏）
+
+- 第二轮真实轮换事务 `a7c9daf8231e53117a753c6eefa4b806`，同样仅替换自有摘要并重启自有容器；
+  未发生 PUT 写业务、未生成/替换业务快照。
+- 轮换后客户端恢复：Windows 以新 upload token 恢复发布、手机以新 viewer 恢复查看。
+- 证据标签：**[用户/Coding Agent 确认，非仓库自动化证据]**（**非** E2E、**非**可重放自动测试）。
+- 不含明文/digest；恢复材料保留于本机轮换事务目录。

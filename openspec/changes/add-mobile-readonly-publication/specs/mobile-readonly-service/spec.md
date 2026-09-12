@@ -172,9 +172,16 @@
 - **THEN** 服务返回携带版本 9 的响应
 - **AND** 手机明确提示丢弃旧详情结果并重新加载，服务端不保留版本 8 供回退
 
-### Requirement: HTTPS、no-store 与未发布/空快照语义
+### Requirement: 公网 HTTPS 入口、loopback 后端与 no-store / 未发布语义
 
-服务 SHALL 仅接受 HTTPS 请求并向业务响应提供 `no-store` 缓存控制，SHALL NOT 指示浏览器缓存业务数据供离线复用。服务 SHALL 区分两种状态：**尚未发布**（从未成功接收快照）与**已发布但快照为空集合**（合法空快照，如首次发布空库、数据清空或恢复空库后发布的空集合）。尚未发布时 SHALL 返回明确"尚未发布"状态；已发布但快照为空集合 SHALL 按正常发布返回（概览/列表为空），两者 SHALL NOT 被混淆。
+公网移动浏览器入口 SHALL 为 HTTPS：TLS SHALL 由受控反向代理（如本项目生产使用的 OpenResty vhost + acme 证书）终止，SHALL NOT 以明文 HTTP 面向公网。后端服务 SHALL 仅监听 loopback（如 `127.0.0.1:8082`）或受控内部网络，SHALL NOT 直接绑定公网地址或对公网暴露明文 HTTP；反向代理到后端 SHALL 为受控内部/loopback 通道。服务 SHALL 向业务响应提供 `no-store` 缓存控制，SHALL NOT 指示浏览器缓存业务数据供离线复用。服务 SHALL 区分两种状态：**尚未发布**（从未成功接收快照）与**已发布但快照为空集合**（合法空快照，如首次发布空库、数据清空或恢复空库后发布的空集合）。尚未发布时 SHALL 返回明确"尚未发布"状态；已发布但快照为空集合 SHALL 按正常发布返回（概览/列表为空），两者 SHALL NOT 被混淆。
+
+#### Scenario: 公网仅经 HTTPS 入口且后端不对公网直绑
+
+- **GIVEN** 生产拓扑为受控反向代理终止 TLS、后端服务仅监听 loopback
+- **WHEN** 检查公网入口与后端绑定
+- **THEN** 公网浏览器入口为 HTTPS（TLS 在反向代理终止），后端服务未直接对公网绑定或暴露明文 HTTP
+- **AND** 反向代理到后端仅经 loopback/受控内部通道，业务响应仍带 `no-store`
 
 #### Scenario: 尚未发布时明确提示
 
