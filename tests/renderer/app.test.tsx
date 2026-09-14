@@ -1272,6 +1272,288 @@ describe('Oracle #10 bounded workbench renderer', () => {
     })));
   });
 
+  it('序列号地址更新自动异步带出项目新址且可修改，保存成功后保留关键字段并不关闭弹层以便连续登记', async () => {
+    let resolveDetail: (value: any) => void;
+    const detailPromise = new Promise((resolve) => {
+      resolveDetail = resolve;
+    });
+    const api = mockApi({
+      v2ProjectDetail: vi.fn().mockImplementation((projectId: string) => {
+        if (projectId === 'p-1') return detailPromise;
+        return Promise.resolve(detailOf(firstProjects[0]));
+      }),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' }));
+    const dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+
+    const addressInput = within(dialog).getByLabelText(/新址地址/);
+    const helpText = within(dialog).getByText('可修改，保存后才成为该仪器实际新址');
+    expect(helpText).toBeInTheDocument();
+    // 首帧 detail 尚未返回，默认地址为空
+    expect(addressInput).toHaveValue('');
+
+    // 异步 detail 加载完成，带出项目级新址
+    resolveDetail!({
+      businessRevision: 1,
+      project: firstProjects[0],
+      detail: { ...detailOf(firstProjects[0]).detail, newSiteAddress: '上海市张江高科园区 100 号' },
+    });
+    await waitFor(() => expect(addressInput).toHaveValue('上海市张江高科园区 100 号'));
+
+    // 新址可修改
+    fireEvent.change(addressInput, { target: { value: '上海市徐汇区漕河泾开发区 88 号' } });
+    expect(addressInput).toHaveValue('上海市徐汇区漕河泾开发区 88 号');
+
+    // 选择搬迁仪器自动回填序列号
+    const picker = within(dialog).getByRole('combobox', { name: '搬迁仪器' });
+    await within(dialog).findByRole('option', { name: 'SN-0 · 仪器 0' });
+    fireEvent.change(picker, { target: { value: 'i-0' } });
+    const serialInput = within(dialog).getByRole('textbox', { name: /序列号.*必填/ });
+    expect(serialInput).toHaveValue('SN-0');
+
+    // 填写 Account ID 与更新日期
+    fireEvent.change(within(dialog).getByLabelText(/Account ID/), { target: { value: 'ACC-8888' } });
+    fireEvent.change(within(dialog).getByLabelText(/更新日期/), { target: { value: '2026-09-15' } });
+
+    // 提交保存
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
+
+    // 校验提交 payload 正确
+    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({
+      op: 'submit_action',
+      projectId: 'p-1',
+      action: expect.objectContaining({
+        type: 'serial_address',
+        projectId: 'p-1',
+        values: expect.objectContaining({
+          instrumentId: 'i-0',
+          serialNo: 'SN-0',
+          customerName: '客户 1',
+          newSiteAddress: '上海市徐汇区漕河泾开发区 88 号',
+          accountId: 'ACC-8888',
+          updatedAt: '2026-09-15',
+        }),
+      }),
+    })));
+
+    // 保存成功后弹层未关闭，停留在当前界面
+    expect(screen.getByRole('dialog', { name: '序列号地址更新' })).toBeInTheDocument();
+
+    // 仪器与序列号清空，picker 与 serial 同步
+    expect(picker).toHaveValue('');
+    expect(serialInput).toHaveValue('');
+
+    // 其余关键字段完整保留
+    expect(within(dialog).getByLabelText(/客户名称/)).toHaveValue('客户 1');
+    expect(addressInput).toHaveValue('上海市徐汇区漕河泾开发区 88 号');
+    expect(within(dialog).getByLabelText(/Account ID/)).toHaveValue('ACC-8888');
+    expect(within(dialog).getByLabelText(/更新日期/)).toHaveValue('2026-09-15');
+
+    // 连续批量登记第二条：保留字段直接复用，仅填写新序列号再次提交
+    fireEvent.change(serialInput, { target: { value: 'SN-BATCH-02' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
+    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({
+      op: 'submit_action',
+      action: expect.objectContaining({
+        type: 'serial_address',
+        values: expect.objectContaining({
+          instrumentId: '',
+          serialNo: 'SN-BATCH-02',
+          customerName: '客户 1',
+          newSiteAddress: '上海市徐汇区漕河泾开发区 88 号',
+          accountId: 'ACC-8888',
+          updatedAt: '2026-09-15',
+        }),
+      }),
+    })));
+  });
+
+  it('序列号地址更新在异步 detail 加载前用户已编辑新址时，不被后续返回的默认地址覆盖', async () => {
+    let resolveDetail: (value: any) => void;
+    const detailPromise = new Promise((resolve) => {
+      resolveDetail = resolve;
+    });
+    const api = mockApi({
+      v2ProjectDetail: vi.fn().mockImplementation((projectId: string) => {
+        if (projectId === 'p-1') return detailPromise;
+        return Promise.resolve(detailOf(firstProjects[0]));
+      }),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' }));
+    const dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+    const addressInput = within(dialog).getByLabelText(/新址地址/);
+
+    // 用户在 detail 返回前提前手动输入新址
+    fireEvent.change(addressInput, { target: { value: '用户提前编辑的特定新址' } });
+    expect(addressInput).toHaveValue('用户提前编辑的特定新址');
+
+    // 此时异步 detail 返回了项目默认新址
+    resolveDetail!({
+      businessRevision: 1,
+      project: firstProjects[0],
+      detail: { ...detailOf(firstProjects[0]).detail, newSiteAddress: '项目异步返回的默认新址' },
+    });
+
+    // 验证用户已编辑的值不会被异步覆盖
+    await new Promise((r) => setTimeout(r, 50));
+    expect(addressInput).toHaveValue('用户提前编辑的特定新址');
+  });
+
+  it('序列号地址更新在右侧列表执行删除后保持弹层打开，列表刷新且左侧表单未 disabled、可编辑并保留原上下文', async () => {
+    const existingRow: WorkbenchV2IndependentRow = {
+      kind: 'serial_address',
+      id: 'serial-del-1',
+      instrumentId: 'i-0',
+      instrumentName: '仪器 0',
+      serialNo: 'SN-DEL-01',
+      customerName: '待删除客户',
+      newSiteAddress: '待删除新址',
+      accountId: 'ACC-DEL-01',
+      updatedAt: '2026-08-01',
+      createdAt: '2026-08-01T00:00:00Z',
+    };
+    let pageCallCount = 0;
+    const api = mockApi({
+      v2IndependentPage: vi.fn().mockImplementation((req: { kind: string }) => {
+        pageCallCount++;
+        return Promise.resolve({
+          businessRevision: 1,
+          kind: req.kind,
+          rows: pageCallCount === 1 ? [existingRow] : [],
+          total: pageCallCount === 1 ? 1 : 0,
+          nextCursor: null,
+          limit: 50,
+        });
+      }),
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' }));
+    const dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+    await within(dialog).findByText('SN-DEL-01');
+
+    // 左侧正在录入新数据
+    const customerInput = within(dialog).getByLabelText(/客户名称/);
+    const addressInput = within(dialog).getByLabelText(/新址地址/);
+    const serialInput = within(dialog).getByRole('textbox', { name: /序列号.*必填/ });
+    const accountInput = within(dialog).getByLabelText(/Account ID/);
+    const dateInput = within(dialog).getByLabelText(/更新日期/);
+
+    fireEvent.change(customerInput, { target: { value: '保留客户名称' } });
+    fireEvent.change(addressInput, { target: { value: '保留新址' } });
+    fireEvent.change(serialInput, { target: { value: 'SN-INPUT-ING' } });
+    fireEvent.change(accountInput, { target: { value: 'ACC-INPUT-ING' } });
+    fireEvent.change(dateInput, { target: { value: '2026-09-18' } });
+
+    // 点击右侧记录的删除按钮
+    const deleteBtn = within(dialog).getByRole('button', { name: '删除' });
+    fireEvent.click(deleteBtn);
+    expect(confirmSpy).toHaveBeenCalled();
+
+    // 等待删除接口完成
+    await waitFor(() => expect(api.v2Delete).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'serial_address',
+      id: 'serial-del-1',
+    })));
+
+    // 目标断言 1: dialog 仍存在，未被误关
+    expect(screen.getByRole('dialog', { name: '序列号地址更新' })).toBeInTheDocument();
+
+    // 目标断言 2: 右侧独立列表触发刷新
+    await waitFor(() => expect(within(dialog).queryByText('SN-DEL-01')).not.toBeInTheDocument());
+
+    // 目标断言 3: 左侧输入框未 disabled，busy 已完全释放
+    expect(customerInput).not.toBeDisabled();
+    expect(addressInput).not.toBeDisabled();
+    expect(serialInput).not.toBeDisabled();
+    expect(accountInput).not.toBeDisabled();
+    expect(dateInput).not.toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: '保存记录' })).not.toBeDisabled();
+
+    // 目标断言 4: 原输入上下文完整保留
+    expect(customerInput).toHaveValue('保留客户名称');
+    expect(addressInput).toHaveValue('保留新址');
+    expect(serialInput).toHaveValue('SN-INPUT-ING');
+    expect(accountInput).toHaveValue('ACC-INPUT-ING');
+    expect(dateInput).toHaveValue('2026-09-18');
+
+    // 目标断言 5: 能正常 focus 并继续修改编辑
+    serialInput.focus();
+    expect(document.activeElement).toBe(serialInput);
+    fireEvent.change(serialInput, { target: { value: 'SN-INPUT-UPDATED' } });
+    expect(serialInput).toHaveValue('SN-INPUT-UPDATED');
+
+    confirmSpy.mockRestore();
+  });
+
+  it('序列号地址更新右侧删除遇到错误时在 finally 释放 busy，左侧字段恢复 enabled 且提示错误', async () => {
+    const existingRow: WorkbenchV2IndependentRow = {
+      kind: 'serial_address',
+      id: 'serial-fail-1',
+      instrumentId: null,
+      instrumentName: '',
+      serialNo: 'SN-FAIL-01',
+      customerName: '待删除客户',
+      newSiteAddress: '待删除新址',
+      accountId: 'ACC-FAIL-01',
+      updatedAt: '2026-08-01',
+      createdAt: '2026-08-01T00:00:00Z',
+    };
+    const api = mockApi({
+      v2IndependentPage: vi.fn().mockResolvedValue({
+        businessRevision: 1,
+        kind: 'serial_address',
+        rows: [existingRow],
+        total: 1,
+        nextCursor: null,
+        limit: 50,
+      }),
+      v2Delete: vi.fn().mockRejectedValue(new Error('删除失败：服务端异常')),
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' }));
+    const dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+    await within(dialog).findByText('SN-FAIL-01');
+
+    const serialInput = within(dialog).getByRole('textbox', { name: /序列号.*必填/ });
+    fireEvent.change(serialInput, { target: { value: 'SN-BEFORE-FAIL' } });
+
+    const deleteBtn = within(dialog).getByRole('button', { name: '删除' });
+    fireEvent.click(deleteBtn);
+
+    // 等待错误信息展示
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('操作未完成，请刷新数据后重试。');
+
+    // 弹层仍存在，busy 已安全释放，表单未 disabled
+    expect(screen.getByRole('dialog', { name: '序列号地址更新' })).toBeInTheDocument();
+    expect(serialInput).not.toBeDisabled();
+    expect(serialInput).toHaveValue('SN-BEFORE-FAIL');
+    expect(within(dialog).getByRole('button', { name: '保存记录' })).not.toBeDisabled();
+
+    // 能正常 focus / change
+    serialInput.focus();
+    expect(document.activeElement).toBe(serialInput);
+    fireEvent.change(serialInput, { target: { value: 'SN-RETRY-OK' } });
+    expect(serialInput).toHaveValue('SN-RETRY-OK');
+
+    confirmSpy.mockRestore();
+  });
+
   it('二维码申请不选任何类型时阻止提交并就地提示', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('heading', { name: /项目队列/ });
     fireEvent.click(screen.getByRole('button', { name: '二维码申请' }));

@@ -673,6 +673,7 @@ export function WorkbenchV2({
   async function mutate(
     request: WorkbenchV2MutationRequest,
     success: string,
+    options?: { keepLayer?: boolean },
   ): Promise<void> {
     try {
       const api = bridge();
@@ -694,7 +695,9 @@ export function WorkbenchV2({
         setSelectedId(result.changed.projectId);
       }
       await refreshInvalidated(result.invalidated, result.changed?.projectId, cleared);
-      setLayer(null);
+      if (!options?.keepLayer) {
+        setLayer(null);
+      }
       setToast(success);
       window.setTimeout(() => setToast(""), 2800);
     } catch (cause) {
@@ -1519,7 +1522,13 @@ export function WorkbenchV2({
           controlledDirty={layer.kind === "edit-project-tags" ? tagEditGuard.dirty : undefined}
           busy={layer.kind === "edit-project-tags" ? tagEditGuard.busy : false}
           requestCloseRef={layerCloseRequest}
-          resetDirtyKey={layer.kind === "tags" ? tagCatalog : undefined}
+          resetDirtyKey={
+            layer.kind === "tags"
+              ? tagCatalog
+              : layer.kind === "independent"
+                ? independentRefresh
+                : undefined
+          }
           onClose={() => setLayer(null)}
         >
           {layer.kind === "new" ? (
@@ -1633,14 +1642,16 @@ export function WorkbenchV2({
             <IndependentModuleV2
               kind={layer.module}
               project={selected}
+              defaultAddress={selected ? (detail?.detail?.newSiteAddress ?? "") : ""}
               refreshToken={independentRefresh}
               onSave={(action) =>
                 mutate(
                   { op: "submit_action", projectId: action.projectId, action },
                   "记录已保存",
+                  { keepLayer: layer.module === "serial_address" },
                 )
               }
-              onDelete={(kind, id) => deleteRecord({ kind, id } as DeleteInput, "记录已删除")}
+              onDelete={(kind, id) => deleteRecord({ kind, id } as DeleteInput, "记录已删除", false)}
             />
           ) : layer.kind === "invoice-edit" ? (
             <InvoiceMutationForm
@@ -3529,12 +3540,14 @@ function BoundedShipToPicker({
 function IndependentModuleV2({
   kind,
   project,
+  defaultAddress = "",
   refreshToken,
   onSave,
   onDelete,
 }: {
   kind: WorkbenchV2IndependentKind;
   project: WorkbenchProjectRow | null;
+  defaultAddress?: string;
   refreshToken: number;
   onSave: (action: WorkbenchActionPayload) => Promise<void>;
   onDelete: (kind: "serial_address" | "qr_request", id: string) => Promise<void>;
@@ -3548,8 +3561,27 @@ function IndependentModuleV2({
   const [error, setError] = useState("");
   const [instrumentId, setInstrumentId] = useState("");
   const [serialNo, setSerialNo] = useState("");
+  const [customerName, setCustomerName] = useState(project?.customerName || "");
+  const [newSiteAddress, setNewSiteAddress] = useState(defaultAddress || "");
+  const [accountId, setAccountId] = useState("");
+  const [updatedAt, setUpdatedAt] = useState(todayDate());
   const [qrTypes, setQrTypes] = useState<string[]>(["A", "B"]);
   const sequence = useRef(0);
+  const addressEditedRef = useRef(false);
+  const customerEditedRef = useRef(false);
+
+  useEffect(() => {
+    if (!customerEditedRef.current && project?.customerName) {
+      setCustomerName(project.customerName);
+    }
+  }, [project?.customerName]);
+
+  useEffect(() => {
+    if (!addressEditedRef.current && defaultAddress) {
+      setNewSiteAddress(defaultAddress);
+    }
+  }, [defaultAddress]);
+
   async function load(cursor: string | null): Promise<void> {
     const id = ++sequence.current;
     try {
@@ -3578,7 +3610,13 @@ function IndependentModuleV2({
       if (key !== "types") values[key] = String(value);
     });
     if (kind === "qr_request") values.types = [...new Set(qrTypes)];
-    if (kind === "serial_address") values.instrumentId = instrumentId;
+    if (kind === "serial_address") {
+      values.instrumentId = instrumentId;
+      if (!values.customerName && customerName) values.customerName = customerName;
+      if (!values.newSiteAddress && newSiteAddress) values.newSiteAddress = newSiteAddress;
+      if (!values.accountId && accountId) values.accountId = accountId;
+      if (!values.updatedAt && updatedAt) values.updatedAt = updatedAt;
+    }
     try {
       if (kind === "qr_request" && qrTypes.length === 0) {
         throw new Error("请至少选择一种二维码申请类型");
@@ -3590,6 +3628,25 @@ function IndependentModuleV2({
       });
       await load(stack.at(-1) ?? null);
       if (kind === "qr_request") setQrTypes(["A", "B"]);
+      if (kind === "serial_address") {
+        setInstrumentId("");
+        setSerialNo("");
+        addressEditedRef.current = true;
+        customerEditedRef.current = true;
+      }
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function removeRecord(id: string): Promise<void> {
+    if (!window.confirm("删除后无法恢复，确认删除这条记录？")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onDelete(kind, id);
+      await load(stack.at(-1) ?? null);
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -3606,7 +3663,11 @@ function IndependentModuleV2({
         onSubmit={(event) => void submit(event)}
       >
         <LayerHeaderAction><button form="independent-record-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : kind === "qr_request" ? "保存申请" : "保存记录"}</button></LayerHeaderAction>
-        <div className="form-grid">
+        <fieldset
+          className="form-grid"
+          disabled={busy}
+          style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+        >
           {kind === "serial_address" ? (
             <>
               {project ? (
@@ -3629,10 +3690,24 @@ function IndependentModuleV2({
               <Field
                 name="customerName"
                 label="客户名称"
-                defaultValue={project?.customerName || ""}
+                value={customerName}
+                onChange={(event) => {
+                  customerEditedRef.current = true;
+                  setCustomerName(event.target.value);
+                }}
                 required
               />
-              <Field name="newSiteAddress" label="新址地址" required />
+              <Field
+                name="newSiteAddress"
+                label="新址地址"
+                value={newSiteAddress}
+                onChange={(event) => {
+                  addressEditedRef.current = true;
+                  setNewSiteAddress(event.target.value);
+                }}
+                help="可修改，保存后才成为该仪器实际新址"
+                required
+              />
               <Field
                 name="serialNo"
                 label="序列号"
@@ -3640,12 +3715,19 @@ function IndependentModuleV2({
                 onChange={(event) => setSerialNo(event.target.value)}
                 required
               />
-              <Field name="accountId" label="Account ID" required />
+              <Field
+                name="accountId"
+                label="Account ID"
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+                required
+              />
               <Field
                 name="updatedAt"
                 label="更新日期"
                 type="date"
-                defaultValue={todayDate()}
+                value={updatedAt}
+                onChange={(event) => setUpdatedAt(event.target.value)}
                 required
               />
             </>
@@ -3709,7 +3791,7 @@ function IndependentModuleV2({
               </div>
             </>
           )}
-        </div>
+        </fieldset>
         {error && (
           <div className="inline-error" role="alert">
             {error}
@@ -3753,10 +3835,12 @@ function IndependentModuleV2({
           <label>截止日期<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
           <button className="button">查找</button>
         </form>
-        <DataRows kind={kind} rows={page?.rows ?? []} onDelete={(id) => {
-          if (!window.confirm("删除后无法恢复，确认删除这条记录？")) return;
-          void onDelete(kind, id).then(() => load(stack.at(-1) ?? null)).catch((cause) => setError(messageOf(cause)));
-        }} />
+        <DataRows
+          kind={kind}
+          rows={page?.rows ?? []}
+          busy={busy}
+          onDelete={(id) => void removeRecord(id)}
+        />
         <div className="queue-pagination">
           <button
             className="button"
@@ -3793,10 +3877,12 @@ function IndependentModuleV2({
 function DataRows({
   kind,
   rows,
+  busy = false,
   onDelete,
 }: {
   kind: WorkbenchV2IndependentKind;
   rows: WorkbenchV2IndependentPageDto["rows"];
+  busy?: boolean;
   onDelete: (id: string) => void;
 }): JSX.Element {
   if (!rows.length)
@@ -3822,7 +3908,7 @@ function DataRows({
                   ).join("、")}
                 </td>
                 <td className="numeric qr-workload-cell">{row.workload}</td>
-                <td><div className="restricted-action"><button className="button danger small" onClick={() => onDelete(row.id)}>删除</button><small>申请内容有误时，删除后重新登记。</small></div></td>
+                <td><div className="restricted-action"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button><small>申请内容有误时，删除后重新登记。</small></div></td>
               </tr>
             ) : (
               <tr key={row.id}>
@@ -3833,7 +3919,7 @@ function DataRows({
                 <td>{row.newSiteAddress}</td>
                 <td>{row.accountId}</td>
                 <td>{businessDate(row.updatedAt)}</td>
-                <td><div className="restricted-action"><button className="button danger small" onClick={() => onDelete(row.id)}>删除</button><small>地址事实有误时，删除后按最新资料重新登记。</small></div></td>
+                <td><div className="restricted-action"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button><small>地址事实有误时，删除后按最新资料重新登记。</small></div></td>
               </tr>
             ),
           )}
