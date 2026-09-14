@@ -61,9 +61,11 @@ export class SerialAddressUpdateService {
       if (instrumentSerial === null || instrumentSerial.trim() === '') {
         throw new ValidationError('INSTRUMENT_SERIAL_EMPTY', '该搬迁仪器尚无序列号，无法登记序列号地址更新');
       }
-      // 与提交序列号采用同一归一化口径（assertRequiredText 去首尾空白）后比较。
+      // 与提交序列号采用同一归一化口径（assertRequiredText 去首尾空白）后比较；
+      // 比较 key 额外移除所有 JS \s 空白：登记值可能按分组空格录入，提交值为连续字符串。
       const normalizedInstrumentSerial = assertRequiredText(instrumentSerial, '序列号');
-      if (serialNo !== normalizedInstrumentSerial) {
+      const toCompareKey = (value: string): string => value.replace(/\s+/g, '');
+      if (toCompareKey(serialNo) !== toCompareKey(normalizedInstrumentSerial)) {
         throw new ValidationError(
           'SERIAL_NO_MISMATCH',
           `序列号「${serialNo}」与该搬迁仪器登记序列号「${normalizedInstrumentSerial}」不一致`,
