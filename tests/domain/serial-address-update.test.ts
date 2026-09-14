@@ -342,6 +342,32 @@ describe('非空字段与序列号校验（4.3）', () => {
     expect(ok.serialNo).toBe('SN-100');
   });
 
+  it('仪器登记序列号含首尾空白时按归一化值比较：提交无空白序列号可成功登记', () => {
+    const ctx = setup();
+    ctx.instruments.save({
+      id: 'i-ws',
+      projectId: 'p1',
+      batchId: null,
+      name: '仪器-SN-100',
+      model: null,
+      manufacturer: null,
+      serviceLevel: null,
+      serialNo: '  SN-100  ',
+      ups: false,
+      qrRequested: false,
+      destinationShipToId: null,
+      accountId: null,
+      usernameSnapshot: null,
+      createdAt: 't',
+      updatedAt: 't',
+    });
+    const update = ctx.service.register('i-ws', { ...BASE, serialNo: 'SN-100' }, ACTOR);
+    expect(update.instrumentId).toBe('i-ws');
+    expect(update.serialNo).toBe('SN-100');
+    expect(ctx.updates.all).toHaveLength(1);
+    expect(ctx.updates.all[0].serialNo).toBe('SN-100');
+  });
+
   it('不引入未确认的序列号格式约束：仅非空与仪器一致', () => {
     const ctx = setup();
     const instrumentId = addInstrument(ctx, 'SN-100-XYZ/01');

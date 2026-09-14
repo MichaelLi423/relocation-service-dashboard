@@ -58,13 +58,15 @@ export class SerialAddressUpdateService {
     const accountId = assertRequiredText(input.accountId, 'Account ID');
     // 关联仪器时：序列号必须与登记仪器一致（仪器无序列号占位时无法匹配，拒绝登记）。
     if (normalizedInstrumentId !== null) {
-      if (instrumentSerial === null || instrumentSerial === '') {
+      if (instrumentSerial === null || instrumentSerial.trim() === '') {
         throw new ValidationError('INSTRUMENT_SERIAL_EMPTY', '该搬迁仪器尚无序列号，无法登记序列号地址更新');
       }
-      if (serialNo !== instrumentSerial) {
+      // 与提交序列号采用同一归一化口径（assertRequiredText 去首尾空白）后比较。
+      const normalizedInstrumentSerial = assertRequiredText(instrumentSerial, '序列号');
+      if (serialNo !== normalizedInstrumentSerial) {
         throw new ValidationError(
           'SERIAL_NO_MISMATCH',
-          `序列号「${serialNo}」与该搬迁仪器登记序列号「${instrumentSerial}」不一致`,
+          `序列号「${serialNo}」与该搬迁仪器登记序列号「${normalizedInstrumentSerial}」不一致`,
         );
       }
     }
