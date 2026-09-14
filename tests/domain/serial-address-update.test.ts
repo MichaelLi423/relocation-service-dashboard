@@ -368,17 +368,18 @@ describe('非空字段与序列号校验（4.3）', () => {
     expect(ctx.updates.all[0].serialNo).toBe('SN-100');
   });
 
-  it('仪器登记序列号按分组空格录入时：提交连续字符串可成功登记且保存提交值', () => {
+  it('仪器登记序列号含 CR/LF 时与对应连续字符串视为一致，并落库仪器权威值', () => {
     const ctx = setup();
+    const authoritative = 'DEBAV06313\r\nDEBA414152\r\nDEBAQ07911\r\nDEBAX06001\r\nDEJAA01413';
     ctx.instruments.save({
-      id: 'i-grouped',
+      id: 'i-crlf',
       projectId: 'p1',
       batchId: null,
-      name: '仪器-分组序列号',
+      name: '仪器-CRLF序列号',
       model: null,
       manufacturer: null,
       serviceLevel: null,
-      serialNo: 'DEBAV06313 DEBA414152 DEBAQ07911 DEBAX06001 DEJAA01413',
+      serialNo: authoritative,
       ups: false,
       qrRequested: false,
       destinationShipToId: null,
@@ -388,17 +389,35 @@ describe('非空字段与序列号校验（4.3）', () => {
       updatedAt: 't',
     });
     const continuous = 'DEBAV06313DEBA414152DEBAQ07911DEBAX06001DEJAA01413';
-    const update = ctx.service.register('i-grouped', { ...BASE, serialNo: continuous }, ACTOR);
-    expect(update.instrumentId).toBe('i-grouped');
-    // 保存的是提交字符串本身（连续、内部无空白），未按仪器分组空格改写
-    expect(update.serialNo).toBe(continuous);
+    const update = ctx.service.register('i-crlf', { ...BASE, serialNo: continuous }, ACTOR);
+    expect(update.instrumentId).toBe('i-crlf');
+    // 落库采用 DB 仪器权威值（含 CR/LF），而非客户端 input 清理后的连续值
+    expect(update.serialNo).toBe(authoritative);
     expect(ctx.updates.all).toHaveLength(1);
-    expect(ctx.updates.all[0].serialNo).toBe(continuous);
-    // 移除空白后仍有字符差异时，仍由既有不一致校验拒绝
-    expect(() =>
-      ctx.service.register('i-grouped', { ...BASE, serialNo: 'DEBAV06313DEBA414152DEBAQ07911DEBAX06001DEJAA01414' }, ACTOR),
-    ).toThrow(/不一致/);
-    expect(ctx.updates.all).toHaveLength(1);
+    expect(ctx.updates.all[0].serialNo).toBe(authoritative);
+  });
+
+  it('普通内部空格仍有身份意义：登记值含普通空格而提交连续字符串仍拒绝', () => {
+    const ctx = setup();
+    ctx.instruments.save({
+      id: 'i-space',
+      projectId: 'p1',
+      batchId: null,
+      name: '仪器-空格序列号',
+      model: null,
+      manufacturer: null,
+      serviceLevel: null,
+      serialNo: 'AB C',
+      ups: false,
+      qrRequested: false,
+      destinationShipToId: null,
+      accountId: null,
+      usernameSnapshot: null,
+      createdAt: 't',
+      updatedAt: 't',
+    });
+    expect(() => ctx.service.register('i-space', { ...BASE, serialNo: 'ABC' }, ACTOR)).toThrow(/不一致/);
+    expect(ctx.updates.all).toHaveLength(0);
   });
 
   it('不引入未确认的序列号格式约束：仅非空与仪器一致', () => {

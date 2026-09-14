@@ -1239,6 +1239,39 @@ describe('Oracle #10 bounded workbench renderer', () => {
     expect(serialInput).toHaveValue('');
   });
 
+  it('仪器序列号含 CR/LF 时 picker 回填被 input 清理为连续值，并以连续值提交 payload', async () => {
+    const crlfRow = {
+      kind: 'instruments' as const,
+      id: 'i-crlf', projectId: 'p-1', batchId: null,
+      name: '仪器 CRLF', manufacturer: null, serviceLevel: null, model: null,
+      serialNo: 'DEBAV06313\r\nDEBA414152', ups: false, qrRequested: false,
+      destinationShipToId: null, createdAt: '2026-08-08T00:00:00Z',
+    };
+    const api = mockApi({
+      v2SectionPage: vi.fn().mockResolvedValue({ businessRevision: 1, kind: 'instruments', projectId: 'p-1', rows: [crlfRow], total: 1, nextCursor: null, limit: 25 }),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />); await screen.findByRole('heading', { name: /项目队列/ });
+    fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' }));
+    const dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+    const picker = within(dialog).getByRole('combobox', { name: '搬迁仪器' });
+    await within(dialog).findByRole('option', { name: /DEBAV06313/ });
+    fireEvent.change(picker, { target: { value: 'i-crlf' } });
+    const serialInput = within(dialog).getByRole('textbox', { name: /序列号.*必填/ }) as HTMLInputElement;
+    // jsdom 实现 input[type=text] 的 value sanitization：CR/LF 被移除，回填为连续值
+    expect(serialInput).toHaveValue('DEBAV06313DEBA414152');
+    fireEvent.change(within(dialog).getByLabelText(/新址地址/), { target: { value: '新址A' } });
+    fireEvent.change(within(dialog).getByLabelText(/Account ID/), { target: { value: 'ACC-CRLF' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
+    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({
+      op: 'submit_action',
+      action: expect.objectContaining({
+        type: 'serial_address',
+        values: expect.objectContaining({ instrumentId: 'i-crlf', serialNo: 'DEBAV06313DEBA414152' }),
+      }),
+    })));
+  });
+
   it('二维码申请不选任何类型时阻止提交并就地提示', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('heading', { name: /项目队列/ });
     fireEvent.click(screen.getByRole('button', { name: '二维码申请' }));
