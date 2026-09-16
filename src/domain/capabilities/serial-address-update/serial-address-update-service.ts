@@ -56,17 +56,25 @@ export class SerialAddressUpdateService {
     const newSiteAddress = assertRequiredText(input.newSiteAddress, '新址地址');
     const serialNo = assertRequiredText(input.serialNo, '序列号');
     const accountId = assertRequiredText(input.accountId, 'Account ID');
+    // 关联仪器时以 DB 仪器序列号为权威值落库；独立登记仍保存提交值。
+    let persistedSerialNo = serialNo;
     // 关联仪器时：序列号必须与登记仪器一致（仪器无序列号占位时无法匹配，拒绝登记）。
     if (normalizedInstrumentId !== null) {
-      if (instrumentSerial === null || instrumentSerial === '') {
+      if (instrumentSerial === null || instrumentSerial.trim() === '') {
         throw new ValidationError('INSTRUMENT_SERIAL_EMPTY', '该搬迁仪器尚无序列号，无法登记序列号地址更新');
       }
-      if (serialNo !== instrumentSerial) {
+      // 与提交序列号采用同一归一化口径（assertRequiredText 去首尾空白）后比较；
+      // 比较 key 仅额外忽略 CR/LF：Excel 导入的登记值可能含内部换行，而客户端
+      // input 会移除 CR/LF 后提交连续字符串。普通内部空格仍有身份意义，不得忽略。
+      const normalizedInstrumentSerial = assertRequiredText(instrumentSerial, '序列号');
+      const toCompareKey = (value: string): string => value.replace(/[\r\n]+/g, '');
+      if (toCompareKey(serialNo) !== toCompareKey(normalizedInstrumentSerial)) {
         throw new ValidationError(
           'SERIAL_NO_MISMATCH',
-          `序列号「${serialNo}」与该搬迁仪器登记序列号「${instrumentSerial}」不一致`,
+          `序列号「${serialNo}」与该搬迁仪器登记序列号「${normalizedInstrumentSerial}」不一致`,
         );
       }
+      persistedSerialNo = normalizedInstrumentSerial;
     }
     const updatedAt = input.updatedAt ?? this.today();
     assertValidBusinessDate(updatedAt, '更新时间');
@@ -76,7 +84,7 @@ export class SerialAddressUpdateService {
       instrumentId: normalizedInstrumentId,
       customerName,
       newSiteAddress,
-      serialNo,
+      serialNo: persistedSerialNo,
       accountId,
       updatedAt,
       operatorAccountId: actor.accountId,

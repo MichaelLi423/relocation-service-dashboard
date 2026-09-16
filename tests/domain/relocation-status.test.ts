@@ -67,6 +67,30 @@ describe('主状态与标签（2.2）', () => {
     });
     expect(projects.findById(projectId)!.status).toBe('cancelled');
   });
+
+  it('负责人可人工调整主状态为已转单（终态）', () => {
+    const { projects, service } = setup();
+    const projectId = service.createPendingProject().id;
+    const result = service.adjustStatus(projectId, 'transferred');
+    expectStatus(result, 'transferred');
+    expectReason(result, 'transfer');
+    expect(projects.findById(projectId)!.status).toBe('transferred');
+  });
+
+  it('已转单项目不可再离开终态：人工调整与自动触发均被拒绝', () => {
+    const { projects, service } = setup();
+    const projectId = service.createPendingProject().id;
+    service.adjustStatus(projectId, 'transferred');
+
+    const manual = service.adjustStatus(projectId, 'executing');
+    expectRejected(manual, '已转单项目为终态');
+    expect(projects.findById(projectId)!.status).toBe('transferred');
+
+    // 自动触发（实际装机完成/执行事实）也不覆盖终态
+    const auto = service.adjustStatus(projectId, 'pending_acceptance', { executionStarted: true });
+    expectRejected(auto, '已转单项目为终态');
+    expect(projects.findById(projectId)!.status).toBe('transferred');
+  });
 });
 
 describe('主状态人工调整与系统校验（2.2 / TBD-09）', () => {

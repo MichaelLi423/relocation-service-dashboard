@@ -10,7 +10,7 @@ import {
 import { createPendingProject, isFormallyEntered, type Project } from './project';
 import { createContract, type Contract } from './contract';
 import { resolveStatus, resolveStatusAfterFactDeletion, type TransitionContext, type TransitionResult } from './lifecycle';
-import { isCancelled, type ProjectStatusOrCancelled } from './states';
+import { isTerminal, type ProjectStatusOrCancelled } from './states';
 
 /**
  * 项目/合同服务（tasks 1.7 / 2.1~2.7）。
@@ -386,8 +386,11 @@ export class ProjectService {
   /** 标记已有验收报告并填写报告形成日期 → lifecycle 自动置为待掉票（不要求客户确认）。 */
   markAcceptance(projectId: string, reportDate: string): Project {
     const project = this.requireProject(projectId);
-    if (isCancelled(project.status)) {
-      throw new ValidationError('CANCELLED_PROJECT', '已取消项目不可标记验收报告');
+    if (isTerminal(project.status)) {
+      throw new ValidationError(
+        project.status === 'cancelled' ? 'CANCELLED_PROJECT' : 'TRANSFERRED_PROJECT',
+        project.status === 'cancelled' ? '已取消项目不可标记验收报告' : '已转单项目不可标记验收报告',
+      );
     }
     assertValidDateOnly(reportDate, '验收报告形成日期');
     project.acceptanceReport = true;
@@ -412,8 +415,11 @@ export class ProjectService {
     facts: { hasAnyInvoiceHistory: boolean; executionStarted: boolean },
   ): Project {
     const project = this.requireProject(projectId);
-    if (isCancelled(project.status)) {
-      throw new ValidationError('CANCELLED_PROJECT', '已取消项目不可删除验收报告');
+    if (isTerminal(project.status)) {
+      throw new ValidationError(
+        project.status === 'cancelled' ? 'CANCELLED_PROJECT' : 'TRANSFERRED_PROJECT',
+        project.status === 'cancelled' ? '已取消项目不可删除验收报告' : '已转单项目不可删除验收报告',
+      );
     }
     if (facts.hasAnyInvoiceHistory) {
       throw new ValidationError(

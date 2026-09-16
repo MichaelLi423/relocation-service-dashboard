@@ -1,7 +1,7 @@
 {
   "name": "relocation-service-workbench",
   "productName": "搬迁服务工作台",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "搬迁服务工作台 - 个人使用的 Windows 桌面应用（Electron + React + TypeScript + 本地 SQLite）",
   "author": "搬迁服务工作台团队",
   "main": ".webpack/main",
@@ -16,8 +16,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:mobile-readonly": "playwright test --config playwright.mobile-readonly.config.ts --workers=1",
     "e2e:build": "electron-forge package",
-    "verify:matrix": "node scripts/build-verification-matrix.mjs"
+    "verify:matrix": "node scripts/build-verification-matrix.mjs",
+    "build:mobile-readonly": "node scripts/build-mobile-readonly.cjs",
+    "start:mobile-readonly": "node dist/mobile-readonly/server.cjs",
+    "dev:mobile-readonly": "node scripts/dev-mobile-readonly.cjs"
   },
   "overrides": {
     "@electron/rebuild": "^4.1.0"

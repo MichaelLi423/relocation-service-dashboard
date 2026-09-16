@@ -32,7 +32,9 @@
     "webpack.preload.config.ts",
     "webpack.renderer.config.ts",
     "webpack.rules.ts",
+    "webpack.mobile-readonly.config.ts",
     "vitest.config.ts",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "playwright.mobile-readonly.config.ts"
   ]
 }

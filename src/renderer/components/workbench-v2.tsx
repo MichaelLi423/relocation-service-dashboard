@@ -52,6 +52,7 @@ import type {
   WorkbenchV2ReminderPageDto,
 } from "../../shared/ipc";
 import { PROJECT_REGIONS } from "../../shared/ipc";
+import { MobileReadonlyControl } from "./mobile-readonly-control";
 import {
   HistoryImportWizard,
   IpcHistoryImportProvider,
@@ -92,8 +93,11 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   pending_invoice: "待掉票",
   completed: "已完成",
   cancelled: "已取消",
+  transferred: "已转单",
 };
-const STAGES: AdjustableProjectStatus[] = [
+export type ManualStatusOption = ProjectStatus;
+
+const MANUAL_STATUS_OPTIONS: ManualStatusOption[] = [
   "pending_entry",
   "pending_execution",
   "executing",
@@ -101,6 +105,8 @@ const STAGES: AdjustableProjectStatus[] = [
   "pending_acceptance",
   "pending_invoice",
   "completed",
+  "transferred",
+  "cancelled",
 ];
 
 function focusWorkbenchSection(id: "reminders" | "project-queue"): void {
@@ -388,6 +394,7 @@ export function WorkbenchV2({
   const [tagEditGuard, setTagEditGuard] = useState({ dirty: false, busy: false });
   const [historyImport, setHistoryImport] = useState(false);
   const [dataMenuOpen, setDataMenuOpen] = useState(false);
+  const [publicationOpen, setPublicationOpen] = useState(false);
   const [dataMenuPosition, setDataMenuPosition] = useState({ top: 0, left: 12, width: 192 });
   const [independentRefresh, setIndependentRefresh] = useState(0);
   const [reminderRefresh, setReminderRefresh] = useState(0);
@@ -436,6 +443,8 @@ export function WorkbenchV2({
       dataMenuTrigger.current?.focus();
     };
     updatePosition();
+    const firstButton = dataMenuPanel.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    firstButton?.focus();
     document.addEventListener("mousedown", closeFromOutside);
     document.addEventListener("keydown", closeFromKeyboard);
     window.addEventListener("resize", updatePosition);
@@ -669,6 +678,7 @@ export function WorkbenchV2({
   async function mutate(
     request: WorkbenchV2MutationRequest,
     success: string,
+    options?: { keepLayer?: boolean },
   ): Promise<void> {
     try {
       const api = bridge();
@@ -690,7 +700,9 @@ export function WorkbenchV2({
         setSelectedId(result.changed.projectId);
       }
       await refreshInvalidated(result.invalidated, result.changed?.projectId, cleared);
-      setLayer(null);
+      if (!options?.keepLayer) {
+        setLayer(null);
+      }
       setToast(success);
       window.setTimeout(() => setToast(""), 2800);
     } catch (cause) {
@@ -990,8 +1002,8 @@ export function WorkbenchV2({
               ref={dataMenuTrigger}
               className="data-menu-trigger"
               type="button"
-              aria-haspopup="true"
               aria-expanded={dataMenuOpen}
+              aria-controls="data-menu-panel"
               onClick={() => setDataMenuOpen((open) => !open)}
             >
               数据管理
@@ -999,6 +1011,7 @@ export function WorkbenchV2({
             {dataMenuOpen && createPortal(
               <div
                 ref={dataMenuPanel}
+                id="data-menu-panel"
                 className="data-menu-panel"
                 role="region"
                 aria-label="数据管理"
@@ -1019,8 +1032,8 @@ export function WorkbenchV2({
                 管理标签库
               </button>
               <div className="data-menu-divider" />
-              <button className="danger-text" onClick={() => { setDataMenuOpen(false); setLayer({ kind: "clean" }); }}>
-                清理全部业务数据
+              <button type="button" aria-haspopup="dialog" onClick={() => { setDataMenuOpen(false); setPublicationOpen(true); }}>
+                发布云端
               </button>
               </div>,
               document.body,
@@ -1032,6 +1045,7 @@ export function WorkbenchV2({
           {session.username}
         </div>
       </header>
+      <MobileReadonlyControl open={publicationOpen} onClose={() => setPublicationOpen(false)} returnFocus={dataMenuTrigger.current} />
       <main id="main" className="page">
         <section className="command" aria-label="今日工作台">
           <div>
@@ -1513,7 +1527,13 @@ export function WorkbenchV2({
           controlledDirty={layer.kind === "edit-project-tags" ? tagEditGuard.dirty : undefined}
           busy={layer.kind === "edit-project-tags" ? tagEditGuard.busy : false}
           requestCloseRef={layerCloseRequest}
-          resetDirtyKey={layer.kind === "tags" ? tagCatalog : undefined}
+          resetDirtyKey={
+            layer.kind === "tags"
+              ? tagCatalog
+              : layer.kind === "independent"
+                ? independentRefresh
+                : undefined
+          }
           onClose={() => setLayer(null)}
         >
           {layer.kind === "new" ? (
@@ -1627,14 +1647,16 @@ export function WorkbenchV2({
             <IndependentModuleV2
               kind={layer.module}
               project={selected}
+              defaultAddress={selected ? (detail?.detail?.newSiteAddress ?? "") : ""}
               refreshToken={independentRefresh}
               onSave={(action) =>
                 mutate(
                   { op: "submit_action", projectId: action.projectId, action },
                   "记录已保存",
+                  { keepLayer: layer.module === "serial_address" },
                 )
               }
-              onDelete={(kind, id) => deleteRecord({ kind, id } as DeleteInput, "记录已删除")}
+              onDelete={(kind, id) => deleteRecord({ kind, id } as DeleteInput, "记录已删除", false)}
             />
           ) : layer.kind === "invoice-edit" ? (
             <InvoiceMutationForm
@@ -1835,11 +1857,12 @@ function ProjectContext({
   onStatus: (status: AdjustableProjectStatus) => void;
   onRepairFilter: () => void;
 }): JSX.Element {
-  const [draftStatus, setDraftStatus] = useState<AdjustableProjectStatus>(
-    project?.status === "cancelled" ? "completed" : project?.status ?? "pending_entry",
+  const isTerminal = project?.status === "cancelled" || project?.status === "transferred";
+  const [draftStatus, setDraftStatus] = useState<ManualStatusOption>(
+    isTerminal ? "completed" : project?.status ?? "pending_entry",
   );
   useEffect(() => {
-    if (!project || project.status === "cancelled") return;
+    if (!project || project.status === "cancelled" || project.status === "transferred") return;
     setDraftStatus(project.status);
   }, [project?.id, project?.status]);
   if (!project)
@@ -1897,17 +1920,17 @@ function ProjectContext({
           </button>
         </div>
         <GroupedTags groups={detail?.groupedTags ?? project.groupedTags} />
-        {project.status !== "cancelled" && (
+        {!isTerminal && (
           <div className="status-adjust">
             <label htmlFor="context-status-v2">人工调整主状态</label>
             <select
               id="context-status-v2"
               value={draftStatus}
               onChange={(event) =>
-                setDraftStatus(event.target.value as AdjustableProjectStatus)
+                setDraftStatus(event.target.value as ManualStatusOption)
               }
             >
-              {STAGES.map((status) => (
+              {MANUAL_STATUS_OPTIONS.map((status) => (
                 <option value={status} key={status}>
                   {STATUS_LABEL[status]}
                 </option>
@@ -1915,13 +1938,19 @@ function ProjectContext({
             </select>
             <button
               className="button small"
-              onClick={() => onStatus(draftStatus)}
+              onClick={() => {
+                if (draftStatus === "cancelled") {
+                  onCancel();
+                } else {
+                  onStatus(draftStatus);
+                }
+              }}
             >
               提交校验
             </button>
           </div>
         )}
-        {project.status !== "cancelled" && (
+        {!isTerminal && (
           <div className="cancel-entry">
             <button className="button danger small" onClick={onCancel}>
               取消项目
@@ -3523,12 +3552,14 @@ function BoundedShipToPicker({
 function IndependentModuleV2({
   kind,
   project,
+  defaultAddress = "",
   refreshToken,
   onSave,
   onDelete,
 }: {
   kind: WorkbenchV2IndependentKind;
   project: WorkbenchProjectRow | null;
+  defaultAddress?: string;
   refreshToken: number;
   onSave: (action: WorkbenchActionPayload) => Promise<void>;
   onDelete: (kind: "serial_address" | "qr_request", id: string) => Promise<void>;
@@ -3542,8 +3573,27 @@ function IndependentModuleV2({
   const [error, setError] = useState("");
   const [instrumentId, setInstrumentId] = useState("");
   const [serialNo, setSerialNo] = useState("");
+  const [customerName, setCustomerName] = useState(project?.customerName || "");
+  const [newSiteAddress, setNewSiteAddress] = useState(defaultAddress || "");
+  const [accountId, setAccountId] = useState("");
+  const [updatedAt, setUpdatedAt] = useState(todayDate());
   const [qrTypes, setQrTypes] = useState<string[]>(["A", "B"]);
   const sequence = useRef(0);
+  const addressEditedRef = useRef(false);
+  const customerEditedRef = useRef(false);
+
+  useEffect(() => {
+    if (!customerEditedRef.current && project?.customerName) {
+      setCustomerName(project.customerName);
+    }
+  }, [project?.customerName]);
+
+  useEffect(() => {
+    if (!addressEditedRef.current && defaultAddress) {
+      setNewSiteAddress(defaultAddress);
+    }
+  }, [defaultAddress]);
+
   async function load(cursor: string | null): Promise<void> {
     const id = ++sequence.current;
     try {
@@ -3572,7 +3622,13 @@ function IndependentModuleV2({
       if (key !== "types") values[key] = String(value);
     });
     if (kind === "qr_request") values.types = [...new Set(qrTypes)];
-    if (kind === "serial_address") values.instrumentId = instrumentId;
+    if (kind === "serial_address") {
+      values.instrumentId = instrumentId;
+      if (!values.customerName && customerName) values.customerName = customerName;
+      if (!values.newSiteAddress && newSiteAddress) values.newSiteAddress = newSiteAddress;
+      if (!values.accountId && accountId) values.accountId = accountId;
+      if (!values.updatedAt && updatedAt) values.updatedAt = updatedAt;
+    }
     try {
       if (kind === "qr_request" && qrTypes.length === 0) {
         throw new Error("请至少选择一种二维码申请类型");
@@ -3584,6 +3640,25 @@ function IndependentModuleV2({
       });
       await load(stack.at(-1) ?? null);
       if (kind === "qr_request") setQrTypes(["A", "B"]);
+      if (kind === "serial_address") {
+        setInstrumentId("");
+        setSerialNo("");
+        addressEditedRef.current = true;
+        customerEditedRef.current = true;
+      }
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function removeRecord(id: string): Promise<void> {
+    if (!window.confirm("删除后无法恢复，确认删除这条记录？")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onDelete(kind, id);
+      await load(stack.at(-1) ?? null);
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -3600,7 +3675,11 @@ function IndependentModuleV2({
         onSubmit={(event) => void submit(event)}
       >
         <LayerHeaderAction><button form="independent-record-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : kind === "qr_request" ? "保存申请" : "保存记录"}</button></LayerHeaderAction>
-        <div className="form-grid">
+        <fieldset
+          className="form-grid"
+          disabled={busy}
+          style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+        >
           {kind === "serial_address" ? (
             <>
               {project ? (
@@ -3623,10 +3702,24 @@ function IndependentModuleV2({
               <Field
                 name="customerName"
                 label="客户名称"
-                defaultValue={project?.customerName || ""}
+                value={customerName}
+                onChange={(event) => {
+                  customerEditedRef.current = true;
+                  setCustomerName(event.target.value);
+                }}
                 required
               />
-              <Field name="newSiteAddress" label="新址地址" required />
+              <Field
+                name="newSiteAddress"
+                label="新址地址"
+                value={newSiteAddress}
+                onChange={(event) => {
+                  addressEditedRef.current = true;
+                  setNewSiteAddress(event.target.value);
+                }}
+                help="可修改，保存后才成为该仪器实际新址"
+                required
+              />
               <Field
                 name="serialNo"
                 label="序列号"
@@ -3634,12 +3727,19 @@ function IndependentModuleV2({
                 onChange={(event) => setSerialNo(event.target.value)}
                 required
               />
-              <Field name="accountId" label="Account ID" required />
+              <Field
+                name="accountId"
+                label="Account ID"
+                value={accountId}
+                onChange={(event) => setAccountId(event.target.value)}
+                required
+              />
               <Field
                 name="updatedAt"
                 label="更新日期"
                 type="date"
-                defaultValue={todayDate()}
+                value={updatedAt}
+                onChange={(event) => setUpdatedAt(event.target.value)}
                 required
               />
             </>
@@ -3703,7 +3803,7 @@ function IndependentModuleV2({
               </div>
             </>
           )}
-        </div>
+        </fieldset>
         {error && (
           <div className="inline-error" role="alert">
             {error}
@@ -3747,10 +3847,12 @@ function IndependentModuleV2({
           <label>截止日期<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
           <button className="button">查找</button>
         </form>
-        <DataRows kind={kind} rows={page?.rows ?? []} onDelete={(id) => {
-          if (!window.confirm("删除后无法恢复，确认删除这条记录？")) return;
-          void onDelete(kind, id).then(() => load(stack.at(-1) ?? null)).catch((cause) => setError(messageOf(cause)));
-        }} />
+        <DataRows
+          kind={kind}
+          rows={page?.rows ?? []}
+          busy={busy}
+          onDelete={(id) => void removeRecord(id)}
+        />
         <div className="queue-pagination">
           <button
             className="button"
@@ -3787,10 +3889,12 @@ function IndependentModuleV2({
 function DataRows({
   kind,
   rows,
+  busy = false,
   onDelete,
 }: {
   kind: WorkbenchV2IndependentKind;
   rows: WorkbenchV2IndependentPageDto["rows"];
+  busy?: boolean;
   onDelete: (id: string) => void;
 }): JSX.Element {
   if (!rows.length)
@@ -3816,7 +3920,7 @@ function DataRows({
                   ).join("、")}
                 </td>
                 <td className="numeric qr-workload-cell">{row.workload}</td>
-                <td><div className="restricted-action"><button className="button danger small" onClick={() => onDelete(row.id)}>删除</button><small>申请内容有误时，删除后重新登记。</small></div></td>
+                <td><div className="restricted-action"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button><small>申请内容有误时，删除后重新登记。</small></div></td>
               </tr>
             ) : (
               <tr key={row.id}>
@@ -3827,7 +3931,7 @@ function DataRows({
                 <td>{row.newSiteAddress}</td>
                 <td>{row.accountId}</td>
                 <td>{businessDate(row.updatedAt)}</td>
-                <td><div className="restricted-action"><button className="button danger small" onClick={() => onDelete(row.id)}>删除</button><small>地址事实有误时，删除后按最新资料重新登记。</small></div></td>
+                <td><div className="restricted-action"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button><small>地址事实有误时，删除后按最新资料重新登记。</small></div></td>
               </tr>
             ),
           )}
@@ -4412,7 +4516,23 @@ function CancelFormV2({
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
-        void onSave(String(data.get("time")), String(data.get("reason"))).catch(
+        const time = String(data.get("time") ?? "").trim();
+        const reason = String(data.get("reason") ?? "").trim();
+        if (!time) {
+          setError("请选择取消日期");
+          return;
+        }
+        if (!reason) {
+          setError("请填写取消原因");
+          return;
+        }
+        const checkbox = event.currentTarget.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        if (checkbox && !checkbox.checked) {
+          setError("请勾选确认不可恢复");
+          return;
+        }
+        setError("");
+        void onSave(time, reason).catch(
           (cause) => setError(messageOf(cause)),
         );
       }}
@@ -4613,7 +4733,7 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
   </div>;
 }
 
-function DataCleanPanel({ onComplete }: { onComplete: () => Promise<void> }): JSX.Element {
+export function DataCleanPanel({ onComplete }: { onComplete: () => Promise<void> }): JSX.Element {
   const [prepared, setPrepared] = useState<DataCleanPrepareDto | null>(null);
   const [confirmText, setConfirmText] = useState(""); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [needsRecheck, setNeedsRecheck] = useState(false);

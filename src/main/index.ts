@@ -30,6 +30,10 @@ import {
   DuePlanVisitRuntime,
   type DuePlanVisitRuntimeDeps,
 } from './due-plan-visit-runtime';
+import {
+  createMobileReadonlyPublicationBridge,
+  type MobileReadonlyPublicationBridge,
+} from './mobile-readonly/wiring';
 
 /**
  * 主进程入口（tasks 1.1 工程骨架）。
@@ -74,6 +78,9 @@ let autoBackupError: string | null = null;
 
 /** 计划上门日期到期自动推进触发接线（Tasks 3.3；桌面关闭期间不承诺运行）。 */
 let duePlanVisitRuntime: DuePlanVisitRuntime | null = null;
+
+/** 移动只读发布桥（wiring 层；构造失败 → 降级 unavailable，绝不阻止本地启动）。 */
+let mobileReadonlyPublication: MobileReadonlyPublicationBridge | null = null;
 
 function accountService(): LocalAccountService {
   return new LocalAccountService(new SqliteAccountRepository(requireDb()));
@@ -233,6 +240,23 @@ function createDuePlanVisitRuntime(): DuePlanVisitRuntime {
   return runtime;
 }
 
+/**
+ * 移动只读发布桥接线（tasks 5.2 + future 8.1/8.3 affordance）：
+ * - storageDir 独立于 DB/backups（wiring 内部取 userData/mobile-readonly）；
+ * - db 经 () => requireDb() 回读当前 holder（恢复/清理换库后不持有陈旧句柄）；
+ * - 构造失败仅降级（unavailable、启停安全 no-op），不阻止本地启动/无网络请求。
+ */
+function initializeMobileReadonlyPublication(): void {
+  try {
+    mobileReadonlyPublication = createMobileReadonlyPublicationBridge({
+      userDataDir: app.getPath('userData'),
+      db: requireDb,
+    });
+  } catch {
+    mobileReadonlyPublication = null;
+  }
+}
+
 function registerIpcHandlersWithDeps(): void {
   const deps: IpcHandlerDeps = {
     db: requireDb,
@@ -294,6 +318,7 @@ function registerIpcHandlersWithDeps(): void {
     },
     importWizardEnabled: () => importWizardErrorState === null,
     importWizardError: () => importWizardErrorState,
+    mobileReadonlyPublication: () => mobileReadonlyPublication,
   };
   registerIpcHandlers(ipcMain, deps);
 }
@@ -323,6 +348,10 @@ app.whenReady().then(async () => {
 
   registerIpcHandlersWithDeps();
 
+  // 移动只读发布桥（start 前完成注册；构造失败仅降级 unavailable，不阻止本地启动）。
+  initializeMobileReadonlyPublication();
+  mobileReadonlyPublication?.start();
+
   // 计划上门日期到期自动推进（Tasks 3.3）：迁移后、首个工作台读取前补跑；
   // 此后 activate/resume/跨本地业务日期边界由 runtime 触发（不承诺桌面关闭期间运行）。
   duePlanVisitRuntime = createDuePlanVisitRuntime();
@@ -342,6 +371,14 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  if (mobileReadonlyPublication) {
+    try {
+      mobileReadonlyPublication.stop();
+    } catch {
+      // 停止失败不影响退出流程
+    }
+    mobileReadonlyPublication = null;
+  }
   if (duePlanVisitRuntime) {
     duePlanVisitRuntime.dispose();
     duePlanVisitRuntime = null;

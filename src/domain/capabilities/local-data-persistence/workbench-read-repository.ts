@@ -102,6 +102,41 @@ export function decodeCursor(cursor: string): Cursor {
   throw new Error(`非法分页游标: ${cursor}`);
 }
 
+/**
+ * 序列号地址更新列表专用三键游标：[updated_at, created_at, id]。
+ *
+ * 排序为 `updated_at DESC, created_at DESC, id DESC`：同一业务更新日期内按登记
+ * 时间倒序（最新登记优先），登记时间再相同时才按 random UUID 的 id 倒序兜底。
+ * 与通用二键 Cursor 分开编解码，避免影响 qr_request/lookup 等既有二键分页兼容。
+ */
+interface SerialAddressCursor {
+  updatedAt: string;
+  createdAt: string;
+  id: string;
+}
+
+function encodeSerialAddressCursor(updatedAt: string, createdAt: string, id: string): string {
+  return JSON.stringify([updatedAt, createdAt, id]);
+}
+
+function decodeSerialAddressCursor(cursor: string): SerialAddressCursor {
+  try {
+    const parsed = JSON.parse(cursor) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 3 &&
+      typeof parsed[0] === 'string' &&
+      typeof parsed[1] === 'string' &&
+      typeof parsed[2] === 'string'
+    ) {
+      return { updatedAt: parsed[0], createdAt: parsed[1], id: parsed[2] };
+    }
+  } catch {
+    // fall through to error
+  }
+  throw new Error(`非法分页游标: ${cursor}`);
+}
+
 /** 泳道游标绑定锁定日期集合与推进列，避免跨列/跨集合复用。 */
 function encodeReminderLaneCursor(selectedDates: readonly string[], date: string, id: string): string {
   return JSON.stringify([selectedDates, date, id]);
@@ -297,12 +332,12 @@ export class WorkbenchReadRepository {
           JOIN contracts c ON c.project_id = p.id
           LEFT JOIN (SELECT project_id, SUM(amount_cents) AS total FROM invoices WHERE revoked_at IS NULL GROUP BY project_id) inv ON inv.project_id = p.id
           WHERE p.entry_at IS NOT NULL AND c.final_confirmable_amount_cents IS NOT NULL
-            AND p.status <> 'cancelled') AS pending_cents`,
+            AND p.status NOT IN ('cancelled','transferred')) AS pending_cents`,
     ).get() as { total_projects: number | bigint; pending_cents: bigint | string | number };
 
     const metrics = {
       totalProjects: Number(aggregateRow.total_projects),
-      activeProjects: count("SELECT COUNT(*) AS n FROM projects WHERE status NOT IN ('completed','cancelled')"),
+      activeProjects: count("SELECT COUNT(*) AS n FROM projects WHERE status NOT IN ('completed','cancelled','transferred')"),
       reminderCount: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL OR reminder_note IS NOT NULL'),
       reminderOverdue: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL AND substr(reminder_at,1,10) < ?', today),
       reminderToday: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL AND substr(reminder_at,1,10) = ?', today),
@@ -563,7 +598,15 @@ export class WorkbenchReadRepository {
       // 往期/时间筛选：按业务更新日期（updated_at）。
       const range = dateRangeClause(request, 's.updated_at');
       if (range.sql !== '') where.push(range.sql);
-      const { clause: cursorClause, params: cursorParams } = buildKeysetClause('s', 'updated_at', 'desc', request.cursor);
+      // 三键 keyset：与 `updated_at DESC, created_at DESC, id DESC` 严格对应，
+      // 行值比较保证同日/同登记时间的稳定推进，跨页无重复/遗漏。
+      let cursorClause = '';
+      const cursorParams: SQLInputValue[] = [];
+      if (request.cursor) {
+        const cursor = decodeSerialAddressCursor(request.cursor);
+        cursorClause = '(s.updated_at, s.created_at, s.id) < (?, ?, ?)';
+        cursorParams.push(cursor.updatedAt, cursor.createdAt, cursor.id);
+      }
       const rowWhere = buildWhereClause(cursorClause ? [...where, cursorClause] : where);
       const countWhere = buildWhereClause(where);
       const rows = prepareReadBigInt(
@@ -573,7 +616,7 @@ export class WorkbenchReadRepository {
          FROM serial_address_updates s
          LEFT JOIN instruments i ON i.id = s.instrument_id
          ${rowWhere}
-         ORDER BY s.updated_at DESC, s.id DESC
+         ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
          LIMIT ?`,
       ).all(...whereParams, ...range.params, ...cursorParams, limit + 1) as Row[];
       const totalRow = this.db
@@ -583,7 +626,10 @@ export class WorkbenchReadRepository {
       const hasMore = rows.length > limit;
       const pageRows = hasMore ? rows.slice(0, limit) : rows;
       const last = pageRows[pageRows.length - 1];
-      const nextCursor = hasMore && last ? encodeCursor(String(last.updated_at), String(last.id)) : null;
+      const nextCursor =
+        hasMore && last
+          ? encodeSerialAddressCursor(String(last.updated_at), String(last.created_at), String(last.id))
+          : null;
       return {
         businessRevision: readBusinessRevision(this.db),
         kind: request.kind,

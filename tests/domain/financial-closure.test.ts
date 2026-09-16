@@ -452,3 +452,21 @@ describe('已取消状态金额与掉票修改被拒绝（5.11）', () => {
     expect(() => ctx2.financial.recordInvoice(pid3, { amountCents: 100000n }, ACTOR)).toThrow(/已取消/);
   });
 });
+
+describe('已转单状态金额与掉票修改被拒绝（终态冻结）', () => {
+  function transferredProject(ctx: ReturnType<typeof setup>): string {
+    const projectId = preparePendingInvoice(ctx, '10000');
+    ctx.projectService.adjustStatus(projectId, 'transferred');
+    expect(ctx.projects.findById(projectId)!.status).toBe('transferred');
+    return projectId;
+  }
+
+  it('已转单项目冻结金额与掉票修改', () => {
+    const ctx = setup();
+    const projectId = transferredProject(ctx);
+    expect(() => ctx.financial.setContractUsdTaxAmount(projectId, 1200000n)).toThrow(/已转单/);
+    expect(() => ctx.financial.setFinalConfirmableAmount(projectId, 900000n)).toThrow(/已转单/);
+    expect(() => ctx.financial.recordInvoice(projectId, { amountCents: 100000n }, ACTOR)).toThrow(/已转单/);
+    expect(ctx.contracts.findByProjectId(projectId)!.usdTaxAmountCents).toBe(1000000n);
+  });
+});

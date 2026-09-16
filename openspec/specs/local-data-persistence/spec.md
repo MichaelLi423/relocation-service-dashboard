@@ -8,7 +8,7 @@
 
 ### Requirement: Windows 桌面运行且不依赖远程服务
 
-工作台 SHALL 作为 Windows 桌面应用运行并仅供个人使用；核心业务功能 SHALL 在无远程服务可用的情况下可正常使用，SHALL NOT 依赖远程服务器才能启动或完成业务操作。
+工作台 SHALL 作为 Windows 桌面应用运行并仅供个人使用；核心业务功能 SHALL 在无远程服务可用的情况下可正常使用，SHALL NOT 依赖远程服务器才能启动或完成业务操作。负责人显式启用的移动只读发布 SHALL NOT 改变此本地核心边界：发布能力不可用时 SHALL NOT 中断核心业务操作，本机 SQLite 仍是唯一业务事实来源与唯一写入方。
 
 #### Scenario: 离线启动并完成核心操作
 
@@ -22,6 +22,13 @@
 - **GIVEN** 本机网络不可用
 - **WHEN** 负责人继续使用工作台
 - **THEN** 系统不因无网络而中断核心业务操作
+
+#### Scenario: 发布服务不可用时本地核心业务继续
+
+- **GIVEN** 负责人已显式启用移动只读发布
+- **WHEN** 远程只读服务不可用或上传失败
+- **THEN** 工作台仍可启动并完成本地核心业务操作
+- **AND** 系统不将移动只读发布视为本地业务的依赖
 
 ### Requirement: 本机 SQLite 持久化
 
@@ -86,13 +93,28 @@
 
 ### Requirement: 不向远程发送业务数据
 
-工作台 SHALL NOT 向远程数据库或云同步服务自动发送业务数据，SHALL NOT 向外部业务系统同步业务数据。
+工作台默认 SHALL NOT 向远程数据库或云同步服务自动发送业务数据，SHALL NOT 向外部业务系统同步业务数据。仅当负责人对 `mobile-readonly-publication` 显式启用时，工作台 SHALL 可向该能力发布**必要字段白名单的只读快照**；该例外 SHALL NOT 向外部业务系统同步业务数据、SHALL NOT 构成双向同步或远程业务写入，本机 SQLite 仍是唯一业务事实来源与唯一写入方。负责人停用该能力后，工作台 SHALL 停止后续发布。
 
 #### Scenario: 日常使用不自动外发
 
-- **GIVEN** 工作台运行中且负责人进行日常录入
+- **GIVEN** 工作台运行中且负责人进行日常录入，且未显式启用 `mobile-readonly-publication`
 - **WHEN** 业务数据发生变化
 - **THEN** 系统不向任何远程数据库或云同步服务发送业务数据
+- **AND** 不向外部业务系统同步业务数据
+
+#### Scenario: 显式启用后仅发布必要字段白名单只读快照
+
+- **GIVEN** 负责人已显式启用 `mobile-readonly-publication`
+- **WHEN** 工作台检测到本地数据变化并发布
+- **THEN** 系统仅上传必要字段白名单的只读快照
+- **AND** 不向外部业务系统同步业务数据，也不接受远程业务写入
+
+#### Scenario: 停用后停止后续发布
+
+- **GIVEN** 负责人此前已显式启用移动只读发布
+- **WHEN** 负责人停用该能力
+- **THEN** 系统停止后续的变化检查与上传
+- **AND** 本机数据不受影响，仍可正常使用工作台
 
 ### Requirement: 本地用户不加密 SQLite
 
@@ -277,3 +299,28 @@ v15 已发布入库；项目暂定搬迁范围字段 SHALL 通过追加迁移 v1
 - **WHEN** 新版本启动
 - **THEN** 系统保留迁移前的数据与可恢复状态
 - **AND** 不静默丢弃现有数据
+
+### Requirement: 追加迁移 v21 保存项目「已转单」主状态枚举
+
+v20 已发布入库；项目主状态「已转单」（transferred）SHALL 通过追加迁移 v21 持久化，SHALL NOT 修改 v1–v20 任何已发布迁移。v21 SHALL 重建 `projects` 与 `project_status_transition_audit`，在各自状态 CHECK 中增加 `transferred`，并完整保留全部列、STRICT、唯一约束、外键、索引（v7 导入来源、v12 读取索引、v15 审计索引）与 v10 业务修订触发器；升级旧库时 SHALL 保留既有业务数据，SHALL NOT 丢弃或改写存量值。迁移中断或失败后重跑 SHALL 幂等成功并保留数据。
+
+#### Scenario: v20 已发布库追加 v21 不修改既有迁移
+
+- **GIVEN** 数据库已应用至 v20 且 v20 已发布入库
+- **WHEN** 新版本需要持久化项目主状态「已转单」
+- **THEN** 系统仅追加 v21 迁移
+- **AND** 不修改 v1–v20 任何已发布迁移
+
+#### Scenario: v20 库升级后 transferred 可持久化并保留数据
+
+- **GIVEN** 旧库已应用 v20 且存在项目等业务数据
+- **WHEN** 新版本首次启动执行 v21 迁移
+- **THEN** 既有业务数据完整保留
+- **AND** projects.status 与 project_status_transition_audit 的 from/to_status 可持久化 transferred
+
+#### Scenario: v21 中断或失败后重跑保留可恢复状态
+
+- **GIVEN** v21 迁移中断或失败且版本号尚未写入
+- **WHEN** 新版本重跑迁移
+- **THEN** v21 幂等重建成功并写入版本号
+- **AND** 迁移前的数据完整保留

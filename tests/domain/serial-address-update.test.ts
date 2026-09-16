@@ -342,6 +342,84 @@ describe('非空字段与序列号校验（4.3）', () => {
     expect(ok.serialNo).toBe('SN-100');
   });
 
+  it('仪器登记序列号含首尾空白时按归一化值比较：提交无空白序列号可成功登记', () => {
+    const ctx = setup();
+    ctx.instruments.save({
+      id: 'i-ws',
+      projectId: 'p1',
+      batchId: null,
+      name: '仪器-SN-100',
+      model: null,
+      manufacturer: null,
+      serviceLevel: null,
+      serialNo: '  SN-100  ',
+      ups: false,
+      qrRequested: false,
+      destinationShipToId: null,
+      accountId: null,
+      usernameSnapshot: null,
+      createdAt: 't',
+      updatedAt: 't',
+    });
+    const update = ctx.service.register('i-ws', { ...BASE, serialNo: 'SN-100' }, ACTOR);
+    expect(update.instrumentId).toBe('i-ws');
+    expect(update.serialNo).toBe('SN-100');
+    expect(ctx.updates.all).toHaveLength(1);
+    expect(ctx.updates.all[0].serialNo).toBe('SN-100');
+  });
+
+  it('仪器登记序列号含 CR/LF 时与对应连续字符串视为一致，并落库仪器权威值', () => {
+    const ctx = setup();
+    const authoritative = 'DEBAV06313\r\nDEBA414152\r\nDEBAQ07911\r\nDEBAX06001\r\nDEJAA01413';
+    ctx.instruments.save({
+      id: 'i-crlf',
+      projectId: 'p1',
+      batchId: null,
+      name: '仪器-CRLF序列号',
+      model: null,
+      manufacturer: null,
+      serviceLevel: null,
+      serialNo: authoritative,
+      ups: false,
+      qrRequested: false,
+      destinationShipToId: null,
+      accountId: null,
+      usernameSnapshot: null,
+      createdAt: 't',
+      updatedAt: 't',
+    });
+    const continuous = 'DEBAV06313DEBA414152DEBAQ07911DEBAX06001DEJAA01413';
+    const update = ctx.service.register('i-crlf', { ...BASE, serialNo: continuous }, ACTOR);
+    expect(update.instrumentId).toBe('i-crlf');
+    // 落库采用 DB 仪器权威值（含 CR/LF），而非客户端 input 清理后的连续值
+    expect(update.serialNo).toBe(authoritative);
+    expect(ctx.updates.all).toHaveLength(1);
+    expect(ctx.updates.all[0].serialNo).toBe(authoritative);
+  });
+
+  it('普通内部空格仍有身份意义：登记值含普通空格而提交连续字符串仍拒绝', () => {
+    const ctx = setup();
+    ctx.instruments.save({
+      id: 'i-space',
+      projectId: 'p1',
+      batchId: null,
+      name: '仪器-空格序列号',
+      model: null,
+      manufacturer: null,
+      serviceLevel: null,
+      serialNo: 'AB C',
+      ups: false,
+      qrRequested: false,
+      destinationShipToId: null,
+      accountId: null,
+      usernameSnapshot: null,
+      createdAt: 't',
+      updatedAt: 't',
+    });
+    expect(() => ctx.service.register('i-space', { ...BASE, serialNo: 'ABC' }, ACTOR)).toThrow(/不一致/);
+    expect(ctx.updates.all).toHaveLength(0);
+  });
+
   it('不引入未确认的序列号格式约束：仅非空与仪器一致', () => {
     const ctx = setup();
     const instrumentId = addInstrument(ctx, 'SN-100-XYZ/01');

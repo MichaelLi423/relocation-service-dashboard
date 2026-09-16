@@ -318,6 +318,63 @@ export interface ImportWizardCheckpointDto {
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 // ---------------------------------------------------------------------------
+// 移动只读发布（桌面）—— 状态/配置/启停 IPC 契约（tasks 1.3）
+// 仅含非 secret 状态：configured/启用/目标 origin/最近成功/最近失败规范化码/运行提示。
+// 任何 IPC 响应绝不返回上传 token 或其它 secret；接线层在后续 lane 注册处理器。
+// ---------------------------------------------------------------------------
+
+export const MOBILE_READONLY_CHANNELS = {
+  /** 只读发布状态查询。 */
+  status: 'mobile-readonly:status',
+  /** 一次性受信配置（HTTPS 目标 + 上传 token 只写不回显）。 */
+  configure: 'mobile-readonly:configure',
+  /** 显式启停发布。 */
+  setEnabled: 'mobile-readonly:set-enabled',
+} as const;
+
+export type MobileReadonlyChannel =
+  (typeof MOBILE_READONLY_CHANNELS)[keyof typeof MOBILE_READONLY_CHANNELS];
+
+/** 只读发布本地运行提示（非远程失败码；null=正常）。 */
+export type MobileReadonlyStatusIssue =
+  | 'config_corrupt'
+  | 'credential_unavailable'
+  | 'state_unwritable'
+  | 'not_configured'
+  | 'runtime_unavailable';
+
+/** 只读发布状态 DTO（无 secret；target 仅展示 origin）。 */
+export interface MobileReadonlyStatusDto {
+  /** 一次性配置是否完成（固定 HTTPS 目标 + 上传凭证密文均已保存）。 */
+  configured: boolean;
+  /** 是否有效启用（持久化 enabled 且配置/凭证可用；配置损坏自动禁用外发）。 */
+  enabled: boolean;
+  /** 配置目标 origin（无尾斜杠；未配置/损坏为 null）。 */
+  target: string | null;
+  /** 最近成功发布时刻（ISO）；"无新发布"时保留上一次成功值。 */
+  lastSuccessfulAt: string | null;
+  /** 最近失败规范化错误码（失败刷新；成功后清除）。 */
+  lastFailedCode: string | null;
+  /** 最近失败时刻（ISO）。 */
+  lastFailedAt: string | null;
+  /** 本地运行提示（config/credential/state 类）；null=正常。 */
+  issue: MobileReadonlyStatusIssue | null;
+}
+
+/** 一次性受信配置输入（token 只写不回显；长度由主进程校验非空）。 */
+export interface MobileReadonlyConfigureInput {
+  /** 固定 HTTPS origin（无凭据/query/hash/路径）。 */
+  target: string;
+  /** 独立上传凭证（明文只用于加密保存，永不返回/记录）。 */
+  token: string;
+}
+
+/** 发布启停输入。 */
+export interface MobileReadonlySetEnabledInput {
+  enabled: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // 项目区域固定枚举（唯一共享来源：src/shared/project-fields.ts，tasks 2.4/2.5）。
 // 领域写边界 trim + 严格校验（parseProjectRegion）；存量 legacy 非枚举区域
 // 保留原值并以 regionNeedsAdjustment 显式标记（不猜测映射）。
@@ -343,12 +400,15 @@ export type ProjectStatus =
   | 'pending_acceptance'
   | 'pending_invoice'
   | 'completed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'transferred';
 
 /**
- * 人工主状态调整可选的七种非终止状态。
+ * 人工主状态调整可选的非取消状态（含已转单）。
  * 取消（cancelled）只能通过 cancelProject 专用命令（须提供取消时间与原因），
  * adjustStatus 拒绝 cancelled。
+ * 已转单（transferred）为可人工调整进入的终态：转单后不再自动推进，
+ * 人工进入后不可再离开；由 adjustStatus 接受。
  * 维修中（under_repair）仅由人工选择进入/离开，不参与自动触发。
  */
 export type AdjustableProjectStatus = Exclude<ProjectStatus, 'cancelled'>;
@@ -629,7 +689,7 @@ export interface WorkbenchV2OverviewDto {
   generatedAt: string;
   metrics: {
     totalProjects: number;
-    /** 未完成且未取消。 */
+    /** 未完成、未取消且未转单。 */
     activeProjects: number;
     /** 有当前提醒（时间或备注任一）的项目数。 */
     reminderCount: number;
@@ -639,7 +699,7 @@ export interface WorkbenchV2OverviewDto {
     pendingInvoice: number;
     /** 存在开放维修事项（事项状态未修复且未关闭未修复）的项目数（EXISTS 口径）。 */
     openRepairProjects: number;
-    /** 待掉票金额（已进单且未取消项目 最终可确认金额-累计有效掉票 之和），十进制字符串。 */
+    /** 待掉票金额（已进单且未取消未转单项目 最终可确认金额-累计有效掉票 之和），十进制字符串。 */
     pendingAmount: string;
   };
   stages: Array<{ status: ProjectStatus; count: number; averageDays: number }>;
@@ -1398,7 +1458,7 @@ export interface WorkbenchV2BaseMutationRequest {
   /** set_reminder：提醒日期（业务日期 yyyy-mm-dd）。 */
   reminderAt?: string | null;
   reminderNote?: string | null;
-  /** adjust_status（拒绝 cancelled，取消走 cancel_project）。 */
+  /** adjust_status（拒绝 cancelled，取消走 cancel_project；接受 transferred 终态）。 */
   status?: AdjustableProjectStatus;
   /** cancel_project：取消日期（业务日期 yyyy-mm-dd）。 */
   time?: string;
@@ -1863,6 +1923,13 @@ export interface WorkbenchApi {
   restoreFromBackup(): Promise<RestoreResultDto>;
   /** 历史数据导入向导：最小化 IPC 语义 API（主进程编排工作区/worker/校验/封存/提交）。 */
   importWizard: ImportWizardApi;
+  // ---- 移动只读发布（桌面侧任务指挥台发布入口；UI 由 mobile-readonly 控制入口调用） ----
+  /** 只读发布状态查询（configured/启用/最近成功/最近失败规范化码/运行提示；不含任何 secret）。 */
+  mobileReadonlyStatus(): Promise<MobileReadonlyStatusDto>;
+  /** 一次性受信配置：HTTPS 目标 + 上传 token（只写不回显）；返回保存后状态。 */
+  mobileReadonlyConfigure(input: MobileReadonlyConfigureInput): Promise<MobileReadonlyStatusDto>;
+  /** 显式启停发布；返回保存后状态。 */
+  mobileReadonlySetEnabled(input: MobileReadonlySetEnabledInput): Promise<MobileReadonlyStatusDto>;
 }
 
 /**

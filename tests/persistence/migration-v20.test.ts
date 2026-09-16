@@ -9,9 +9,9 @@ import { runMigrations } from '../../src/domain/capabilities/local-data-persiste
 import { businessRevisionTriggerName } from '../../src/domain/capabilities/local-data-persistence/schema-v10';
 import {
   applyServiceOrderEngineerNullableMigration,
-  LATEST_SCHEMA_VERSION,
   SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION,
 } from '../../src/domain/capabilities/local-data-persistence/schema-v20';
+import { LATEST_SCHEMA_VERSION } from '../../src/domain/capabilities/local-data-persistence/schema-v21';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 /**
@@ -76,7 +76,7 @@ describe('schema v20：开单记录工程师可空保存并可后续补录（重
     try {
       const { db } = bootstrapDatabase({ dataDir: dir });
       expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
-      expect(LATEST_SCHEMA_VERSION).toBe(SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION);
+      expect(SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION).toBe(20);
       expect(MIGRATIONS.map((m) => m.version)).toEqual(Array.from({ length: LATEST_SCHEMA_VERSION }, (_, i) => i + 1));
       // service_orders 可空写入验证
       expectServiceOrdersIndexesAndTriggers(db);

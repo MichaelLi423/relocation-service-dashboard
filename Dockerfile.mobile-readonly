@@ -1,0 +1,46 @@
+# =============================================================================
+# 云端轻量只读服务镜像（openspec change `add-mobile-readonly-publication` tasks 7.6）
+#
+# 构建：docker build -f Dockerfile.mobile-readonly -t mobile-readonly-service .
+# 构建上下文忽略文件：Dockerfile.mobile-readonly.dockerignore（根 .dockerignore 之外的同名附加，
+# 请确认你使用的 Docker 版本读取该命名 ignore 文件；否则请把内容合入根 .dockerignore）。
+#
+# 关键点：
+# - 不依赖 webpack-cli：构建用 node 脚本（scripts/build-mobile-readonly.cjs）程序化调用 webpack API；
+# - COPY 只含必要文件（无 `COPY . .`、无 node_modules/.git/docs/tests）：package/tsconfig/
+#   webpack 配置 + build 脚本 + src/shared + src/server/mobile-readonly + src/mobile；
+# - 运行时不携带 node_modules：server.cjs 只依赖 Node 内建模块（external 化）；
+#   web/app.js 为浏览器自包含产物；index.html 由构建脚本复制进 web 目录。
+# =============================================================================
+
+# ---- 构建阶段 -------------------------------------------------------------
+FROM node:24-alpine AS build
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY tsconfig.json webpack.mobile-readonly.config.ts ./
+COPY scripts/build-mobile-readonly.cjs ./scripts/build-mobile-readonly.cjs
+COPY src/shared ./src/shared
+COPY src/server/mobile-readonly ./src/server/mobile-readonly
+COPY src/mobile ./src/mobile
+
+RUN npm ci --no-audit --no-fund
+RUN node scripts/build-mobile-readonly.cjs
+
+# ---- 运行阶段 -------------------------------------------------------------
+FROM node:24-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    MOBILE_READONLY_HOST=0.0.0.0 \
+    MOBILE_READONLY_PORT=8082 \
+    MOBILE_READONLY_DATA_DIR=/var/lib/mobile-readonly \
+    MOBILE_READONLY_WEB_ROOT=/app/dist/mobile-readonly/web
+
+COPY --from=build /app/dist/mobile-readonly ./dist/mobile-readonly
+RUN mkdir -p /var/lib/mobile-readonly
+
+# 说明性端口（仅文档；容器默认不发布宿主机端口）。
+# 服务须加入共享 Docker 内部网络 / host 网络可达；容器自身 loopback 不跨容器，禁止跨容器使用。
+EXPOSE 8082
+
+CMD ["node", "dist/mobile-readonly/server.cjs"]

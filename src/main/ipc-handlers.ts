@@ -4,15 +4,19 @@ import type { LocalAccountService } from '../domain/capabilities/workbench-acces
 import {
   IMPORT_WIZARD_CHANNELS,
   IPC_CHANNELS,
+  MOBILE_READONLY_CHANNELS,
   type AccountSessionInfo,
   type ImportWizardCategory,
   type ImportWizardStepId,
+  type MobileReadonlyConfigureInput,
   type ReportFilterDto,
   type ShipToRequestInputDto,
 } from '../shared/ipc';
 import { WorkbenchFacade } from './workbench-facade';
 import type { ImportWizardFacade } from './import-wizard-facade';
 import type { IpcEnvelope } from '../shared/ipc';
+import { MobileReadonlyPublishError } from './mobile-readonly/errors';
+import type { MobileReadonlyPublicationControl } from './mobile-readonly/wiring';
 
 /**
  * 错误可跨 IPC 序列化的最小信封（ora-1：#7）。
@@ -125,6 +129,11 @@ export interface IpcHandlerDeps {
   importWizardEnabled(): boolean;
   /** 工作区不可用原因（enabled=false 时展示）。 */
   importWizardError(): string | null;
+  /**
+   * 移动只读发布控制面（可选注入；生产由 main/index 经 wiring 恒提供）。
+   * 未注入/不可用 → 三个移动通道返回规范化不可用错误（绝不静默假装成功）。
+   */
+  mobileReadonlyPublication?: () => MobileReadonlyPublicationControl | null;
 }
 
 /** 未登录/非受信调用方被拒绝时的错误（与领域错误区分，便于界面层提示）。 */
@@ -171,6 +180,45 @@ function requireSessionAndSender(event: IpcEvent, deps: IpcHandlerDeps): Account
     throw new IpcAccessDeniedError('登录状态已失效，请重新登录');
   }
   return session;
+}
+
+// ---------------------------------------------------------------------------
+// 移动只读发布（tasks 5.2）
+// - 与其它业务通道一致：受信主窗口 + 有效会话统一前置（校验发生在读取/解析任何输入前）；
+// - 错误一律规范化（稳定 code + 固定文案）：任意非预期 Error 不暴露栈/输入回显；
+// - 返回信封（{ok,data}|{ok:false,error:{code,message}}），preload 用 unwrap 适配。
+// ---------------------------------------------------------------------------
+
+/** 移动只读发布通道错误规范化：只保留稳定 code 与固定消息，绝不回显输入/token/栈。 */
+function toMobileReadonlyError(err: unknown): { code: string; message: string } {
+  if (err instanceof MobileReadonlyPublishError) {
+    return { code: err.code, message: err.message };
+  }
+  if (err instanceof IpcAccessDeniedError) {
+    return { code: 'IPC_ACCESS_DENIED', message: err.message };
+  }
+  return { code: 'IPC_UNKNOWN', message: '移动只读发布请求处理失败' };
+}
+
+function runMobileReadonlyEnveloped<T>(fn: () => T | Promise<T>): Promise<IpcEnvelope<T>> {
+  try {
+    return Promise.resolve(fn()).then(
+      (data) => ({ ok: true, data }),
+      (err: unknown) => ({ ok: false, error: toMobileReadonlyError(err) }),
+    );
+  } catch (err) {
+    return Promise.resolve({ ok: false, error: toMobileReadonlyError(err) });
+  }
+}
+
+/** 进入控制面前统一做会话+受信 sender 守卫；未注入控制面 → 规范化不可用（非静默成功）。 */
+function mobileReadonlyFor(event: IpcEvent, deps: IpcHandlerDeps): MobileReadonlyPublicationControl {
+  requireSessionAndSender(event, deps);
+  const control = deps.mobileReadonlyPublication?.() ?? null;
+  if (!control) {
+    throw new MobileReadonlyPublishError('MOBILE_READONLY_UNAVAILABLE', '移动只读发布不可用（未初始化）');
+  }
+  return control;
 }
 
 export function registerIpcHandlers(bus: IpcBus, deps: IpcHandlerDeps): void {
@@ -408,4 +456,16 @@ export function registerIpcHandlers(bus: IpcBus, deps: IpcHandlerDeps): void {
   bus.handle(IMPORT_WIZARD_CHANNELS.checkpoints, (event, draftId: string) => importWizardFor(event).checkpoints(draftId));
   bus.handle(IMPORT_WIZARD_CHANNELS.undo, (event, draftId: string) => importWizardFor(event).undo(draftId));
   bus.handle(IMPORT_WIZARD_CHANNELS.redo, (event, draftId: string) => importWizardFor(event).redo(draftId));
+
+  // ---- 移动只读发布（tasks 5.2）：统一受信 sender+会话守卫，错误规范化信封 ----
+
+  bus.handle(MOBILE_READONLY_CHANNELS.status, (event) =>
+    runMobileReadonlyEnveloped(() => mobileReadonlyFor(event, deps).getStatus()),
+  );
+  bus.handle(MOBILE_READONLY_CHANNELS.configure, (event, input: MobileReadonlyConfigureInput) =>
+    runMobileReadonlyEnveloped(() => mobileReadonlyFor(event, deps).configure(input)),
+  );
+  bus.handle(MOBILE_READONLY_CHANNELS.setEnabled, (event, input: { enabled: boolean }) =>
+    runMobileReadonlyEnveloped(() => mobileReadonlyFor(event, deps).setEnabled(Boolean(input?.enabled))),
+  );
 }

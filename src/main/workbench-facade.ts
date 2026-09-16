@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Money, formatCents } from '../domain/core/money';
 import { ValidationError } from '../domain/core/errors';
 import { SystemClock, assertValidBusinessDate } from '../domain/core/time';
-import { CustomerService, ProjectService, isFormallyEntered, type ProjectStatusOrCancelled } from '../domain/capabilities/relocation-project-lifecycle';
+import { CustomerService, ProjectService, isFormallyEntered, isTerminal, type ProjectStatusOrCancelled } from '../domain/capabilities/relocation-project-lifecycle';
 import { ExecutionService, type BatchQuoteInput, type LogisticsFeeInput, type WorkType } from '../domain/capabilities/relocation-execution';
 import { ServiceOrderService } from '../domain/capabilities/service-order-recording';
 import { ReminderService } from '../domain/capabilities/workbench-todos';
@@ -615,7 +615,7 @@ export class WorkbenchFacade {
    * - 普通资料（客户重关联/区域/联系人/地址/合同起止/计划上门运输/现场确认）任何状态可更新；
    * - ECC / 进单时间 / 合同金额 / 最终可确认金额更正仅允许已正式进单项目（待进单项目必须走
    *   core/formalEntry 语义，update_project 不绕过正式进单校验，避免绕过财务闭环）；
-   * - 已取消项目禁止资料更新（终态），但仅替换分类标签不进入项目写模型；
+   * - 已取消/已转单项目禁止资料更新（终态），但仅替换分类标签不进入项目写模型；
    * - 三态输入：undefined=未提交、null=显式清空（仅可空字段；ECC/进单时间 null 视为未提交，
    *   金额 null 解析为 0 交由领域校验决定是否接受）、有值=覆盖；布尔显式传 false。
    */
@@ -635,8 +635,11 @@ export class WorkbenchFacade {
       }
       // 空 patch 仅完成项目存在性校验，不写入任何业务记录。
       if (!hasFields) return;
-      if (project.status === 'cancelled') {
-        throw new ValidationError('CANCELLED_PROJECT', '已取消项目禁止修改项目资料');
+      if (isTerminal(project.status)) {
+        throw new ValidationError(
+          project.status === 'cancelled' ? 'CANCELLED_PROJECT' : 'TRANSFERRED_PROJECT',
+          project.status === 'cancelled' ? '已取消项目禁止修改项目资料' : '已转单项目禁止修改项目资料',
+        );
       }
       const formallyEntered = isFormallyEntered(project);
 
@@ -801,8 +804,11 @@ export class WorkbenchFacade {
       if (!project) {
         throw new ValidationError('PROJECT_NOT_FOUND', `项目不存在: ${projectId}`);
       }
-      if (project.status === 'cancelled') {
-        throw new ValidationError('CANCELLED_PROJECT', '已取消项目禁止修改项目资料');
+      if (isTerminal(project.status)) {
+        throw new ValidationError(
+          project.status === 'cancelled' ? 'CANCELLED_PROJECT' : 'TRANSFERRED_PROJECT',
+          project.status === 'cancelled' ? '已取消项目禁止修改项目资料' : '已转单项目禁止修改项目资料',
+        );
       }
 
       // 客户重关联：按去除首尾空白后的名称全局唯一匹配，不存在则登记新客户并关联。

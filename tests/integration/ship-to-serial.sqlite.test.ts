@@ -206,6 +206,41 @@ describe('serial-address-update SQLite 集成（4.12）', () => {
     }
   });
 
+  it('仪器 serial_no 含 CR/LF、提交连续字符串：落库事实采用 DB 仪器权威值', () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      ctx.db
+        .prepare('INSERT INTO projects (id, temp_no, status, created_at, updated_at) VALUES (?,?,?,?,?)')
+        .run('p-1', 'TP-1', 'pending_execution', 't', 't');
+      const authoritative = 'DEBAV06313\r\nDEBA414152\r\nDEBAQ07911\r\nDEBAX06001\r\nDEJAA01413';
+      ctx.db
+        .prepare('INSERT INTO instruments (id, project_id, name, serial_no, created_at, updated_at) VALUES (?,?,?,?,?,?)')
+        .run('i-crlf', 'p-1', '仪器A', authoritative, 't', 't');
+
+      const continuous = 'DEBAV06313DEBA414152DEBAQ07911DEBAX06001DEJAA01413';
+      const update = ctx.serialService.register(
+        'i-crlf',
+        { customerName: '华东医药', newSiteAddress: '新址A', serialNo: continuous, accountId: 'ACC-301', updatedAt: '2026-08-01' },
+        ACTOR,
+      );
+      // 服务返回值与真实落库值均为 DB 仪器权威值（含内部 CR/LF）
+      expect(update.serialNo).toBe(authoritative);
+      const row = ctx.db
+        .prepare('SELECT serial_no FROM serial_address_updates WHERE id = ?')
+        .get(update.id) as { serial_no: string };
+      expect(row.serial_no).toBe(authoritative);
+
+      closeDatabase(ctx.db);
+
+      const reopened = openService(dir);
+      expect(reopened.updates.findById(update.id)!.serialNo).toBe(authoritative);
+      closeDatabase(reopened.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
   it('确认删除更新事实：列表/统计消失，删除最新后实际关联回退剩余最近事实（5.2）', () => {
     const dir = makeTempDir();
     try {

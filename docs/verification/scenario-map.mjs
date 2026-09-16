@@ -181,6 +181,23 @@ export const scenarioMap = {
         ['tests/domain/relocation-cancel.test.ts', '任一未取消主状态且无掉票历史可取消，并记录取消时间与原因'],
       ],
     },
+    '负责人人工进入已转单终态': {
+      evidence: [
+        ['tests/domain/relocation-status.test.ts', '负责人可人工调整主状态为已转单（终态）'],
+        ['tests/integration/workbench-facade.sqlite.test.ts', '已转单终态：经 adjust_status 持久化并写入审计'],
+      ],
+    },
+    '已转单项目不可再离开且自动触发不推进': {
+      evidence: [
+        ['tests/domain/lifecycle.test.ts', '已转单为终态：不可再离开、禁止继续流转'],
+        ['tests/domain/lifecycle.test.ts', '已转单为终态：自动触发（计划上门到期/验收/装机/金额闭环）不覆盖终态'],
+      ],
+    },
+    '事实重算不覆盖已转单终态': {
+      evidence: [
+        ['tests/domain/lifecycle.test.ts', '已转单终态无法可靠重算 → 拒绝（删除事实不覆盖终态）'],
+      ],
+    },
     '负责人直接调整主状态': {
       evidence: [
         ['tests/domain/relocation-status.test.ts', '负责人直接调整主状态：待执行 → 执行中 校验通过'],
@@ -1252,6 +1269,11 @@ export const scenarioMap = {
         ['tests/domain/operational-reporting.test.ts', '取消前实际发生的物流费用与损坏备件金额作为真实成本保留并标记取消'],
       ],
     },
+    '已转单项目与已取消同等排除收入与掉票与项目管道': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '已转单项目与已取消同等排除：不纳入进单金额、掉票统计与项目管道'],
+      ],
+    },
     '月份区间必须手工选择': {
       evidence: [
         ['tests/domain/operational-reporting.test.ts', '月份区间必须手工选择：未提供时拒绝计算（无默认季度）'],
@@ -1485,6 +1507,12 @@ export const scenarioMap = {
     '已取消项目禁止登记或修改掉票': {
       evidence: [
         ['tests/domain/financial-closure.test.ts', '已取消项目禁止新增、编辑或撤销掉票'],
+      ],
+    },
+    '已转单项目冻结金额与掉票修改': {
+      evidence: [
+        ['tests/domain/financial-closure.test.ts', '已转单项目冻结金额与掉票修改'],
+        ['tests/integration/workbench-facade.sqlite.test.ts', '已转单终态：经 adjust_status 持久化并写入审计'],
       ],
     },
   },
@@ -1743,6 +1771,12 @@ export const scenarioMap = {
       ],
       note: "中断后按成功审计判定完整成功或完整回滚",
     },
+    "人工转单后重跑导入报告人工修改冲突且不覆盖终态": {
+      evidence: [
+        ["tests/domain/historical-data-import.oracle.test.ts", "人工转单后重跑导入报告人工修改冲突且不覆盖终态"],
+      ],
+      note: "人工转单=人工修改目标：重跑导入按目标快照不一致阻塞，零业务写入并保留 transferred",
+    },
   },
   'local-data-persistence': {
     '追加迁移不修改已发布迁移': { evidence: [['tests/persistence/migration-v15.test.ts', '全新库引导到最新版本：迁移序列 1..16、user_version=16、v15 四列已建立、审计表/索引/FK 已建、可写入最小审计事实']] },
@@ -1754,6 +1788,9 @@ export const scenarioMap = {
     'v15 库升级保留数据并初始化暂定范围列': { evidence: [['tests/persistence/migration-v16.test.ts', 'v15 存量库升级到 v16：业务数据完整保留、legacy region 原文不变、v15 字段原样保留、新列 null 初始化']] },
     '暂定搬迁范围字段持久化保留': { evidence: [['tests/integration/create-project-ecc-rules.sqlite.test.ts', '关闭重开持久化：建档/编辑的暂定仪器范围字段重开后保留']] },
     'v16 迁移失败保留可恢复状态': { evidence: [['tests/persistence/migration-v16.test.ts', '注入失败保留迁移前数据与可恢复状态：整体回滚、版本仍为 15、全部 v16 结构回滚、迁移前备份可恢复']] },
+    'v20 已发布库追加 v21 不修改既有迁移': { evidence: [['tests/persistence/migration-v21.test.ts', 'v20→v21：projects 全部列/STRICT/UNIQUE/外键保留，数据原样保留，子表外键与索引/触发器完整']] },
+    'v20 库升级后 transferred 可持久化并保留数据': { evidence: [['tests/persistence/migration-v21.test.ts', 'v21 后：transferred 可持久化到 projects 与状态转换审计表，触发器生效']] },
+    'v21 中断或失败后重跑保留可恢复状态': { evidence: [['tests/persistence/migration-v21.test.ts', '恢复场景：schema 已重建但 user_version=20 时重跑 v21 幂等成功、数据保留'], ['tests/persistence/migration-v21.test.ts', '注入失败：apply 中途抛错整体回滚']] },
     '离线启动并完成核心操作': {
       evidence: [
         ['tests/persistence/runtime-boundary.test.ts', '离线可用：无任何远程服务时本机 SQLite 全流程（写入→备份→关闭→重开）正常'],

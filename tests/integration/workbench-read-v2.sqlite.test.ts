@@ -184,6 +184,23 @@ describe('工作台 v2 overview（Oracle #10 首屏）', () => {
     closeDatabase(db);
   });
 
+  it('overview 排除已转单项目：activeProjects 与 pendingAmount 均不计入 transferred', () => {
+    const ctx = makeFacade();
+    const { db, facade, projectId } = ctx;
+    // 基线：1 个已进单未完成项目，活跃项目 1、待掉票 100000。
+    expect(reader(ctx).overview().metrics.activeProjects).toBe(1);
+    expect(reader(ctx).overview().metrics.pendingAmount).toBe('100000.00');
+
+    // 人工转单（终态）→ 与已取消同等排除：活跃项目与待掉票金额均归 0。
+    const transferred = facade.v2Mutate({ op: 'adjust_status', projectId, status: 'transferred' });
+    expect(transferred.changed).toMatchObject({ projectId, status: 'transferred' });
+    const overview = reader(ctx).overview();
+    expect(overview.metrics.totalProjects).toBe(1);
+    expect(overview.metrics.activeProjects).toBe(0);
+    expect(overview.metrics.pendingAmount).toBe('0.00');
+    closeDatabase(db);
+  });
+
   it('任务1.1：pendingAmount 直接取自 contracts.final_confirmable_amount_cents；已完成有效余额纳入、已取消排除', () => {
     const ctx = makeFacade();
     const { db } = ctx;
@@ -1411,6 +1428,89 @@ describe('Oracle #10 二次复审：independent/lookup 分页缺陷回归', () =
     // 升序稳定：首行字典序最小
     const ascNames = facade.v2LookupPage({ kind: 'customers', limit: 10 }).rows.map((r) => (r as { name: string }).name);
     expect([...ascNames].sort()).toEqual(ascNames);
+    closeDatabase(db);
+  });
+});
+
+/**
+ * serial_address 稳定降序回归：排序为 `updated_at DESC, created_at DESC, id DESC`。
+ * 同一业务更新日期内 random UUID 不再决定顺序，而是最新登记（created_at）优先；
+ * created_at 相同时才按 id 降序兜底。游标为对应三键 keyset，跨页无重复/遗漏。
+ */
+describe('工作台 v2 serial_address 稳定三键降序（updated_at → created_at → id）', () => {
+  /** 播种 7 条覆盖三个排序层级的记录，返回期望的稳定降序 id。 */
+  const seedSerialRows = (db: DatabaseSync): string[] => {
+    const stmt = db.prepare(
+      `INSERT INTO serial_address_updates (id, instrument_id, customer_name, new_site_address, serial_no, account_id, updated_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+    );
+    // 同更新日期 2026-08-10：登记时间最新优先（sa-4 > 12:00 并列组 > sa-3）
+    stmt.run('sa-1', null, '甲', 'A1', 'S1', 'A1', '2026-08-10', '2026-08-10T12:00:00+08:00');
+    stmt.run('sa-2', null, '甲', 'A2', 'S2', 'A2', '2026-08-10', '2026-08-10T12:00:00+08:00');
+    stmt.run('sa-3', null, '甲', 'A3', 'S3', 'A3', '2026-08-10', '2026-08-10T09:00:00+08:00');
+    stmt.run('sa-4', null, '甲', 'A4', 'S4', 'A4', '2026-08-10', '2026-08-10T15:00:00+08:00');
+    // 更新日期更早但登记时间更晚：仍按 updated_at 排后（第一排序键优先）
+    stmt.run('sa-5', null, '乙', 'A5', 'S5', 'A5', '2026-08-08', '2026-08-20T00:00:00+08:00');
+    // 更新日期最新但登记时间最早：排最前
+    stmt.run('sa-6', null, '乙', 'A6', 'S6', 'A6', '2026-08-12', '2026-08-01T00:00:00+08:00');
+    stmt.run('sa-7', null, '乙', 'A7', 'S7', 'A7', '2026-08-08', '2026-08-08T08:00:00+08:00');
+    return ['sa-6', 'sa-4', 'sa-2', 'sa-1', 'sa-3', 'sa-5', 'sa-7'];
+  };
+
+  it('跨更新日期降序；同日按 created_at 降序；created_at 相同按 id 降序', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const expected = seedSerialRows(db);
+
+    const page = facade.v2IndependentPage({ kind: 'serial_address' });
+    expect(page.total).toBe(7);
+    expect(page.rows.map((r) => r.id)).toEqual(expected);
+
+    // 跨更新日期降序：updated_at 字典序单调不增
+    const updatedDates = page.rows.map((r) => (r as { updatedAt: string }).updatedAt);
+    expect([...updatedDates].sort().reverse()).toEqual(updatedDates);
+    expect(updatedDates[0]).toBe('2026-08-12');
+    expect(updatedDates[updatedDates.length - 1]).toBe('2026-08-08');
+
+    // 同日按 created_at 降序（2026-08-10 组）
+    const sameDayCreated = page.rows
+      .filter((r) => ['sa-1', 'sa-2', 'sa-3', 'sa-4'].includes(r.id))
+      .map((r) => (r as Extract<(typeof page.rows)[number], { kind: 'serial_address' }>).createdAt);
+    expect(sameDayCreated).toEqual([
+      '2026-08-10T15:00:00+08:00',
+      '2026-08-10T12:00:00+08:00',
+      '2026-08-10T12:00:00+08:00',
+      '2026-08-10T09:00:00+08:00',
+    ]);
+
+    // created_at 相同 → id 降序（sa-2 先于 sa-1）
+    expect(page.rows.slice(2, 4).map((r) => r.id)).toEqual(['sa-2', 'sa-1']);
+    closeDatabase(db);
+  });
+
+  it('limit 小时多页顺序与全量一致、无重复遗漏、末页终止', () => {
+    const ctx = makeFacade();
+    const { db, facade } = ctx;
+    const expected = seedSerialRows(db);
+
+    const seen = new Set<string>();
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const page = facade.v2IndependentPage({ kind: 'serial_address', limit: 2, cursor });
+      for (const row of page.rows) {
+        expect(seen.has(row.id), `翻页不应重复: ${row.id}`).toBe(false);
+        seen.add(row.id);
+        collected.push(row.id);
+      }
+      cursor = page.nextCursor;
+      pages += 1;
+      expect(pages, '7 条 / limit=2 → 4 页有界').toBeLessThanOrEqual(4);
+    } while (cursor !== null);
+
+    expect(collected).toEqual(expected);
+    expect(seen.size).toBe(7);
     closeDatabase(db);
   });
 });

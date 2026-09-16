@@ -139,6 +139,42 @@ describe('集中状态校验入口（tasks 1.8 / 2.2 / D4）', () => {
     expectRejected(result, '不可恢复');
   });
 
+  it('已转单为终态：不可再离开、禁止继续流转', () => {
+    const toTransferred = resolveStatus(
+      ctx({ currentStatus: 'pending_execution', requestedStatus: 'transferred' }),
+    );
+    expectStatus(toTransferred, 'transferred');
+    expectReason(toTransferred, 'transfer');
+
+    const leave = resolveStatus(
+      ctx({ currentStatus: 'transferred', requestedStatus: 'executing' }),
+    );
+    expectRejected(leave, '已转单项目为终态');
+  });
+
+  it('已转单为终态：自动触发（计划上门到期/验收/装机/金额闭环）不覆盖终态', () => {
+    const due = resolveStatus(
+      ctx({
+        currentStatus: 'transferred',
+        requestedStatus: 'transferred',
+        planVisitAt: '2026-07-01',
+        today: '2026-07-10',
+      }),
+    );
+    expectRejected(due, '已转单项目为终态');
+
+    const acceptance = resolveStatus(
+      ctx({
+        currentStatus: 'transferred',
+        requestedStatus: 'transferred',
+        acceptanceReportDate: '2026-07-25',
+        actualInstallDoneAt: '2026-07-20',
+        amounts: { confirmedAmountCents: 100n, finalConfirmableAmountCents: 800000n },
+      }),
+    );
+    expectRejected(acceptance, '已转单项目为终态');
+  });
+
   it('自动触发 3：金额闭环在待掉票/已完成之间自动重算（优先于人工值）', () => {
     // 已确认语义：任意成功登记一笔掉票（累计有效 > 0）即进入已完成，不再等累计金额足额。
     const toCompleted = resolveStatus(
@@ -650,6 +686,14 @@ describe('删除执行/验收事实后的状态重算（resolveStatusAfterFactDe
     const result = resolveStatusAfterFactDeletion(base({ currentStatus: 'cancelled' }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors.join('；')).toContain('已取消');
+  });
+
+  it('已转单终态无法可靠重算 → 拒绝（删除事实不覆盖终态）', () => {
+    const result = resolveStatusAfterFactDeletion(
+      base({ currentStatus: 'transferred', acceptanceReportDate: '2026-08-01' }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.join('；')).toContain('已转单');
   });
 
   it('财务闭环完成态无法可靠反向重算 → 拒绝', () => {

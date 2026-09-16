@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import {
   IMPORT_WIZARD_CHANNELS,
   IPC_CHANNELS,
+  MOBILE_READONLY_CHANNELS,
   type IpcEnvelope,
   type ImportWizardProgressEventDto,
   type WorkbenchApi,
@@ -93,6 +94,11 @@ const api: WorkbenchApi = {
       };
     },
   },
+  // 移动只读发布：IPC 线上为错误信封（{ok,data}|{ok:false,error:{code,message}}），
+  // 适配回既有 UI 契约：成功返回 DTO，失败抛出含稳定 code 的 Error（UI 只读状态不含 secret）。
+  mobileReadonlyStatus: () => unwrap(ipcRenderer.invoke(MOBILE_READONLY_CHANNELS.status)),
+  mobileReadonlyConfigure: (input) => unwrap(ipcRenderer.invoke(MOBILE_READONLY_CHANNELS.configure, input)),
+  mobileReadonlySetEnabled: (input) => unwrap(ipcRenderer.invoke(MOBILE_READONLY_CHANNELS.setEnabled, input)),
 };
 
 contextBridge.exposeInMainWorld('workbench', api);

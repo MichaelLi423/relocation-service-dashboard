@@ -87,6 +87,10 @@ import {
   SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION_VERSION,
 } from './schema-v20';
 import {
+  applyTransferredStatusMigration,
+  TRANSFERRED_STATUS_MIGRATION_VERSION,
+} from './schema-v21';
+import {
   buildFinancialIntegrityHint,
   hasAnyFinancialIntegrityIssue,
   readFinancialIntegrityCounts,
@@ -234,6 +238,14 @@ export const SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION: Migration = {
   up: (db) => applyServiceOrderEngineerNullableMigration(db),
 };
 
+/** v21 迁移：新增项目主状态「已转单」（重建 projects 与状态转换审计表放宽 status CHECK）。 */
+export const TRANSFERRED_STATUS_MIGRATION: Migration = {
+  version: TRANSFERRED_STATUS_MIGRATION_VERSION,
+  name: 'transferred-project-status',
+  disableForeignKeys: true,
+  up: (db) => applyTransferredStatusMigration(db),
+};
+
 /** 当前迁移序列（后续 schema 升级追加新 Migration，不修改已发布迁移）。 */
 export const MIGRATIONS: readonly Migration[] = [
   INITIAL_MIGRATION,
@@ -256,6 +268,7 @@ export const MIGRATIONS: readonly Migration[] = [
   OPTIONAL_LOGISTICS_FEE_MIGRATION,
   UNDER_REPAIR_STATUS_MIGRATION,
   SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION,
+  TRANSFERRED_STATUS_MIGRATION,
 ];
 
 export interface BootstrapOptions {

@@ -29,3 +29,7 @@ npm-debug.log*
 
 # Local user data created at runtime (never committed)
 .userData/
+
+# Python (deploy helper + deployment tests)
+__pycache__/
+*.py[cod]

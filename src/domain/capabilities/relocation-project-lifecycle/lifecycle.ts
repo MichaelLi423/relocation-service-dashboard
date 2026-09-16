@@ -5,6 +5,8 @@ import {
   CANCELLED_STATUS,
   isCancelled,
   isLegalStatus,
+  isTerminal,
+  TRANSFERRED_STATUS,
   type ProjectStatusOrCancelled,
 } from './states';
 
@@ -30,9 +32,14 @@ import {
  * 不新增任何自动转换；既有自动触发（计划上门到期/实际装机完成/验收报告/
  * 金额闭环）均不把项目自动推进出维修中（验收报告触发显式排除维修中）。
  *
+ * 终态（已取消 cancelled、已转单 transferred）：与取消类似，均为不可自动覆盖的
+ * 终态；人工进入后不可再离开，任何自动触发与事实重算均不得将其改出终态。
+ * 已转单（transferred）由负责人人工选择进入，转单后不再自动推进。
+ *
  * 约束校验：
  * - 目标状态必须为合法状态之一
  * - 取消约束：存在任何掉票历史（含已撤销）禁止取消；已取消不可恢复
+ * - 终态约束：已取消/已转单均不可再流转，事实重算不得覆盖
  * - 金额闭环约束：无 0 金额闭环；人工调整为「已完成」必须有闭环依据
  * - 未进单先执行标签存在时主状态保持待进单（TBD-08）：带标签的待进单项目
  *   不允许按已发生事实自动跳转或人工调整离开待进单（正式进单后标签清除，
@@ -80,6 +87,7 @@ export type TransitionReason =
   | 'auto_acceptance'
   | 'auto_amount_closure'
   | 'cancel'
+  | 'transfer'
   | 'unchanged';
 
 export type TransitionResult =
@@ -110,11 +118,14 @@ function closureTarget(amounts: AmountClosureFacts): ProjectStatusOrCancelled | 
 export function resolveStatus(context: TransitionContext): TransitionResult {
   const { currentStatus, requestedStatus } = context;
 
-  // 已取消为终态：不可恢复、不可继续流转（TBD-10）。
-  if (isCancelled(currentStatus)) {
+  // 终态（已取消/已转单）：不可恢复、不可继续流转（TBD-10）。
+  // 已取消/已转单均不可自动覆盖，人工进入后不可再离开；事实重算不接受改出终态。
+  if (isTerminal(currentStatus)) {
     return reject(
       currentStatus,
-      ['已取消项目不可恢复；如需继续工作需重新新增项目'],
+      isCancelled(currentStatus)
+        ? ['已取消项目不可恢复；如需继续工作需重新新增项目']
+        : ['已转单项目为终态，不可再离开或继续流转'],
     );
   }
 
@@ -126,6 +137,11 @@ export function resolveStatus(context: TransitionContext): TransitionResult {
       ]);
     }
     return ok(CANCELLED_STATUS, 'cancel');
+  }
+
+  // 转单请求：人工进入终态，转单后不再自动推进；不设取消的掉票历史约束。
+  if (requestedStatus === TRANSFERRED_STATUS) {
+    return ok(TRANSFERRED_STATUS, 'transfer');
   }
 
   // 自动触发：计划上门日期到期自动推进（tasks 3.1 / design D5 转换表）。
@@ -277,9 +293,14 @@ function isPlanVisitDue(context: TransitionContext): boolean {
 export function resolveStatusAfterFactDeletion(context: TransitionContext): TransitionResult {
   const { currentStatus } = context;
 
-  // 终态：已取消不可恢复，删除事实后无可靠主状态可重算。
-  if (isCancelled(currentStatus)) {
-    return reject(currentStatus, ['已取消项目为终态，删除执行/验收事实后无法可靠重算主状态']);
+  // 终态：已取消/已转单不可恢复，删除事实后无可靠主状态可重算。
+  if (isTerminal(currentStatus)) {
+    return reject(
+      currentStatus,
+      isCancelled(currentStatus)
+        ? ['已取消项目为终态，删除执行/验收事实后无法可靠重算主状态']
+        : ['已转单项目为终态，删除执行/验收事实后无法可靠重算主状态'],
+    );
   }
   // 财务闭环完成态：只能经掉票撤销路径回退，删除执行/验收事实的反向重算不可靠。
   if (currentStatus === 'completed') {
