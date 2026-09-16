@@ -5,6 +5,11 @@ import { runDryRun, runImport } from '../../src/domain/capabilities/historical-d
 import type { SourceRow } from '../../src/domain/capabilities/historical-data-import/source-model';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { closeDatabase } from '../../src/domain/capabilities/local-data-persistence/connection';
+import {
+  SqliteContractRepository,
+  SqliteProjectRepository,
+} from '../../src/domain/capabilities/local-data-persistence/repositories';
+import { ProjectService } from '../../src/domain/capabilities/relocation-project-lifecycle/project-service';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 /**
@@ -396,6 +401,70 @@ describe('Oracle 复审：preflight 全局零写 / 批次含子记录 / 目标�
       // 人工修改保留
       const project = db.prepare("SELECT region FROM projects WHERE import_source_key = 'project|E-SNAP-1'").get() as { region: string | null };
       expect(project.region).toBe('人工修改区域');
+      closeDatabase(db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
+  it('人工转单后重跑导入报告人工修改冲突且不覆盖终态（零业务写入）', () => {
+    const dir = makeTempDir();
+    try {
+      const { db } = bootstrapDatabase({ dataDir: dir });
+      const initial: SourceRow[] = [
+        row(CONTRACT, '合同信息', 2, { 'ECC#': 'E-XFER-1', 'Account name': '甲', 合同USD含税金额: '100' }),
+      ];
+      runImport(db, { rows: initial, mapping: MAPPING_V1 });
+      const imported = db
+        .prepare("SELECT id, status FROM projects WHERE import_source_key = 'project|E-XFER-1'")
+        .get() as { id: string; status: string };
+      expect(imported.status).toBe('pending_entry');
+
+      // 负责人经唯一生命周期入口人工转单（终态）→ 目标项目被人工修改。
+      const service = new ProjectService(
+        new SqliteProjectRepository(db),
+        new SqliteContractRepository(db),
+      );
+      expect(service.adjustStatus(imported.id, 'transferred')).toMatchObject({
+        ok: true,
+        status: 'transferred',
+        reason: 'transfer',
+      });
+      expect(db.prepare('SELECT status FROM projects WHERE id = ?').get(imported.id)).toMatchObject({ status: 'transferred' });
+
+      // 重跑导入：源事实含进单/装机/验收等更强事实 → 目标快照不一致（人工修改）→ 阻塞不覆盖。
+      const rerun: SourceRow[] = [
+        row(CONTRACT, '合同信息', 2, { 'ECC#': 'E-XFER-1', 'Account name': '甲', 合同USD含税金额: '200' }),
+        row(EXEC, '搬迁项目', 2, {
+          'ECC#': 'E-XFER-1',
+          客户单位名称: '甲',
+          实际装机完成时间: '2026-03-01T00:00:00+08:00',
+          验收报告形成日期: '2026-03-02',
+        }),
+      ];
+      const result = runImport(db, { rows: rerun, mapping: MAPPING_V1 });
+      const failed = result.batches.find((b) => b.status === 'failed');
+      expect(failed, '应存在失败批次').toBeDefined();
+      expect(failed!.errorDetails).toContain('人工/外部修改');
+      // 整次提交零业务写入：无成功批次、写入计数全 0。
+      expect(result.batches.some((b) => b.status === 'success')).toBe(false);
+      expect(result.writtenCounts).toEqual({
+        project: 0,
+        service_order: 0,
+        invoice: 0,
+        logistics_fee: 0,
+        serial_address_update: 0,
+        qr_request: 0,
+        ship_to_request: 0,
+      });
+
+      // 终态保留、人工值保留、合同金额未被源事实覆盖、不新增项目。
+      expect(db.prepare('SELECT status FROM projects WHERE id = ?').get(imported.id)).toMatchObject({ status: 'transferred' });
+      expect((db.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number }).n).toBe(1);
+      const contract = db
+        .prepare("SELECT usd_tax_amount_cents FROM contracts WHERE ecc = 'E-XFER-1'")
+        .get() as { usd_tax_amount_cents: number | string };
+      expect(String(contract.usd_tax_amount_cents)).toBe('10000');
       closeDatabase(db);
     } finally {
       cleanupTempDir(dir);

@@ -360,6 +360,22 @@ describe('8.8 确定性状态重建', () => {
     expect(plain).toMatchObject({ ok: true, status: 'under_repair', reason: 'unchanged' });
   });
 
+  it('状态重建：导入事实不把已转单终态改出（终态由 lifecycle 保持）', () => {
+    // 源事实含取消/验收/装机/执行等更强事实：resolver 均返回保持已转单终态（ok=false）。
+    // 真实重跑由目标快照保护在提交前阻塞（见 oracle 集成测试）。
+    const withCancel = resolveImportedStatus({
+      entryAt: '2026-07-01', executionStarted: true,
+      actualInstallDoneAt: '2026-07-10', acceptanceReportDate: '2026-07-15', cancelledAt: '2026-07-20',
+    }, 'transferred');
+    expect(withCancel).toMatchObject({ ok: false, status: 'transferred' });
+
+    const advanced = resolveImportedStatus({
+      entryAt: '2026-07-01', executionStarted: true,
+      actualInstallDoneAt: '2026-07-10', acceptanceReportDate: '2026-07-15', cancelledAt: null,
+    }, 'transferred');
+    expect(advanced).toMatchObject({ ok: false, status: 'transferred' });
+  });
+
   it('导入状态真实变化与项目写入同事务记录最小转换审计', () => {
     const dir = makeTempDir();
     try {

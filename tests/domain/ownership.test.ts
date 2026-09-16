@@ -30,6 +30,7 @@ describe('模块所有权边界', () => {
       'pending_entry',
       'pending_execution',
       'executing',
+      'under_repair',
       'pending_acceptance',
       'pending_invoice',
       'completed',

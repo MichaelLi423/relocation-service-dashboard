@@ -32,7 +32,7 @@ export const MOBILE_READONLY_RECORD_KINDS = [
 ] as const;
 export type MobileReadonlyRecordKind = (typeof MOBILE_READONLY_RECORD_KINDS)[number];
 
-/** 项目主状态（与桌面 `ProjectStatus` 同枚举；含 cancelled 与 under_repair）。 */
+/** 项目主状态（与桌面 `ProjectStatus` 同枚举；含终态 cancelled 与 transferred 及 under_repair）。 */
 export const MOBILE_READONLY_PROJECT_STATUSES: readonly ProjectStatus[] = [
   'pending_entry',
   'pending_execution',
@@ -42,6 +42,7 @@ export const MOBILE_READONLY_PROJECT_STATUSES: readonly ProjectStatus[] = [
   'pending_invoice',
   'completed',
   'cancelled',
+  'transferred',
 ] as const;
 
 /** 开单类型四枚举（同 `service_orders.order_type`）。 */
@@ -59,7 +60,7 @@ export type MobileReadonlyPartCurrency = (typeof MOBILE_READONLY_PART_CURRENCIES
 export interface MobileReadonlyOverviewMetrics {
   /** OverviewDto.metrics.totalProjects 项目总数。 */
   totalProjects: number;
-  /** OverviewDto.metrics.activeProjects 活跃项目数（未完成且未取消）。 */
+  /** OverviewDto.metrics.activeProjects 活跃项目数（未完成、未取消且未转单）。 */
   activeProjects: number;
   /** OverviewDto.metrics.pendingAmount 待掉票金额（主单位固定两位小数字符串，`"0.00"` 合法）。 */
   pendingAmount: string;

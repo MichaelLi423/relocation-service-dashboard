@@ -8,6 +8,7 @@ import {
   type Clock,
 } from '../../core/time';
 import type { Contract, ContractRepository, Project, ProjectRepository } from '../relocation-project-lifecycle';
+import { isTerminal } from '../relocation-project-lifecycle';
 import {
   countActiveInvoices,
   hasAnyInvoiceHistory,
@@ -277,14 +278,22 @@ export class FinancialClosureService {
     return invoice;
   }
 
-  /** 已取消状态期间禁止金额与掉票修改（5.11，状态事实由 lifecycle 拥有）。 */
+  /**
+   * 终态（已取消/已转单）期间禁止金额与掉票修改（5.11，状态事实由 lifecycle 拥有）。
+   * 已转单与已取消同等冻结：终态项目不再参与后续财务修改。
+   */
   private assertNotCancelled(project: Project): void {
+    if (!isTerminal(project.status)) return;
     if (project.status === 'cancelled') {
       throw new ValidationError(
         'CANCELLED_FINANCIAL_FROZEN',
         '已取消项目禁止修改合同金额、最终可确认金额与掉票记录',
       );
     }
+    throw new ValidationError(
+      'TRANSFERRED_FINANCIAL_FROZEN',
+      '已转单项目禁止修改合同金额、最终可确认金额与掉票记录',
+    );
   }
 
   private now(): string {

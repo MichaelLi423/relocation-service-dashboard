@@ -803,8 +803,8 @@ export interface StateRebuildFacts {
 
 /**
  * 导入状态重建必须经过 lifecycle 的唯一转换入口，不能维护一套平行优先级。
- * 导入没有计划上门日期和掉票闭环事实；终态取消与验收/装机等更强事实仍由
- * resolveStatus 的既有优先级决定。
+ * 导入没有计划上门日期和掉票闭环事实；终态（已取消/已转单）与验收/装机等更强事实
+ * 仍由 resolveStatus 的既有优先级决定。
  */
 export function resolveImportedStatus(
   facts: StateRebuildFacts,
@@ -847,7 +847,7 @@ export function resolveImportedStatus(
   });
 }
 
-/** 导入仅以前进事实推进既有项目；较强已持久化状态不因较弱源事实倒退。 */
+/** 导入仅以前进事实推进既有项目；较强已持久化状态（含终态）不因较弱源事实倒退。 */
 function statusRank(status: ProjectStatusOrCancelled): number {
   switch (status) {
     case 'pending_entry': return 0;
@@ -858,6 +858,7 @@ function statusRank(status: ProjectStatusOrCancelled): number {
     case 'pending_invoice': return 5;
     case 'completed': return 6;
     case 'cancelled': return 7;
+    case 'transferred': return 8; // 已转单为终态，导入事实不覆盖
   }
 }
 

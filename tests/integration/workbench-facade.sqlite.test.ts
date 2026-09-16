@@ -204,6 +204,29 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     expect(() => facade.v2Mutate({ op: 'adjust_status', projectId, status: 'completed' })).toThrow();
   });
 
+  it('已转单终态：经 adjust_status 持久化并写入审计，冻结项目资料与后续状态流转', async () => {
+    const { facade, db } = await makeFacade();
+    const created = facade.v2Mutate({
+      op: 'create_project',
+      payload: wizard({ customerName: '转单客户', region: 'East', ecc: 'ECC-TRANSFER-1', contractAmount: '1000' }),
+    });
+    const projectId = projectIdOf(created);
+
+    const transferred = facade.v2Mutate({ op: 'adjust_status', projectId, status: 'transferred' });
+    expect(transferred.changed).toMatchObject({ projectId, status: 'transferred' });
+    // v21 SQLite CHECK 接受 transferred
+    expect(db.prepare('SELECT status FROM projects WHERE id = ?').get(projectId)).toMatchObject({ status: 'transferred' });
+    expect(
+      db.prepare('SELECT to_status, reason FROM project_status_transition_audit WHERE project_id = ?').get(projectId),
+    ).toMatchObject({ to_status: 'transferred', reason: 'transfer' });
+
+    // 终态不可再离开：人工调整与自动触发均拒绝
+    expect(() => facade.v2Mutate({ op: 'adjust_status', projectId, status: 'executing' })).toThrow(/已转单项目为终态/);
+    // 终态冻结项目资料更新
+    expect(() => facade.v2Mutate({ op: 'update_project', payload: { projectId, region: 'North' } })).toThrow(/已转单项目禁止修改项目资料/);
+    expect(db.prepare('SELECT status FROM projects WHERE id = ?').get(projectId)).toMatchObject({ status: 'transferred' });
+  });
+
   it('Ship-to 申请按 requestId 线性推进：创建草稿→提交→完成；重复创建/重复推进不重复申请与工作量', async () => {    const { facade } = await makeFacade();
     // 创建草稿：API 返回该记录（不自动 submit），无提交时间不计工作量
     const created = facade.createShipToRequest({ customerName: 'ShipTo客户', newSiteAddress: '新址甲' });

@@ -972,6 +972,27 @@ describe('已取消项目的统计排除（7.9）', () => {
     expect(report.pipeline.find((r) => r.status === 'pending_execution')!.projectCount).toBe(1);
   });
 
+  it('已转单项目与已取消同等排除：不纳入进单金额、掉票统计与项目管道', () => {
+    const { facts, service } = setup();
+    facts.projects = [
+      makeProject({ id: 'p1', tempNo: 'TP-1', region: 'East', status: 'transferred' }),
+      makeProject({ id: 'p2', tempNo: 'TP-2', region: 'South' }),
+    ];
+    facts.contracts = [
+      makeContract({ projectId: 'p1', entryAmountSnapshotCents: 100000n }),
+      makeContract({ projectId: 'p2', entryAmountSnapshotCents: 200000n }),
+    ];
+    facts.invoices = [
+      makeInvoice({ id: 'inv-1', projectId: 'p1', amountCents: 300000n }),
+      makeInvoice({ id: 'inv-2', projectId: 'p2', amountCents: 500000n }),
+    ];
+    const report = service.buildReport(JULY);
+    expect(report.entryAmountByRegion.map((r) => r.region)).toEqual(['South']);
+    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 500000n, count: 1 }]);
+    expect(report.pipeline.some((r) => r.status === 'transferred')).toBe(false);
+    expect(report.pipeline.find((r) => r.status === 'pending_execution')!.projectCount).toBe(1);
+  });
+
   it('取消前实际发生的物流费用与损坏备件金额作为真实成本保留并标记取消', () => {
     const { facts, service } = setup();
     facts.projects = [

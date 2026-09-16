@@ -12,7 +12,7 @@ import type { OrderType } from '../service-order-recording';
 
 /** 报表指标键（口径字典）。 */
 export const REPORT_METRIC_KEYS = [
-  'project_pipeline', // 项目管道（当前状态快照，已取消排除）
+  'project_pipeline', // 项目管道（当前状态快照，已取消/已转单排除）
   'entry_amount_by_region', // 各区域新项目进单金额（进单金额快照）
   'monthly_invoice_amount', // 月度掉票金额
   'monthly_invoice_count', // 月度掉票次数

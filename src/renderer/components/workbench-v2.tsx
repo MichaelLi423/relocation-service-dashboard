@@ -93,8 +93,11 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   pending_invoice: "待掉票",
   completed: "已完成",
   cancelled: "已取消",
+  transferred: "已转单",
 };
-const STAGES: AdjustableProjectStatus[] = [
+export type ManualStatusOption = ProjectStatus;
+
+const MANUAL_STATUS_OPTIONS: ManualStatusOption[] = [
   "pending_entry",
   "pending_execution",
   "executing",
@@ -102,6 +105,8 @@ const STAGES: AdjustableProjectStatus[] = [
   "pending_acceptance",
   "pending_invoice",
   "completed",
+  "transferred",
+  "cancelled",
 ];
 
 function focusWorkbenchSection(id: "reminders" | "project-queue"): void {
@@ -1852,11 +1857,12 @@ function ProjectContext({
   onStatus: (status: AdjustableProjectStatus) => void;
   onRepairFilter: () => void;
 }): JSX.Element {
-  const [draftStatus, setDraftStatus] = useState<AdjustableProjectStatus>(
-    project?.status === "cancelled" ? "completed" : project?.status ?? "pending_entry",
+  const isTerminal = project?.status === "cancelled" || project?.status === "transferred";
+  const [draftStatus, setDraftStatus] = useState<ManualStatusOption>(
+    isTerminal ? "completed" : project?.status ?? "pending_entry",
   );
   useEffect(() => {
-    if (!project || project.status === "cancelled") return;
+    if (!project || project.status === "cancelled" || project.status === "transferred") return;
     setDraftStatus(project.status);
   }, [project?.id, project?.status]);
   if (!project)
@@ -1914,17 +1920,17 @@ function ProjectContext({
           </button>
         </div>
         <GroupedTags groups={detail?.groupedTags ?? project.groupedTags} />
-        {project.status !== "cancelled" && (
+        {!isTerminal && (
           <div className="status-adjust">
             <label htmlFor="context-status-v2">人工调整主状态</label>
             <select
               id="context-status-v2"
               value={draftStatus}
               onChange={(event) =>
-                setDraftStatus(event.target.value as AdjustableProjectStatus)
+                setDraftStatus(event.target.value as ManualStatusOption)
               }
             >
-              {STAGES.map((status) => (
+              {MANUAL_STATUS_OPTIONS.map((status) => (
                 <option value={status} key={status}>
                   {STATUS_LABEL[status]}
                 </option>
@@ -1932,13 +1938,19 @@ function ProjectContext({
             </select>
             <button
               className="button small"
-              onClick={() => onStatus(draftStatus)}
+              onClick={() => {
+                if (draftStatus === "cancelled") {
+                  onCancel();
+                } else {
+                  onStatus(draftStatus);
+                }
+              }}
             >
               提交校验
             </button>
           </div>
         )}
-        {project.status !== "cancelled" && (
+        {!isTerminal && (
           <div className="cancel-entry">
             <button className="button danger small" onClick={onCancel}>
               取消项目
@@ -4504,7 +4516,23 @@ function CancelFormV2({
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
-        void onSave(String(data.get("time")), String(data.get("reason"))).catch(
+        const time = String(data.get("time") ?? "").trim();
+        const reason = String(data.get("reason") ?? "").trim();
+        if (!time) {
+          setError("请选择取消日期");
+          return;
+        }
+        if (!reason) {
+          setError("请填写取消原因");
+          return;
+        }
+        const checkbox = event.currentTarget.querySelector<HTMLInputElement>('input[type="checkbox"]');
+        if (checkbox && !checkbox.checked) {
+          setError("请勾选确认不可恢复");
+          return;
+        }
+        setError("");
+        void onSave(time, reason).catch(
           (cause) => setError(messageOf(cause)),
         );
       }}

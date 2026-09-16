@@ -8,11 +8,11 @@
 
 | 指标 | 数量 |
 | --- | --- |
-| 能力 spec 数 | 15 |
-| ADDED Requirements 场景总数 | 610 |
-| 有有效测试证据（✅） | 598 |
+| 能力 spec 数 | 18 |
+| ADDED Requirements 场景总数 | 704 |
+| 有有效测试证据（✅） | 607 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
-| 缺证据 / 证据无效（❌） | 12 |
+| 缺证据 / 证据无效（❌） | 97 |
 
 ### 待验证与阻塞项（诚实边界）
 
@@ -88,6 +88,7 @@
 | 幂等重跑与安全修正 | 人工修改目标时阻止覆盖 | ✅ | `tests/domain/import-commit.test.ts`「人工修改目标阻塞覆盖」 | 人工修改目标阻止覆盖且人工值保留 |
 | 幂等重跑与安全修正 | 缺少旧目标快照时阻止覆盖 | ✅ | `tests/domain/import-commit.test.ts`「旧记录缺少可信基线阻塞覆盖」 | v9 快照缺失阻止覆盖 |
 | 状态与业务日期确定性重建 | 状态由事实重建 | ✅ | `tests/integration/import-seven-category-flow.sqlite.test.ts`「主状态由导入事实确定性重建」<br>`tests/domain/historical-data-import.test.ts`「项目状态由事实推导重建」<br>`tests/domain/historical-data-import.test.ts`「导入状态真实变化与项目写入同事务记录最小转换审计」 | 主状态由导入事实确定性重建 |
+| 状态与业务日期确定性重建 | 人工转单后重跑导入报告人工修改冲突且不覆盖终态 | ✅ | `tests/domain/historical-data-import.oracle.test.ts`「人工转单后重跑导入报告人工修改冲突且不覆盖终态」 | 人工转单=人工修改目标：重跑导入按目标快照不一致阻塞，零业务写入并保留 transferred |
 | 状态与业务日期确定性重建 | 导入时间不改变统计月份 | ✅ | `tests/integration/import-seven-category-flow.sqlite.test.ts`「导入时间只进审计且不改变报表月份」 | 报表月份按源业务时间，不因导入时间改变 |
 | 状态与业务日期确定性重建 | 可选源业务日期缺失保持为空 | ✅ | `tests/domain/historical-data-import.test.ts`「源业务时间缺失（可选）时保留为空」 | 可选源业务日期缺失保留为空，不用导入时间填充 |
 | 本地用户审计与历史事实归属分离 | 提交审计归属本地用户 | ✅ | `tests/domain/import-commit.test.ts`「账号审计与业务工作量分离」<br>`tests/integration/import-seven-category-flow.sqlite.test.ts`「草稿创建人与最终提交人分列审计」 | import_run 记录内部本地用户 ID 与确认时用户名快照 |
@@ -181,6 +182,7 @@
 | --- | --- | --- | --- | --- |
 | Windows 桌面运行且不依赖远程服务 | 离线启动并完成核心操作 | ✅ | `tests/persistence/runtime-boundary.test.ts`「离线可用：无任何远程服务时本机 SQLite 全流程（写入→备份→关闭→重开）正常」 |  |
 | Windows 桌面运行且不依赖远程服务 | 无网络时业务不中断 | ✅ | `tests/persistence/runtime-boundary.test.ts`「离线无远程依赖：领域与持久化源码不导入任何网络模块」 |  |
+| Windows 桌面运行且不依赖远程服务 | 发布服务不可用时本地核心业务继续 | ❌ | — |  |
 | 本机 SQLite 持久化 | 关闭重开后数据保留 | ✅ | `tests/persistence/connection.test.ts`「关闭并重开应用后数据保留（真实临时 SQLite）」<br>`tests/integration/relocation-project-lifecycle.sqlite.test.ts`「正式进单全流程落库（ECC/进单时间/快照/最终金额），关闭重开保留」<br>`tests/integration/runtime-lifecycle.sqlite.test.ts`「启动自动备份 → 初始化 → 录入 → 关闭重开登录 → 手动备份 → 恢复 → 恢复码重置」<br>`e2e/electron-smoke.spec.ts`「关闭并重开应用：无密码模式直接进入工作台，已有账号与数据保留」 |  |
 | 本机 SQLite 持久化 | 数据保存于本机数据库 | ✅ | `tests/persistence/connection.test.ts`「数据库位于本机数据目录（不依赖远程存储）」 |  |
 | 项目分类标签持久化与升级兼容 | 标签重命名保持稳定关联 | ❌ | — |  |
@@ -190,6 +192,8 @@
 | 项目分类标签持久化与升级兼容 | 备份恢复后保留标签库与项目关联 | ✅ | `tests/integration/project-tags.sqlite.test.ts`「真实手动备份与恢复保留自定义标签和项目关联」 |  |
 | 项目分类标签持久化与升级兼容 | 升级幂等初始化预设标签并保留既有数据 | ✅ | `tests/persistence/migration-v17.test.ts`「空库引导到 v17：建立规范化三表、精确且稳定地 seed 三组七标签」<br>`tests/persistence/migration-v17.test.ts`「v16 存量库升级并重复 bootstrap：保留项目且不重复 seed」 |  |
 | 不向远程发送业务数据 | 日常使用不自动外发 | ✅ | `tests/persistence/runtime-boundary.test.ts`「离线无远程依赖：领域与持久化源码不导入任何网络模块」 |  |
+| 不向远程发送业务数据 | 显式启用后仅发布必要字段白名单只读快照 | ❌ | — |  |
+| 不向远程发送业务数据 | 停用后停止后续发布 | ❌ | — |  |
 | 本地用户不加密 SQLite | 数据库文件不因本地用户加密 | ✅ | `tests/persistence/account-persistence.test.ts`「本地账号不加密 SQLite：数据库文件为普通 SQLite 且账号数据直接可读」 |  |
 | 本地用户不加密 SQLite | Windows 操作系统账户保护数据文件与备份 | ✅ | `docs/verification/迁移执行与运维说明.md`「无应用内访问门槛」 | Windows 操作系统账户边界已由客户在 Windows 目标环境验收（tasks 8.85）；10.6 交付文档已明确无访问门槛、SQLite 不加密、内部本地用户不能防止直接读取数据库文件 |
 | 每日自动备份 | 当日首次使用自动创建备份 | ✅ | `tests/persistence/backup.test.ts`「当日首次使用创建自动备份（按本地日期命名）」<br>`tests/integration/runtime-lifecycle.sqlite.test.ts`「启动自动备份 → 初始化 → 录入 → 关闭重开登录 → 手动备份 → 恢复 → 恢复码重置」 |  |
@@ -213,6 +217,99 @@
 | 追加迁移 v16 保存项目暂定搬迁范围字段 | v15 库升级保留数据并初始化暂定范围列 | ✅ | `tests/persistence/migration-v16.test.ts`「v15 存量库升级到 v16：业务数据完整保留、legacy region 原文不变、v15 字段原样保留、新列 null 初始化」 |  |
 | 追加迁移 v16 保存项目暂定搬迁范围字段 | 暂定搬迁范围字段持久化保留 | ✅ | `tests/integration/create-project-ecc-rules.sqlite.test.ts`「关闭重开持久化：建档/编辑的暂定仪器范围字段重开后保留」 |  |
 | 追加迁移 v16 保存项目暂定搬迁范围字段 | v16 迁移失败保留可恢复状态 | ✅ | `tests/persistence/migration-v16.test.ts`「注入失败保留迁移前数据与可恢复状态：整体回滚、版本仍为 15、全部 v16 结构回滚、迁移前备份可恢复」 |  |
+| 追加迁移 v21 保存项目「已转单」主状态枚举 | v20 已发布库追加 v21 不修改既有迁移 | ✅ | `tests/persistence/migration-v21.test.ts`「v20→v21：projects 全部列/STRICT/UNIQUE/外键保留，数据原样保留，子表外键与索引/触发器完整」 |  |
+| 追加迁移 v21 保存项目「已转单」主状态枚举 | v20 库升级后 transferred 可持久化并保留数据 | ✅ | `tests/persistence/migration-v21.test.ts`「v21 后：transferred 可持久化到 projects 与状态转换审计表，触发器生效」 |  |
+| 追加迁移 v21 保存项目「已转单」主状态枚举 | v21 中断或失败后重跑保留可恢复状态 | ✅ | `tests/persistence/migration-v21.test.ts`「恢复场景：schema 已重建但 user_version=20 时重跑 v21 幂等成功、数据保留」<br>`tests/persistence/migration-v21.test.ts`「注入失败：apply 中途抛错整体回滚」 |  |
+
+### mobile-readonly-publication
+
+| Requirement | Scenario | 状态 | 测试证据 | 备注 |
+| --- | --- | --- | --- | --- |
+| 发布默认关闭且仅显式启用 | 默认不发布 | ❌ | — |  |
+| 发布默认关闭且仅显式启用 | 显式启用立即检查并返回状态 | ❌ | — |  |
+| 发布默认关闭且仅显式启用 | 启用后按既有周期继续检查 | ❌ | — |  |
+| 发布默认关闭且仅显式启用 | 停用后停止发布 | ❌ | — |  |
+| 发布默认关闭且仅显式启用 | 配置或凭证损坏时禁用发布 | ❌ | — |  |
+| 必要字段白名单只读快照（封闭契约） | 快照仅含已定契约字段 | ❌ | — |  |
+| 必要字段白名单只读快照（封闭契约） | 未知 key 使快照非法 | ❌ | — |  |
+| 必要字段白名单只读快照（封闭契约） | 金额与日期契约 | ❌ | — |  |
+| 单事务一致快照覆盖全部数据 | 快照遍历全部项目与关联记录 | ❌ | — |  |
+| 单事务一致快照覆盖全部数据 | 事务内不发起网络请求 | ❌ | — |  |
+| 单事务一致快照覆盖全部数据 | 上传期间新写入留待下一轮 | ❌ | — |  |
+| 启动检查与运行中周期变化检测 | 启动时检查并仅在变化时上传 | ❌ | — |  |
+| 启动检查与运行中周期变化检测 | 同代际修订增长触发上传 | ❌ | — |  |
+| 启动检查与运行中周期变化检测 | 恢复轮换代际触发上传 | ❌ | — |  |
+| 启动检查与运行中周期变化检测 | 无写入不上传且如实标记 | ❌ | — |  |
+| 上传失败不阻断本地且下周期重试 | 上传超时或失败不影响本地使用 | ❌ | — |  |
+| 上传失败不阻断本地且下周期重试 | 失败与成功状态桌面可见并自动重试 | ❌ | — |  |
+| 上传失败不阻断本地且下周期重试 | 启用或目标配置损坏禁用外发 | ❌ | — |  |
+| 上传失败不阻断本地且下周期重试 | 结果状态文件不可写仅内存降级 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 同一时刻仅一个候选上传 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 元数据 ID 相同确认成功并保存指纹 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 版本未前进则原样重传同候选 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 版本前进且 ID 不同则冲突后重新生成 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 元数据读取失败保留未确认 | ❌ | — |  |
+| single-flight 与三分支重试幂等发布 | 桌面重启后按元数据与持久化指纹恢复 | ❌ | — |  |
+| 上传凭证独立、OS 安全存储且配置只写不回显 | 上传凭证仅能上传与读元数据 | ❌ | — |  |
+| 上传凭证独立、OS 安全存储且配置只写不回显 | 凭证经 OS 安全存储且不可用时禁用 | ❌ | — |  |
+| 上传凭证独立、OS 安全存储且配置只写不回显 | 一次性配置只写不回显且 IPC 不含 secret | ❌ | — |  |
+| 上传凭证独立、OS 安全存储且配置只写不回显 | 固定目标且禁止自动重定向 | ❌ | — |  |
+
+### mobile-readonly-service
+
+| Requirement | Scenario | 状态 | 测试证据 | 备注 |
+| --- | --- | --- | --- | --- |
+| 轻量服务与文件信封快照存储 | 服务仅依赖文件快照 | ❌ | — |  |
+| 轻量服务与文件信封快照存储 | 启动从文件恢复发布状态 | ❌ | — |  |
+| 轻量服务与文件信封快照存储 | 从未提交则无文件无版本 | ❌ | — |  |
+| 完整快照校验后原子替换 | 有效快照原子替换当前版本 | ❌ | — |  |
+| 完整快照校验后原子替换 | 校验失败保留旧版本 | ❌ | — |  |
+| 完整快照校验后原子替换 | 嵌套未知 key 被拒 | ❌ | — |  |
+| 完整快照校验后原子替换 | 协议字段不触发业务白名单 | ❌ | — |  |
+| 完整快照校验后原子替换 | 首次发布使用初始逻辑版本 | ❌ | — |  |
+| 完整快照校验后原子替换 | 重启遗留临时文件不成为可读版本 | ❌ | — |  |
+| 版本条件替换与幂等 | 期望版本一致则提交 | ❌ | — |  |
+| 版本条件替换与幂等 | 期望版本过期则拒绝并返回元数据 | ❌ | — |  |
+| 版本条件替换与幂等 | 重复当前候选幂等成功 | ❌ | — |  |
+| 版本条件替换与幂等 | 提交成功响应丢失且服务重启后同候选重试幂等 | ❌ | — |  |
+| 版本条件替换与幂等 | 更早候选无历史按冲突处理 | ❌ | — |  |
+| 版本条件替换与幂等 | 发布完成时刻独立记录 | ❌ | — |  |
+| 上传与查看凭证互相隔离且存摘要 | 上传凭证不能读取业务数据但可读当前 publicationId 与版本元数据 | ❌ | — |  |
+| 上传与查看凭证互相隔离且存摘要 | 查看凭证不能上传 | ❌ | — |  |
+| 上传与查看凭证互相隔离且存摘要 | 凭证以摘要持久化且日志不含密钥 | ❌ | — |  |
+| 有界只读查询端点且全部响应携带版本 | 服务端执行有界搜索分页 | ❌ | — |  |
+| 有界只读查询端点且全部响应携带版本 | 业务响应携带版本与发布元数据 | ❌ | — |  |
+| 有界只读查询端点且全部响应携带版本 | 版本改变时通知重新加载 | ❌ | — |  |
+| 公网 HTTPS 入口、loopback 后端与 no-store / 未发布语义 | 公网仅经 HTTPS 入口且后端不对公网直绑 | ❌ | — |  |
+| 公网 HTTPS 入口、loopback 后端与 no-store / 未发布语义 | 尚未发布时明确提示 | ❌ | — |  |
+| 公网 HTTPS 入口、loopback 后端与 no-store / 未发布语义 | 已发布空快照与尚未发布区分 | ❌ | — |  |
+| 公网 HTTPS 入口、loopback 后端与 no-store / 未发布语义 | 浏览器不缓存业务响应 | ❌ | — |  |
+| 请求体限制、上传超时与中断防护 | 超大上传被拒 | ❌ | — |  |
+| 请求体限制、上传超时与中断防护 | 上传超时后按版本元数据收敛 | ❌ | — |  |
+| 请求体限制、上传超时与中断防护 | 中断上传不产生可读版本 | ❌ | — |  |
+
+### mobile-readonly-workbench
+
+| Requirement | Scenario | 状态 | 测试证据 | 备注 |
+| --- | --- | --- | --- | --- |
+| 只读入口且无业务写入表单 | 手机页面仅可查看与搜索 | ❌ | — |  |
+| 只读入口且无业务写入表单 | 无业务写入能力即使用户尝试 | ❌ | — |  |
+| 概览与项目搜索/列表（服务端有界读取） | 打开即见概览与项目列表 | ❌ | — |  |
+| 概览与项目搜索/列表（服务端有界读取） | 项目搜索与筛选由服务端执行 | ❌ | — |  |
+| 项目详情与关联业务记录 | 打开项目详情并浏览关联记录 | ❌ | — |  |
+| 项目详情与关联业务记录 | 版本改变时提示重载 | ❌ | — |  |
+| 打开/回前台/联网恢复立即检查，前台定时检查间隔不超过 60 秒 | 打开与回前台立即检查 | ❌ | — |  |
+| 打开/回前台/联网恢复立即检查，前台定时检查间隔不超过 60 秒 | 联网恢复时立即检查 | ❌ | — |  |
+| 打开/回前台/联网恢复立即检查，前台定时检查间隔不超过 60 秒 | 前台定时检查相邻间隔不超过 60 秒 | ❌ | — |  |
+| 打开/回前台/联网恢复立即检查，前台定时检查间隔不超过 60 秒 | 服务不可达时保留最近数据并标注 | ❌ | — |  |
+| 数据截至时间、publishedAt 与最后检查时间语义 | 显示数据截至、publishedAt 与最后检查时间 | ❌ | — |  |
+| 数据截至时间、publishedAt 与最后检查时间语义 | 检查失败不推进最后检查时间 | ❌ | — |  |
+| 数据截至时间、publishedAt 与最后检查时间语义 | 派生信息按快照时刻展示 | ❌ | — |  |
+| 数据截至时间、publishedAt 与最后检查时间语义 | 无新发布时如实标记 | ❌ | — |  |
+| 断网读取语义区分 | 内存中页面检查失败保留已展示数据 | ❌ | — |  |
+| 断网读取语义区分 | 完整刷新且断网无法加载 | ❌ | — |  |
+| 断网读取语义区分 | 电脑断网仅影响新发布 | ❌ | — |  |
+| 断网读取语义区分 | 尚未发布与已发布空快照如实区分 | ❌ | — |  |
 
 ### operational-reporting
 
@@ -244,9 +341,10 @@
 | 区域维度与责任人归属 | 区域修改后报表实时重算 | ✅ | `tests/domain/operational-reporting.test.ts`「区域修改后历史报表实时重算（7.8）」<br>`tests/integration/operational-reporting.sqlite.test.ts`「区域修改实时重算；账号改名后历史统计仍按动作记录快照归属」 |  |
 | 区域维度与责任人归属 | 工作量归属责任人取动作记录 | ✅ | `tests/domain/operational-reporting.test.ts`「事项数量与金额按登记月份归属并取责任人快照」<br>`tests/integration/operational-reporting.sqlite.test.ts`「区域修改实时重算；账号改名后历史统计仍按动作记录快照归属」 |  |
 | 区域维度与责任人归属 | 存量非标准区域不被静默转换 | ✅ | `tests/domain/operational-reporting.test.ts`「存量非标准区域原值保留并归入「待调整」独立分组（不猜测、不置空、不丢弃）」 |  |
-| 已取消项目的统计排除 | 已取消项目不纳入进单金额统计 | ✅ | `tests/domain/operational-reporting.test.ts`「已取消项目不纳入进单金额统计、不参与掉票统计与项目管道」 |  |
-| 已取消项目的统计排除 | 已取消项目不参与掉票统计与金额闭环指标 | ✅ | `tests/domain/operational-reporting.test.ts`「已取消项目不纳入进单金额统计、不参与掉票统计与项目管道」 |  |
-| 已取消项目的统计排除 | 已取消项目保留物流与损坏备件真实成本并标记取消 | ✅ | `tests/domain/operational-reporting.test.ts`「取消前实际发生的物流费用与损坏备件金额作为真实成本保留并标记取消」 |  |
+| 已取消与已转单项目的统计排除 | 已取消项目不纳入进单金额统计 | ✅ | `tests/domain/operational-reporting.test.ts`「已取消项目不纳入进单金额统计、不参与掉票统计与项目管道」 |  |
+| 已取消与已转单项目的统计排除 | 已取消项目不参与掉票统计与金额闭环指标 | ✅ | `tests/domain/operational-reporting.test.ts`「已取消项目不纳入进单金额统计、不参与掉票统计与项目管道」 |  |
+| 已取消与已转单项目的统计排除 | 已取消项目保留物流与损坏备件真实成本并标记取消 | ✅ | `tests/domain/operational-reporting.test.ts`「取消前实际发生的物流费用与损坏备件金额作为真实成本保留并标记取消」 |  |
+| 已取消与已转单项目的统计排除 | 已转单项目与已取消同等排除收入与掉票与项目管道 | ✅ | `tests/domain/operational-reporting.test.ts`「已转单项目与已取消同等排除：不纳入进单金额、掉票统计与项目管道」 |  |
 | 报表筛选与手工月份区间 | 月份区间必须手工选择 | ✅ | `tests/domain/operational-reporting.test.ts`「月份区间必须手工选择：未提供时拒绝计算（无默认季度）」 |  |
 | 报表筛选与手工月份区间 | 按月份区间与区域筛选 | ✅ | `tests/domain/operational-reporting.test.ts`「按月份区间与区域筛选」 |  |
 | 报表筛选与手工月份区间 | 按开单类型与运输公司筛选 | ✅ | `tests/domain/operational-reporting.test.ts`「按开单业务类型筛选」<br>`tests/domain/operational-reporting.test.ts`「按运输公司筛选物流费用」 |  |
@@ -292,8 +390,9 @@
 | 待掉票与已完成状态按金额闭环重算 | 登记任一笔有效掉票即进入已完成 | ✅ | `tests/domain/financial-closure.test.ts`「任意成功登记一笔掉票即进入已完成（不再等累计金额足额）」<br>`tests/domain/lifecycle.test.ts`「自动触发 3：金额闭环在待掉票/已完成之间自动重算（优先于人工值）」 |  |
 | 待掉票与已完成状态按金额闭环重算 | 已完成项目因撤销掉票回到待掉票 | ✅ | `tests/domain/financial-closure.test.ts`「已完成项目因撤销掉票回到待掉票」 |  |
 | 待掉票与已完成状态按金额闭环重算 | 非待掉票/已完成状态修改金额不改变主状态 | ✅ | `tests/domain/financial-closure.test.ts`「非待掉票/已完成状态修改金额不改变主状态」 |  |
-| 已取消状态金额与掉票修改被拒绝 | 已取消项目禁止修改金额 | ✅ | `tests/domain/financial-closure.test.ts`「已取消项目禁止修改合同金额与最终可确认金额」 |  |
-| 已取消状态金额与掉票修改被拒绝 | 已取消项目禁止登记或修改掉票 | ✅ | `tests/domain/financial-closure.test.ts`「已取消项目禁止新增、编辑或撤销掉票」 |  |
+| 已取消或已转单状态金额与掉票修改被拒绝 | 已取消项目禁止修改金额 | ✅ | `tests/domain/financial-closure.test.ts`「已取消项目禁止修改合同金额与最终可确认金额」 |  |
+| 已取消或已转单状态金额与掉票修改被拒绝 | 已取消项目禁止登记或修改掉票 | ✅ | `tests/domain/financial-closure.test.ts`「已取消项目禁止新增、编辑或撤销掉票」 |  |
+| 已取消或已转单状态金额与掉票修改被拒绝 | 已转单项目冻结金额与掉票修改 | ✅ | `tests/domain/financial-closure.test.ts`「已转单项目冻结金额与掉票修改」<br>`tests/integration/workbench-facade.sqlite.test.ts`「已转单终态：经 adjust_status 持久化并写入审计」 |  |
 | 待掉票金额指标仅由仍存在项目的有效财务事实计算 | 无任何项目时待掉票金额为 0 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「零项目为 0：仅孤立/脏财务事实（无任何项目）时 pendingAmount 必为 0」 |  |
 | 待掉票金额指标仅由仍存在项目的有效财务事实计算 | 孤立财务事实不污染指标 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「孤立排除：引用不存在项目的掉票/合同事实不计入指标」 |  |
 | 待掉票金额指标仅由仍存在项目的有效财务事实计算 | 仍存在项目的有效财务事实计入指标 | ✅ | `tests/integration/financial-closure.sqlite.test.ts`「已完成余额纳入：已完成项目仍有有效待掉票余额时按 final − 有效掉票计入」<br>`tests/integration/workbench-read-v2.sqlite.test.ts`「任务4.1：totalProjects 与待掉票金额在同一修订一致快照内读取（单一聚合查询）」 |  |
@@ -389,6 +488,9 @@
 | 客户名称唯一业务标识与关联 | 同一客户名称关联多个 ECC 项目 | ✅ | `tests/domain/customer.test.ts`「同一客户名称可关联多个不同 ECC 项目（客户侧允许复用）」 |  |
 | 主状态与标签 | 未进单先执行标签并存 | ✅ | `tests/domain/relocation-status.test.ts`「未进单先执行标签与主状态并存：记录「是否批复」boolean 事实，主状态保持待进单」<br>`tests/domain/lifecycle.test.ts`「未进单先执行标签存在时主状态保持待进单（TBD-08）」 |  |
 | 主状态与标签 | 取消项目进入已取消 | ✅ | `tests/domain/relocation-status.test.ts`「取消项目进入已取消」<br>`tests/domain/relocation-cancel.test.ts`「任一未取消主状态且无掉票历史可取消，并记录取消时间与原因」 |  |
+| 已转单终态 | 负责人人工进入已转单终态 | ✅ | `tests/domain/relocation-status.test.ts`「负责人可人工调整主状态为已转单（终态）」<br>`tests/integration/workbench-facade.sqlite.test.ts`「已转单终态：经 adjust_status 持久化并写入审计」 |  |
+| 已转单终态 | 已转单项目不可再离开且自动触发不推进 | ✅ | `tests/domain/lifecycle.test.ts`「已转单为终态：不可再离开、禁止继续流转」<br>`tests/domain/lifecycle.test.ts`「已转单为终态：自动触发（计划上门到期/验收/装机/金额闭环）不覆盖终态」 |  |
+| 已转单终态 | 事实重算不覆盖已转单终态 | ✅ | `tests/domain/lifecycle.test.ts`「已转单终态无法可靠重算 → 拒绝（删除事实不覆盖终态）」 |  |
 | 项目分类标签 | 项目跨组多选分类标签 | ✅ | `tests/integration/project-tags.sqlite.test.ts`「目录稳定排序、trim 校验、replace-set 去重且不触发生命周期」<br>`tests/renderer/app.test.tsx`「新建项目按组键盘可达地同组与跨组多选，并提交全局自定义 tagIds」 |  |
 | 项目分类标签 | 创建自定义标签分组与标签 | ✅ | `tests/renderer/app.test.tsx`「最新布局：顶部主导航直接显示标签库并打开全局标签库」<br>`tests/integration/project-tags.sqlite.test.ts`「重开 SQLite 后保留自定义目录与项目关联」 |  |
 | 项目分类标签 | 分类标签不改变主状态或触发生命周期 | ✅ | `tests/integration/project-tags.sqlite.test.ts`「设置和清空标签不改变项目状态、提醒、执行事实或状态转换审计」 |  |
@@ -523,6 +625,7 @@
 | --- | --- | --- | --- | --- |
 | 无应用内访问门槛，启动直接进入工作台 | 启动直接进入工作台 | ✅ | `tests/renderer/app.test.tsx`「无密码模式渲染启动直接进入工作台：不出现初始化/登录界面，会话来自主进程」<br>`e2e/electron-smoke.spec.ts`「空数据库启动直接进入工作台」 |  |
 | 无应用内访问门槛，启动直接进入工作台 | 无初始化、登录与恢复码入口 | ✅ | `tests/renderer/app.test.tsx`「无密码模式渲染启动直接进入工作台：不出现初始化/登录界面，会话来自主进程」<br>`tests/domain/access.test.ts`「自动建号不生成可用的密码/恢复码：恢复码字段为空，口令为随机秘密的派生值」 |  |
+| 无应用内访问门槛，启动直接进入工作台 | 远程只读认证不改变本地直接进入 | ❌ | — |  |
 | 无多账号、角色与权限管理 | 无多账号与角色账号 | ✅ | `tests/domain/access.test.ts`「不提供注册/自助新增用户/角色与权限管理 API」<br>`tests/persistence/account-persistence.test.ts`「账号表不设角色/权限列（无角色与权限管理）」 |  |
 | 无多账号、角色与权限管理 | 拒绝外部账号同步 | ✅ | `tests/domain/access.test.ts`「无远程认证、外部身份源与账号同步：服务不暴露任何同步/导入账号能力」 |  |
 | 手工录入事实与工作量归属内部本地用户 | 手工录入事实归属内部本地用户 | ✅ | `tests/domain/access.test.ts`「负责人录入外部事实归属当前登录账号：会话快照作为动作记录归属」<br>`tests/domain/source.test.ts`「手工录入事实必须携带当前登录账号的内部 ID 与用户名快照」 |  |
@@ -536,6 +639,7 @@
 | 外部角色无独立入口 | 工程师执行信息由负责人记录 | ✅ | `tests/domain/relocation-execution.test.ts`「多名工程师参与同一活动：保存全部参与工程师」 |  |
 | 受保护操作仅对受信窗口开放 | 非受信窗口不能调用受保护能力 | ✅ | `tests/main/import-wizard-ipc.test.ts`「未登录时导入向导全部 invoke 通道拒绝；非受信 sender 拒绝」 |  |
 | 不集成外部系统 | 无外部数据同步 | ✅ | `tests/domain/access.test.ts`「无远程认证、外部身份源与账号同步：服务不暴露任何同步/导入账号能力」<br>`tests/persistence/runtime-boundary.test.ts`「离线无远程依赖：领域与持久化源码不导入任何网络模块」 |  |
+| 不集成外部系统 | 显式启用后仅向自有只读服务发布白名单快照 | ❌ | — |  |
 
 ### workbench-interface
 
@@ -677,6 +781,11 @@
 | 开单工程师可空保存、空值展示与报表归属（v20） | 按工程师筛选 | ✅ | `tests/domain/operational-reporting.test.ts`「按工程师筛选：仅匹配文本包含值，空值不命中」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null」 |  |
 | 开单工程师可空保存、空值展示与报表归属（v20） | 下钻明细含空工程师 | ✅ | `tests/domain/operational-reporting.test.ts`「空工程师计入总量，下钻明细工程师为 null」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null」 |  |
 | 开单工程师可空保存、空值展示与报表归属（v20） | 补录后筛选变化 | ✅ | `tests/domain/operational-reporting.test.ts`「补录后筛选变化：空值补充为有值后可被筛选命中」<br>`tests/integration/operational-reporting.sqlite.test.ts`「开单工程师可空：空值计入总量、筛选、下钻 null，补录后筛选实时变化」 |  |
+| 移动只读发布控制与状态入口 | 从工作台查看发布状态 | ❌ | — |  |
+| 移动只读发布控制与状态入口 | 在工作台内停用发布 | ❌ | — |  |
+| 移动只读发布控制与状态入口 | 发布入口不含业务写入表单 | ❌ | — |  |
+| 移动只读发布控制与状态入口 | 一次性配置入口只写不回显 | ❌ | — |  |
+| 手机只读视图不进入桌面任务指挥台结构 | 手机只读入口与桌面结构互不干扰 | ❌ | — |  |
 
 ### workbench-todos
 
@@ -711,15 +820,100 @@
 
 | 能力 | Scenario | 问题 |
 | --- | --- | --- |
+| local-data-persistence | 发布服务不可用时本地核心业务继续 | 未登记 |
 | local-data-persistence | 标签重命名保持稳定关联 | 未登记 |
 | local-data-persistence | 标签唯一性冲突零变化 | 未登记 |
 | local-data-persistence | 重命名不返回受影响项目列表 | 未登记 |
+| local-data-persistence | 显式启用后仅发布必要字段白名单只读快照 | 未登记 |
+| local-data-persistence | 停用后停止后续发布 | 未登记 |
+| mobile-readonly-publication | 默认不发布 | 未登记 |
+| mobile-readonly-publication | 显式启用立即检查并返回状态 | 未登记 |
+| mobile-readonly-publication | 启用后按既有周期继续检查 | 未登记 |
+| mobile-readonly-publication | 停用后停止发布 | 未登记 |
+| mobile-readonly-publication | 配置或凭证损坏时禁用发布 | 未登记 |
+| mobile-readonly-publication | 快照仅含已定契约字段 | 未登记 |
+| mobile-readonly-publication | 未知 key 使快照非法 | 未登记 |
+| mobile-readonly-publication | 金额与日期契约 | 未登记 |
+| mobile-readonly-publication | 快照遍历全部项目与关联记录 | 未登记 |
+| mobile-readonly-publication | 事务内不发起网络请求 | 未登记 |
+| mobile-readonly-publication | 上传期间新写入留待下一轮 | 未登记 |
+| mobile-readonly-publication | 启动时检查并仅在变化时上传 | 未登记 |
+| mobile-readonly-publication | 同代际修订增长触发上传 | 未登记 |
+| mobile-readonly-publication | 恢复轮换代际触发上传 | 未登记 |
+| mobile-readonly-publication | 无写入不上传且如实标记 | 未登记 |
+| mobile-readonly-publication | 上传超时或失败不影响本地使用 | 未登记 |
+| mobile-readonly-publication | 失败与成功状态桌面可见并自动重试 | 未登记 |
+| mobile-readonly-publication | 启用或目标配置损坏禁用外发 | 未登记 |
+| mobile-readonly-publication | 结果状态文件不可写仅内存降级 | 未登记 |
+| mobile-readonly-publication | 同一时刻仅一个候选上传 | 未登记 |
+| mobile-readonly-publication | 元数据 ID 相同确认成功并保存指纹 | 未登记 |
+| mobile-readonly-publication | 版本未前进则原样重传同候选 | 未登记 |
+| mobile-readonly-publication | 版本前进且 ID 不同则冲突后重新生成 | 未登记 |
+| mobile-readonly-publication | 元数据读取失败保留未确认 | 未登记 |
+| mobile-readonly-publication | 桌面重启后按元数据与持久化指纹恢复 | 未登记 |
+| mobile-readonly-publication | 上传凭证仅能上传与读元数据 | 未登记 |
+| mobile-readonly-publication | 凭证经 OS 安全存储且不可用时禁用 | 未登记 |
+| mobile-readonly-publication | 一次性配置只写不回显且 IPC 不含 secret | 未登记 |
+| mobile-readonly-publication | 固定目标且禁止自动重定向 | 未登记 |
+| mobile-readonly-service | 服务仅依赖文件快照 | 未登记 |
+| mobile-readonly-service | 启动从文件恢复发布状态 | 未登记 |
+| mobile-readonly-service | 从未提交则无文件无版本 | 未登记 |
+| mobile-readonly-service | 有效快照原子替换当前版本 | 未登记 |
+| mobile-readonly-service | 校验失败保留旧版本 | 未登记 |
+| mobile-readonly-service | 嵌套未知 key 被拒 | 未登记 |
+| mobile-readonly-service | 协议字段不触发业务白名单 | 未登记 |
+| mobile-readonly-service | 首次发布使用初始逻辑版本 | 未登记 |
+| mobile-readonly-service | 重启遗留临时文件不成为可读版本 | 未登记 |
+| mobile-readonly-service | 期望版本一致则提交 | 未登记 |
+| mobile-readonly-service | 期望版本过期则拒绝并返回元数据 | 未登记 |
+| mobile-readonly-service | 重复当前候选幂等成功 | 未登记 |
+| mobile-readonly-service | 提交成功响应丢失且服务重启后同候选重试幂等 | 未登记 |
+| mobile-readonly-service | 更早候选无历史按冲突处理 | 未登记 |
+| mobile-readonly-service | 发布完成时刻独立记录 | 未登记 |
+| mobile-readonly-service | 上传凭证不能读取业务数据但可读当前 publicationId 与版本元数据 | 未登记 |
+| mobile-readonly-service | 查看凭证不能上传 | 未登记 |
+| mobile-readonly-service | 凭证以摘要持久化且日志不含密钥 | 未登记 |
+| mobile-readonly-service | 服务端执行有界搜索分页 | 未登记 |
+| mobile-readonly-service | 业务响应携带版本与发布元数据 | 未登记 |
+| mobile-readonly-service | 版本改变时通知重新加载 | 未登记 |
+| mobile-readonly-service | 公网仅经 HTTPS 入口且后端不对公网直绑 | 未登记 |
+| mobile-readonly-service | 尚未发布时明确提示 | 未登记 |
+| mobile-readonly-service | 已发布空快照与尚未发布区分 | 未登记 |
+| mobile-readonly-service | 浏览器不缓存业务响应 | 未登记 |
+| mobile-readonly-service | 超大上传被拒 | 未登记 |
+| mobile-readonly-service | 上传超时后按版本元数据收敛 | 未登记 |
+| mobile-readonly-service | 中断上传不产生可读版本 | 未登记 |
+| mobile-readonly-workbench | 手机页面仅可查看与搜索 | 未登记 |
+| mobile-readonly-workbench | 无业务写入能力即使用户尝试 | 未登记 |
+| mobile-readonly-workbench | 打开即见概览与项目列表 | 未登记 |
+| mobile-readonly-workbench | 项目搜索与筛选由服务端执行 | 未登记 |
+| mobile-readonly-workbench | 打开项目详情并浏览关联记录 | 未登记 |
+| mobile-readonly-workbench | 版本改变时提示重载 | 未登记 |
+| mobile-readonly-workbench | 打开与回前台立即检查 | 未登记 |
+| mobile-readonly-workbench | 联网恢复时立即检查 | 未登记 |
+| mobile-readonly-workbench | 前台定时检查相邻间隔不超过 60 秒 | 未登记 |
+| mobile-readonly-workbench | 服务不可达时保留最近数据并标注 | 未登记 |
+| mobile-readonly-workbench | 显示数据截至、publishedAt 与最后检查时间 | 未登记 |
+| mobile-readonly-workbench | 检查失败不推进最后检查时间 | 未登记 |
+| mobile-readonly-workbench | 派生信息按快照时刻展示 | 未登记 |
+| mobile-readonly-workbench | 无新发布时如实标记 | 未登记 |
+| mobile-readonly-workbench | 内存中页面检查失败保留已展示数据 | 未登记 |
+| mobile-readonly-workbench | 完整刷新且断网无法加载 | 未登记 |
+| mobile-readonly-workbench | 电脑断网仅影响新发布 | 未登记 |
+| mobile-readonly-workbench | 尚未发布与已发布空快照如实区分 | 未登记 |
 | relocation-execution | 运行时拒绝越权字段 | 未登记 |
 | relocation-execution | 仅更新允许字段 | 未登记 |
 | relocation-execution | 全量无变化保存零写 | 未登记 |
 | relocation-execution | 运输限制导致跨批保存全回滚 | 未登记 |
 | relocation-execution | 跨项目批次导致保存全回滚 | 未登记 |
+| workbench-access | 远程只读认证不改变本地直接进入 | 未登记 |
+| workbench-access | 显式启用后仅向自有只读服务发布白名单快照 | 未登记 |
 | workbench-interface | 标签重命名后粗粒度刷新 | 未登记 |
 | workbench-interface | 不可编辑事实提供正确更正路径 | 未登记 |
 | workbench-interface | 有下游依赖的事实删除被拒绝 | 未登记 |
 | workbench-interface | 撤销掉票的终态提示 | 未登记 |
+| workbench-interface | 从工作台查看发布状态 | 未登记 |
+| workbench-interface | 在工作台内停用发布 | 未登记 |
+| workbench-interface | 发布入口不含业务写入表单 | 未登记 |
+| workbench-interface | 一次性配置入口只写不回显 | 未登记 |
+| workbench-interface | 手机只读入口与桌面结构互不干扰 | 未登记 |

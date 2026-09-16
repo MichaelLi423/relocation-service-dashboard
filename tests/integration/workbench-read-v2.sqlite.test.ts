@@ -184,6 +184,23 @@ describe('工作台 v2 overview（Oracle #10 首屏）', () => {
     closeDatabase(db);
   });
 
+  it('overview 排除已转单项目：activeProjects 与 pendingAmount 均不计入 transferred', () => {
+    const ctx = makeFacade();
+    const { db, facade, projectId } = ctx;
+    // 基线：1 个已进单未完成项目，活跃项目 1、待掉票 100000。
+    expect(reader(ctx).overview().metrics.activeProjects).toBe(1);
+    expect(reader(ctx).overview().metrics.pendingAmount).toBe('100000.00');
+
+    // 人工转单（终态）→ 与已取消同等排除：活跃项目与待掉票金额均归 0。
+    const transferred = facade.v2Mutate({ op: 'adjust_status', projectId, status: 'transferred' });
+    expect(transferred.changed).toMatchObject({ projectId, status: 'transferred' });
+    const overview = reader(ctx).overview();
+    expect(overview.metrics.totalProjects).toBe(1);
+    expect(overview.metrics.activeProjects).toBe(0);
+    expect(overview.metrics.pendingAmount).toBe('0.00');
+    closeDatabase(db);
+  });
+
   it('任务1.1：pendingAmount 直接取自 contracts.final_confirmable_amount_cents；已完成有效余额纳入、已取消排除', () => {
     const ctx = makeFacade();
     const { db } = ctx;

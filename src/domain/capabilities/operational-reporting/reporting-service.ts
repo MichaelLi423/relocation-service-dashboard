@@ -9,6 +9,7 @@ import {
   type MonthKey,
 } from '../../core/time';
 import type { Project } from '../relocation-project-lifecycle';
+import { isTerminal } from '../relocation-project-lifecycle';
 import type { LogisticsFee } from '../relocation-execution';
 import type { ProjectStatusOrCancelled } from '../relocation-project-lifecycle';
 import type { OrderType } from '../service-order-recording';
@@ -31,7 +32,7 @@ import type { ReportingFactReader } from './reporting-facts';
  *   （tasks 2.4，不猜测映射、不置空、不丢弃）。
  * - 责任人归属取动作记录中持久化的账号内部 ID 与当时用户名快照，历史统计
  *   不因以后用户名修改而动态变化（7.8）。
- * - 已取消项目排除项目管道、进单金额、掉票金额/次数及金额闭环指标，但取消前
+ * - 已取消/已转单项目排除项目管道、进单金额、掉票金额/次数及金额闭环指标，但取消前
  *   实际发生的物流费用与损坏维修备件金额作为真实成本保留并标记已取消（7.9）。
  * - 下钻明细与指标计算口径一致（7.10）：本服务先计算明细、再从明细聚合。
  */
@@ -322,7 +323,7 @@ export class ReportingService {
     const groups = new Map<string, { amountCents: bigint; projectCount: number }>();
     for (const project of all.listProjects()) {
       if (project.entryAt === null) continue; // 未正式进单不计
-      if (project.status === 'cancelled') continue; // 已取消排除（7.9）
+      if (isTerminal(project.status)) continue; // 已取消/已转单排除（7.9）
       if (!this.projectInScope(project.id, f)) continue;
       if (!this.regionMatch(project, f)) continue;
       const month = toMonthKey(project.entryAt);
@@ -357,7 +358,7 @@ export class ReportingService {
       .map((inv) => ({ inv, project: projectsById.get(inv.projectId) }))
       .filter((x): x is { inv: (typeof x)['inv']; project: Project } => x.project !== undefined)
       .filter((x) => this.projectInScope(x.project.id, f))
-      .filter((x) => x.project.status !== 'cancelled') // 已取消项目排除（7.9）
+      .filter((x) => !isTerminal(x.project.status)) // 已取消/已转单项目排除（7.9）
       .filter((x) => this.regionMatch(x.project, f))
       .filter((x) => this.inRange(toMonthKey(x.inv.invoicedAt), f))
       .map((x) => ({
@@ -567,7 +568,7 @@ export class ReportingService {
       .filter((b) => !feeBatchIds.has(b.id)) // 尚未登记实际物流费用
       .map((b) => ({ batch: b, project: projectsById.get(b.projectId) }))
       .filter((x): x is { batch: (typeof x)['batch']; project: Project } => x.project !== undefined)
-      .filter((x) => x.project.status !== 'cancelled') // 已取消项目排除（不进入清单）
+      .filter((x) => !isTerminal(x.project.status)) // 已取消/已转单项目排除（不进入清单）
       .filter((x) => this.projectInScope(x.project.id, f))
       .filter((x) => this.regionMatch(x.project, f))
       .filter(
@@ -718,7 +719,7 @@ export class ReportingService {
   private pipelineRows(all: ReportingFactReader, f: NormalizedFilter): ProjectPipelineRow[] {
     const counts = new Map<ProjectStatusOrCancelled, number>();
     for (const project of all.listProjects()) {
-      if (project.status === 'cancelled') continue; // 已取消排除（7.9）
+      if (isTerminal(project.status)) continue; // 已取消/已转单排除（7.9）
       if (!this.projectInScope(project.id, f)) continue;
       if (!this.regionMatch(project, f)) continue;
       counts.set(project.status, (counts.get(project.status) ?? 0) + 1);

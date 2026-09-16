@@ -332,12 +332,12 @@ export class WorkbenchReadRepository {
           JOIN contracts c ON c.project_id = p.id
           LEFT JOIN (SELECT project_id, SUM(amount_cents) AS total FROM invoices WHERE revoked_at IS NULL GROUP BY project_id) inv ON inv.project_id = p.id
           WHERE p.entry_at IS NOT NULL AND c.final_confirmable_amount_cents IS NOT NULL
-            AND p.status <> 'cancelled') AS pending_cents`,
+            AND p.status NOT IN ('cancelled','transferred')) AS pending_cents`,
     ).get() as { total_projects: number | bigint; pending_cents: bigint | string | number };
 
     const metrics = {
       totalProjects: Number(aggregateRow.total_projects),
-      activeProjects: count("SELECT COUNT(*) AS n FROM projects WHERE status NOT IN ('completed','cancelled')"),
+      activeProjects: count("SELECT COUNT(*) AS n FROM projects WHERE status NOT IN ('completed','cancelled','transferred')"),
       reminderCount: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL OR reminder_note IS NOT NULL'),
       reminderOverdue: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL AND substr(reminder_at,1,10) < ?', today),
       reminderToday: count('SELECT COUNT(*) AS n FROM projects WHERE reminder_at IS NOT NULL AND substr(reminder_at,1,10) = ?', today),

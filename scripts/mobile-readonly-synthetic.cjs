@@ -34,6 +34,7 @@ const PROJECT_STATUSES = Object.freeze([
   'pending_invoice',
   'completed',
   'cancelled',
+  'transferred',
 ]);
 
 const STAGE_STATUSES = Object.freeze([
@@ -186,7 +187,7 @@ function makeProject(index, recordCounts) {
   }
   const status = PROJECT_STATUSES[index % PROJECT_STATUSES.length];
   const region = index % 7 === 6 ? null : REGIONS[index % REGIONS.length];
-  const entered = status !== 'pending_entry' && status !== 'cancelled';
+  const entered = status !== 'pending_entry' && status !== 'cancelled' && status !== 'transferred';
   return {
     id: `synthetic-project-${pad2(index)}`,
     tempNo: `TP-SYN-${pad2(index)}`,
@@ -210,7 +211,7 @@ function makeOverview(projectCount) {
   const counts = {};
   for (let index = 0; index < projectCount; index += 1) {
     const status = PROJECT_STATUSES[index % PROJECT_STATUSES.length];
-    if (status === 'cancelled') continue; // 阶段分布不含取消
+    if (status === 'cancelled' || status === 'transferred') continue; // 阶段分布不含终态
     counts[status] = (counts[status] ?? 0) + 1;
   }
   return {

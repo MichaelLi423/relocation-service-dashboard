@@ -6,7 +6,7 @@ import type { MobileState, ProjectFilters } from './controller';
 
 export const STATUS_LABELS: Record<MobileReadonlyProjectSummary['status'], string> = {
   pending_entry: '待进单', pending_execution: '待执行', executing: '执行中', under_repair: '维修中',
-  pending_acceptance: '待验收', pending_invoice: '待掉票', completed: '已完成', cancelled: '已取消',
+  pending_acceptance: '待验收', pending_invoice: '待掉票', completed: '已完成', cancelled: '已取消', transferred: '已转单',
 };
 export const RECORD_LABELS: Record<MobileReadonlyRecordKind, string> = {
   batches: '批次', instruments: '仪器', activities: '上门活动', orders: '开单', invoices: '掉票', damage_items: '损坏维修',
