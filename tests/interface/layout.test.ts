@@ -47,11 +47,28 @@ describe('workbench-interface 桌面布局静态约束', () => {
     expect(css).toContain('.workbench-v2 .stage[aria-pressed="true"]');
   });
 
-  it('独立模块抽屉在 1024 保持可用宽度，并保留更窄窗口单列容错', () => {
+  it('序列号地址更新在宽屏双栏、中等窗口上下排列且不改变二维码模块规则', () => {
     expect(css).toContain('.wide-drawer{width:min(1120px,calc(100vw - 24px))');
-    expect(css).toContain('grid-template-columns:minmax(340px,.78fr) minmax(460px,1.22fr)');
+    expect(css).toContain('.wide-drawer .serial-address-module {');
+    expect(css).toContain('grid-template-columns: minmax(360px, 380px) minmax(660px, 1fr)');
+    expect(css).toMatch(/@media \(max-width: 1179px\).*\.wide-drawer \.serial-address-module.*grid-template-columns: minmax\(0, 1fr\)/s);
     expect(css).toContain('.wide-drawer{width:min(1000px,calc(100vw - 16px))}');
-    expect(css).toContain('.wide-drawer .module-layout{grid-template-columns:minmax(0,1fr)}');
+    expect(renderer).toContain('"qr-request-module" : "serial-address-module"');
+    expect(css).toContain('.qr-request-module .data-table{min-width:680px}');
+  });
+
+  it('序列号记录使用专用列与移动卡片，不依赖逐行删除说明或左侧方位文案', () => {
+    expect(css).toContain('.serial-address-table {');
+    expect(css).toContain('min-width: 650px');
+    expect(css).toContain('@media (max-width: 759px)');
+    expect(css).toContain('.serial-address-table thead { display: none; }');
+    expect(css).toContain('.serial-address-table tr {');
+    expect(css).toContain('.serial-address-form .form-grid { grid-template-columns: minmax(0, 1fr); }');
+    expect(renderer).toContain('className="serial-address-address" data-label="新址"');
+    expect(renderer).toContain('className="serial-address-account" data-label="Account ID"');
+    expect(renderer).toContain('记录有误时，删除后按最新资料重新登记。');
+    expect(renderer).not.toContain('使用左侧表单新增记录。');
+    expect(renderer).not.toContain('<small>地址事实有误时，删除后按最新资料重新登记。</small>');
   });
 
   it('数据管理入口与主导航共用高度、选中反馈和下拉层级', () => {

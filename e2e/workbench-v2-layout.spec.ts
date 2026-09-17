@@ -10,13 +10,14 @@ test.skip(!existsSync(executable), '未找到真实打包 Electron，请先运�
 
 async function initialize(page: Page): Promise<void> {
   // 无密码个人模式：空数据库自动建号并直接进入工作台（无初始化/登录界面）。
-  await page.getByRole('heading', { name: '先处理提醒，再连续推进项目' }).waitFor();
+  await page.getByRole('heading', { name: '把每一次搬迁，推进得更稳' }).waitFor();
 }
 
 async function seedReminderLanes(page: Page): Promise<void> {
   for (let index = 1; index <= 7; index += 1) {
     await page.getByRole('button', { name: '新建搬迁项目' }).click();
     const create = page.getByRole('dialog', { name: '新建搬迁项目' });
+    await create.getByRole('radio', { name: /保存为待进单/ }).check();
     await create.getByLabel(/客户名称/).fill(`布局提醒客户 ${index}`);
     await create.getByLabel(/区域/).selectOption(index % 2 ? 'East' : 'North');
     await create.getByRole('button', { name: '保存为待进单' }).click();
@@ -151,26 +152,67 @@ test('最新布局：主导航直接显示标签库并打开现有标签库', as
   }
 });
 
-async function assertIndependentDrawer(page: Page, width: 820 | 1024, screenshot: string): Promise<void> {
+async function assertIndependentDrawer(
+  page: Page,
+  width: 720 | 820 | 1024 | 1090 | 1190,
+  screenshot: string,
+  seedRecord = false,
+): Promise<void> {
   await page.setViewportSize({ width, height: 768 });
-  await page.getByRole('button', { name: '序列号地址更新' }).click();
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '序列号地址更新', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '序列号地址更新' });
+  if (seedRecord) {
+    await dialog.getByLabel(/客户名称/).fill('响应式布局测试客户');
+    await dialog.getByLabel(/新址地址/).fill('上海市浦东新区测试路一百二十八号三层搬迁实验室');
+    await dialog.getByLabel(/序列号/).fill('SN-LAYOUT-001');
+    await dialog.getByLabel(/Account ID/).fill('ACC-LAYOUT-001');
+    await dialog.getByLabel(/更新日期/).fill('2026-09-17');
+    await dialog.getByRole('button', { name: '保存记录', exact: true }).click();
+  }
+  await expect(dialog.getByText('响应式布局测试客户')).toBeVisible();
   const layout = await page.locator('.v2-independent').evaluate((root) => {
     const columns = getComputedStyle(root).gridTemplateColumns.split(' ').filter(Boolean);
+    const form = root.querySelector<HTMLElement>('.serial-address-form');
     const list = root.querySelector<HTMLElement>('.module-list');
     const pagination = root.querySelector<HTMLElement>('.queue-pagination');
+    const tableScroll = root.querySelector<HTMLElement>('.serial-address-table-scroll');
+    const table = root.querySelector<HTMLElement>('.serial-address-table');
+    const header = table?.querySelector<HTMLElement>('thead');
+    const row = table?.querySelector<HTMLElement>('tbody tr');
+    const address = table?.querySelector<HTMLElement>('.serial-address-address');
+    const action = table?.querySelector<HTMLElement>('.serial-address-action .button');
     return {
       columns: columns.length,
+      formWidth: form?.getBoundingClientRect().width ?? 0,
       listWidth: list?.getBoundingClientRect().width ?? 0,
       paginationOverflow: pagination ? pagination.scrollWidth - pagination.clientWidth : 999,
+      tableOverflow: tableScroll ? tableScroll.scrollWidth - tableScroll.clientWidth : 999,
+      tableDisplay: table ? getComputedStyle(table).display : '',
+      headerDisplay: header ? getComputedStyle(header).display : '',
+      rowDisplay: row ? getComputedStyle(row).display : '',
+      addressWidth: address?.getBoundingClientRect().width ?? 0,
+      actionVisible: Boolean(action && action.getBoundingClientRect().right <= (list?.getBoundingClientRect().right ?? 0) + 1),
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     };
   });
-  expect(layout.columns).toBe(width === 1024 ? 2 : 1);
-  expect(layout.listWidth).toBeGreaterThan(440);
+  expect(layout.columns).toBe(width >= 1180 ? 2 : 1);
+  if (width >= 1180) {
+    expect(layout.formWidth).toBeGreaterThanOrEqual(360);
+    expect(layout.formWidth).toBeLessThanOrEqual(390);
+    expect(layout.listWidth).toBeGreaterThanOrEqual(660);
+  } else {
+    expect(layout.listWidth).toBeGreaterThan(width === 720 ? 620 : 680);
+  }
   expect(layout.paginationOverflow).toBeLessThanOrEqual(1);
+  expect(layout.tableOverflow).toBeLessThanOrEqual(1);
   expect(layout.pageOverflow).toBeLessThanOrEqual(1);
+  expect(layout.addressWidth).toBeGreaterThan(width < 760 ? 300 : 190);
+  expect(layout.actionVisible).toBe(true);
+  expect(layout.tableDisplay).toBe(width < 760 ? 'block' : 'table');
+  expect(layout.headerDisplay).toBe(width < 760 ? 'none' : 'table-header-group');
+  expect(layout.rowDisplay).toBe(width < 760 ? 'grid' : 'table-row');
   await page.screenshot({ path: screenshot, fullPage: true });
-  await page.getByRole('button', { name: '关闭' }).click();
+  await dialog.getByRole('button', { name: '关闭' }).click();
 }
 
 async function assertHistoryDrawer(page: Page, width: 820 | 1024, screenshot: string): Promise<void> {
@@ -240,8 +282,11 @@ test('最新布局：提醒、全宽单一项目工作区、项目队列依次�
     await assertViewport(page, 1170, testInfo.outputPath('workbench-v2-1170.png'));
     await assertViewport(page, 1190, testInfo.outputPath('workbench-v2-1190.png'));
     await assertViewport(page, 1440, testInfo.outputPath('workbench-v2-1440.png'));
+    await assertIndependentDrawer(page, 1190, testInfo.outputPath('serial-address-drawer-1190.png'), true);
+    await assertIndependentDrawer(page, 1090, testInfo.outputPath('serial-address-drawer-1090.png'));
     await assertIndependentDrawer(page, 1024, testInfo.outputPath('serial-address-drawer-1024.png'));
     await assertIndependentDrawer(page, 820, testInfo.outputPath('serial-address-drawer-820.png'));
+    await assertIndependentDrawer(page, 720, testInfo.outputPath('serial-address-drawer-720.png'));
     await assertHistoryDrawer(page, 1024, testInfo.outputPath('history-drawer-1024.png'));
     await assertHistoryDrawer(page, 820, testInfo.outputPath('history-drawer-820.png'));
     await assertDeepFormFocusBelowTopbar(app, page);

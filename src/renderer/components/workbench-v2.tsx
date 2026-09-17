@@ -3667,11 +3667,11 @@ function IndependentModuleV2({
   }
   return (
     <div
-      className={`module-layout v2-independent ${kind === "qr_request" ? "qr-request-module" : ""}`}
+      className={`module-layout v2-independent ${kind === "qr_request" ? "qr-request-module" : "serial-address-module"}`}
     >
       <form
         id="independent-record-form"
-        className={kind === "qr_request" ? "qr-request-form" : undefined}
+        className={kind === "qr_request" ? "qr-request-form" : "serial-address-form"}
         onSubmit={(event) => void submit(event)}
       >
         <LayerHeaderAction><button form="independent-record-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : kind === "qr_request" ? "保存申请" : "保存记录"}</button></LayerHeaderAction>
@@ -3818,11 +3818,19 @@ function IndependentModuleV2({
         </div>
       </form>
       <section className="module-list">
-        {kind === "qr_request" && (
+        {kind === "qr_request" ? (
           <div className="module-list-heading">
             <div>
               <h3>申请记录</h3>
               <p>重复申请独立保留并分别计入工作量。</p>
+            </div>
+            <span>{page?.total ?? 0} 条</span>
+          </div>
+        ) : (
+          <div className="module-list-heading serial-address-list-heading">
+            <div>
+              <h3>地址更新记录</h3>
+              <p>记录有误时，删除后按最新资料重新登记。</p>
             </div>
             <span>{page?.total ?? 0} 条</span>
           </div>
@@ -3898,10 +3906,10 @@ function DataRows({
   onDelete: (id: string) => void;
 }): JSX.Element {
   if (!rows.length)
-    return <Empty title="暂无记录" copy="使用左侧表单新增记录。" />;
+    return <Empty title="暂无记录" copy="填写表单后新增记录。" />;
   return (
-    <div className="table-scroll">
-      <table className="data-table">
+    <div className={`table-scroll ${kind === "serial_address" ? "serial-address-table-scroll" : ""}`}>
+      <table className={`data-table ${kind === "serial_address" ? "serial-address-table" : ""}`}>
         <thead>
             <tr>
               {kind === "qr_request" ? <><th>申请人</th><th>申请日期</th><th>申请类型</th><th className="numeric">工作量</th></> : <><th>客户 / 序列号</th><th>新址</th><th>Account ID</th><th>更新日期</th></>}
@@ -3924,14 +3932,14 @@ function DataRows({
               </tr>
             ) : (
               <tr key={row.id}>
-                <td>
+                <td className="serial-address-identity" data-label="客户 / 序列号">
                   <strong>{row.customerName}</strong>
-                  <small>{row.serialNo}</small>
+                  <small title={row.serialNo}>{row.serialNo}</small>
                 </td>
-                <td>{row.newSiteAddress}</td>
-                <td>{row.accountId}</td>
-                <td>{businessDate(row.updatedAt)}</td>
-                <td><div className="restricted-action"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button><small>地址事实有误时，删除后按最新资料重新登记。</small></div></td>
+                <td className="serial-address-address" data-label="新址"><span title={row.newSiteAddress}>{row.newSiteAddress}</span></td>
+                <td className="serial-address-account" data-label="Account ID"><span title={row.accountId}>{row.accountId}</span></td>
+                <td className="serial-address-date" data-label="更新日期">{businessDate(row.updatedAt)}</td>
+                <td className="serial-address-action" data-label="操作"><button className="button danger small" disabled={busy} onClick={() => onDelete(row.id)}>删除</button></td>
               </tr>
             ),
           )}

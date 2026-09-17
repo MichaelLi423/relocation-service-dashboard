@@ -236,3 +236,154 @@ html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
     scroll-behavior: auto !important;
   }
 }
+
+/* 序列号地址更新：宽屏并排核对，中窄窗口让记录区使用完整宽度。 */
+.wide-drawer .serial-address-module {
+  grid-template-columns: minmax(360px, 380px) minmax(660px, 1fr);
+}
+.serial-address-table {
+  min-width: 650px;
+  table-layout: fixed;
+}
+.serial-address-table th:nth-child(1) { width: 22%; }
+.serial-address-table th:nth-child(2) { width: 31%; }
+.serial-address-table th:nth-child(3) { width: 19%; }
+.serial-address-table th:nth-child(4) { width: 17%; }
+.serial-address-table th:nth-child(5) { width: 11%; }
+.serial-address-identity strong,
+.serial-address-identity small {
+  display: block;
+  min-width: 0;
+}
+.serial-address-identity strong {
+  line-height: 1.4;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.serial-address-identity small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font: 600 11px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.serial-address-address span {
+  display: block;
+  min-width: 0;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.serial-address-account span,
+.serial-address-date {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.serial-address-account span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.serial-address-action {
+  text-align: right !important;
+  white-space: nowrap;
+}
+.serial-address-action .button {
+  min-width: 52px;
+  min-height: 40px;
+}
+
+@media (max-width: 1179px) {
+  .wide-drawer .serial-address-module {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .serial-address-module .module-list { margin-top: 4px; }
+}
+@media (max-width: 900px) {
+  .serial-address-module .module-search {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, .55fr) minmax(130px, .55fr) auto !important;
+  }
+  .serial-address-module .module-search label:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 759px) {
+  .serial-address-form .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .serial-address-table-scroll { overflow-x: visible; }
+  .serial-address-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .serial-address-table thead { display: none; }
+  .serial-address-table tbody {
+    display: grid;
+    gap: 10px;
+    padding: 10px;
+    background: var(--soft);
+  }
+  .serial-address-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 14px;
+    padding: 13px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--brand);
+    border-radius: 7px;
+    background: var(--raised);
+  }
+  .serial-address-table td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  .serial-address-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 750;
+  }
+  .serial-address-table .serial-address-identity::before { display: none; }
+  .serial-address-identity {
+    grid-column: 1 / 2;
+    grid-row: 1;
+  }
+  .serial-address-date {
+    grid-column: 2 / 3;
+    grid-row: 1;
+    text-align: right;
+  }
+  .serial-address-address,
+  .serial-address-account,
+  .serial-address-action { grid-column: 1 / -1; }
+  .serial-address-address {
+    padding-top: 10px !important;
+    border-top: 1px solid var(--line) !important;
+  }
+  .serial-address-account span {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .serial-address-action {
+    display: flex !important;
+    justify-content: flex-end;
+    padding-top: 10px !important;
+    border-top: 1px solid var(--line) !important;
+  }
+  .serial-address-action::before { display: none !important; }
+}
+@media (max-width: 600px) {
+  .serial-address-module .module-search {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+  .serial-address-module .module-search .button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+@media (max-width: 520px) {
+  .serial-address-module .module-search { grid-template-columns: minmax(0, 1fr) !important; }
+}
