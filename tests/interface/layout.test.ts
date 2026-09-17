@@ -47,19 +47,27 @@ describe('workbench-interface 桌面布局静态约束', () => {
     expect(css).toContain('.workbench-v2 .stage[aria-pressed="true"]');
   });
 
-  it('序列号地址更新在宽屏双栏、中等窗口上下排列且不改变二维码模块规则', () => {
+  it('序列号地址更新在所有桌面宽度按表单、记录单列排列且不改变二维码模块规则', () => {
     expect(css).toContain('.wide-drawer{width:min(1120px,calc(100vw - 24px))');
     expect(css).toContain('.wide-drawer .serial-address-module {');
-    expect(css).toContain('grid-template-columns: minmax(360px, 380px) minmax(660px, 1fr)');
-    expect(css).toMatch(/@media \(max-width: 1179px\).*\.wide-drawer \.serial-address-module.*grid-template-columns: minmax\(0, 1fr\)/s);
+    expect(css).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(css).not.toContain('grid-template-columns: minmax(360px, 380px) minmax(660px, 1fr)');
+    expect(css).not.toContain('@media (max-width: 1179px)');
     expect(css).toContain('.wide-drawer{width:min(1000px,calc(100vw - 16px))}');
     expect(renderer).toContain('"qr-request-module" : "serial-address-module"');
     expect(css).toContain('.qr-request-module .data-table{min-width:680px}');
+    expect(renderer.indexOf('id="independent-record-form"')).toBeLessThan(renderer.indexOf('id={kind === "serial_address" ? "serial-address-records" : undefined}'));
+    expect(renderer).toContain('id="serial-address-form-title">登记地址更新</h3>');
+    expect(renderer).toContain('onClick={viewRecords}>查看记录</button>');
   });
 
   it('序列号记录使用专用列与移动卡片，不依赖逐行删除说明或左侧方位文案', () => {
     expect(css).toContain('.serial-address-table {');
     expect(css).toContain('min-width: 650px');
+    expect(css).toContain('max-height: clamp(280px, 42dvh, 460px)');
+    expect(css).toContain('overflow-y: auto');
+    expect(css).toContain('.serial-address-table thead th {');
+    expect(css).toContain('position: sticky');
     expect(css).toContain('@media (max-width: 759px)');
     expect(css).toContain('.serial-address-table thead { display: none; }');
     expect(css).toContain('.serial-address-table tr {');

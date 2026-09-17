@@ -1198,6 +1198,9 @@ describe('Oracle #10 bounded workbench renderer', () => {
   it('独立导航打开序列号地址更新与二维码申请，二维码支持九类多选并实时预览去重计数', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('heading', { name: /项目队列/ });
     fireEvent.click(screen.getByRole('button', { name: '序列号地址更新' })); let dialog = screen.getByRole('dialog', { name: '序列号地址更新' });
+    expect(within(dialog).getByRole('heading', { name: '登记地址更新' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '查看记录' }));
+    expect(within(dialog).getByRole('searchbox', { name: '查找记录' })).toHaveFocus();
     expect(within(dialog).getByRole('combobox', { name: '搬迁仪器' })).not.toBeRequired(); expect(within(dialog).getByRole('textbox', { name: /序列号.*必填/ })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: '保存记录' })).not.toBeDisabled();
     expect(within(dialog).getByLabelText(/更新日期/)).toHaveAttribute('type', 'date');
@@ -1346,6 +1349,8 @@ describe('Oracle #10 bounded workbench renderer', () => {
     // 仪器与序列号清空，picker 与 serial 同步
     expect(picker).toHaveValue('');
     expect(serialInput).toHaveValue('');
+    await waitFor(() => expect(picker).toHaveFocus());
+    expect(within(dialog).getByRole('status')).toHaveTextContent('记录已保存，可继续登记下一台仪器。');
 
     // 其余关键字段完整保留
     expect(within(dialog).getByLabelText(/客户名称/)).toHaveValue('客户 1');

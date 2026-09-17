@@ -3577,10 +3577,15 @@ function IndependentModuleV2({
   const [newSiteAddress, setNewSiteAddress] = useState(defaultAddress || "");
   const [accountId, setAccountId] = useState("");
   const [updatedAt, setUpdatedAt] = useState(todayDate());
+  const [saveNotice, setSaveNotice] = useState("");
   const [qrTypes, setQrTypes] = useState<string[]>(["A", "B"]);
   const sequence = useRef(0);
   const addressEditedRef = useRef(false);
   const customerEditedRef = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const recordsRef = useRef<HTMLElement>(null);
+  const recordsSearchRef = useRef<HTMLInputElement>(null);
+  const focusAfterSaveRef = useRef(false);
 
   useEffect(() => {
     if (!customerEditedRef.current && project?.customerName) {
@@ -3612,10 +3617,37 @@ function IndependentModuleV2({
     setStack([null]);
     void load(null);
   }, [kind, refreshToken]);
+  useEffect(() => {
+    if (busy || !focusAfterSaveRef.current) return;
+    focusAfterSaveRef.current = false;
+    window.requestAnimationFrame(() => {
+      const nextControl = formRef.current?.querySelector<HTMLElement>(
+        project ? "#v2-instruments-picker" : "#v2-serialNo",
+      );
+      nextControl?.focus({ preventScroll: true });
+    });
+  }, [busy, project]);
+  function viewRecords(): void {
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const records = recordsRef.current;
+    const scrollContainer = records?.closest<HTMLElement>(".layer-body");
+    const behavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
+    if (records && scrollContainer) {
+      const top = scrollContainer.scrollTop
+        + records.getBoundingClientRect().top
+        - scrollContainer.getBoundingClientRect().top
+        - 12;
+      scrollContainer.scrollTo?.({ top: Math.max(0, top), behavior });
+    } else {
+      records?.scrollIntoView?.({ behavior, block: "start" });
+    }
+    recordsSearchRef.current?.focus({ preventScroll: true });
+  }
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setSaveNotice("");
     const data = new FormData(event.currentTarget);
     const values: WorkbenchActionPayload["values"] = {};
     data.forEach((value, key) => {
@@ -3645,6 +3677,8 @@ function IndependentModuleV2({
         setSerialNo("");
         addressEditedRef.current = true;
         customerEditedRef.current = true;
+        setSaveNotice("记录已保存，可继续登记下一台仪器。");
+        focusAfterSaveRef.current = true;
       }
     } catch (cause) {
       setError(messageOf(cause));
@@ -3670,11 +3704,22 @@ function IndependentModuleV2({
       className={`module-layout v2-independent ${kind === "qr_request" ? "qr-request-module" : "serial-address-module"}`}
     >
       <form
+        ref={formRef}
         id="independent-record-form"
         className={kind === "qr_request" ? "qr-request-form" : "serial-address-form"}
+        aria-labelledby={kind === "serial_address" ? "serial-address-form-title" : undefined}
         onSubmit={(event) => void submit(event)}
       >
         <LayerHeaderAction><button form="independent-record-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : kind === "qr_request" ? "保存申请" : "保存记录"}</button></LayerHeaderAction>
+        {kind === "serial_address" && (
+          <div className="serial-address-form-heading">
+            <div>
+              <h3 id="serial-address-form-title">登记地址更新</h3>
+              <p>逐台填写实际新址信息。</p>
+            </div>
+            <button type="button" className="text-action" onClick={viewRecords}>查看记录</button>
+          </div>
+        )}
         <fieldset
           className="form-grid"
           disabled={busy}
@@ -3810,14 +3855,19 @@ function IndependentModuleV2({
           </div>
         )}
         <div className="form-footer">
-          <span>
+          <span role={kind === "serial_address" && saveNotice ? "status" : undefined}>
             {kind === "qr_request"
               ? "每条记录按去重后的选中类型计工作量"
-              : "保存后仅刷新当前独立模块"}
+              : saveNotice || "保存后保留客户、新址、Account ID 与日期，便于连续登记"}
           </span>
         </div>
       </form>
-      <section className="module-list">
+      <section
+        ref={kind === "serial_address" ? recordsRef : undefined}
+        id={kind === "serial_address" ? "serial-address-records" : undefined}
+        className="module-list"
+        aria-labelledby={kind === "serial_address" ? "serial-address-records-title" : undefined}
+      >
         {kind === "qr_request" ? (
           <div className="module-list-heading">
             <div>
@@ -3829,7 +3879,7 @@ function IndependentModuleV2({
         ) : (
           <div className="module-list-heading serial-address-list-heading">
             <div>
-              <h3>地址更新记录</h3>
+              <h3 id="serial-address-records-title">地址更新记录</h3>
               <p>记录有误时，删除后按最新资料重新登记。</p>
             </div>
             <span>{page?.total ?? 0} 条</span>
@@ -3846,6 +3896,7 @@ function IndependentModuleV2({
           <label>
             查找记录
             <input
+              ref={kind === "serial_address" ? recordsSearchRef : undefined}
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}

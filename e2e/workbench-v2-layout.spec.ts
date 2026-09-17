@@ -162,12 +162,25 @@ async function assertIndependentDrawer(
   await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '序列号地址更新', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '序列号地址更新' });
   if (seedRecord) {
-    await dialog.getByLabel(/客户名称/).fill('响应式布局测试客户');
-    await dialog.getByLabel(/新址地址/).fill('上海市浦东新区测试路一百二十八号三层搬迁实验室');
+    const customer = dialog.getByLabel(/客户名称/);
+    const address = dialog.getByLabel(/新址地址/);
+    const account = dialog.getByLabel(/Account ID/);
+    const updatedAt = dialog.getByLabel(/更新日期/);
+    const body = dialog.locator('.layer-body');
+    await customer.fill('响应式布局测试客户');
+    await address.fill('上海市浦东新区测试路一百二十八号三层搬迁实验室');
     await dialog.getByLabel(/序列号/).fill('SN-LAYOUT-001');
-    await dialog.getByLabel(/Account ID/).fill('ACC-LAYOUT-001');
-    await dialog.getByLabel(/更新日期/).fill('2026-09-17');
+    await account.fill('ACC-LAYOUT-001');
+    await updatedAt.fill('2026-09-17');
+    const scrollTopBeforeSave = await body.evaluate((node) => node.scrollTop);
     await dialog.getByRole('button', { name: '保存记录', exact: true }).click();
+    await expect(dialog.getByRole('status')).toContainText('记录已保存，可继续登记下一台仪器。');
+    await expect(customer).toHaveValue('响应式布局测试客户');
+    await expect(address).toHaveValue('上海市浦东新区测试路一百二十八号三层搬迁实验室');
+    await expect(account).toHaveValue('ACC-LAYOUT-001');
+    await expect(updatedAt).toHaveValue('2026-09-17');
+    await expect(dialog.getByRole('combobox', { name: '搬迁仪器' })).toBeFocused();
+    expect(await body.evaluate((node) => node.scrollTop)).toBeLessThanOrEqual(scrollTopBeforeSave + 1);
   }
   await expect(dialog.getByText('响应式布局测试客户')).toBeVisible();
   const layout = await page.locator('.v2-independent').evaluate((root) => {
@@ -183,10 +196,14 @@ async function assertIndependentDrawer(
     const action = table?.querySelector<HTMLElement>('.serial-address-action .button');
     return {
       columns: columns.length,
+      domOrder: Boolean(form && list && (form.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      rootWidth: root.getBoundingClientRect().width,
       formWidth: form?.getBoundingClientRect().width ?? 0,
       listWidth: list?.getBoundingClientRect().width ?? 0,
       paginationOverflow: pagination ? pagination.scrollWidth - pagination.clientWidth : 999,
       tableOverflow: tableScroll ? tableScroll.scrollWidth - tableScroll.clientWidth : 999,
+      tableOverflowY: tableScroll ? getComputedStyle(tableScroll).overflowY : '',
+      tableMaxHeight: tableScroll ? Number.parseFloat(getComputedStyle(tableScroll).maxHeight) : -1,
       tableDisplay: table ? getComputedStyle(table).display : '',
       headerDisplay: header ? getComputedStyle(header).display : '',
       rowDisplay: row ? getComputedStyle(row).display : '',
@@ -195,22 +212,38 @@ async function assertIndependentDrawer(
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     };
   });
-  expect(layout.columns).toBe(width >= 1180 ? 2 : 1);
-  if (width >= 1180) {
-    expect(layout.formWidth).toBeGreaterThanOrEqual(360);
-    expect(layout.formWidth).toBeLessThanOrEqual(390);
-    expect(layout.listWidth).toBeGreaterThanOrEqual(660);
-  } else {
-    expect(layout.listWidth).toBeGreaterThan(width === 720 ? 620 : 680);
-  }
+  expect(layout.columns).toBe(1);
+  expect(layout.domOrder).toBe(true);
+  expect(layout.formWidth).toBeLessThanOrEqual(920);
+  expect(layout.listWidth).toBeGreaterThanOrEqual(layout.rootWidth - 1);
   expect(layout.paginationOverflow).toBeLessThanOrEqual(1);
   expect(layout.tableOverflow).toBeLessThanOrEqual(1);
   expect(layout.pageOverflow).toBeLessThanOrEqual(1);
   expect(layout.addressWidth).toBeGreaterThan(width < 760 ? 300 : 190);
   expect(layout.actionVisible).toBe(true);
+  expect(layout.tableOverflowY).toBe(width < 760 ? 'visible' : 'auto');
+  if (width < 760) expect(layout.tableMaxHeight).toBeNaN();
+  else {
+    expect(layout.tableMaxHeight).toBeGreaterThanOrEqual(280);
+    expect(layout.tableMaxHeight).toBeLessThanOrEqual(460);
+  }
   expect(layout.tableDisplay).toBe(width < 760 ? 'block' : 'table');
   expect(layout.headerDisplay).toBe(width < 760 ? 'none' : 'table-header-group');
   expect(layout.rowDisplay).toBe(width < 760 ? 'grid' : 'table-row');
+  if (seedRecord) {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await dialog.getByRole('button', { name: '查看记录' }).click();
+    await expect(dialog.getByRole('searchbox', { name: '查找记录' })).toBeFocused();
+    const searchPosition = await dialog.getByRole('searchbox', { name: '查找记录' }).evaluate((node) => ({
+      top: node.getBoundingClientRect().top,
+      bottom: node.getBoundingClientRect().bottom,
+      bodyTop: node.closest('.layer-body')!.getBoundingClientRect().top,
+      bodyBottom: node.closest('.layer-body')!.getBoundingClientRect().bottom,
+    }));
+    expect(searchPosition.top).toBeGreaterThanOrEqual(searchPosition.bodyTop);
+    expect(searchPosition.bottom).toBeLessThanOrEqual(searchPosition.bodyBottom);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+  }
   await page.screenshot({ path: screenshot, fullPage: true });
   await dialog.getByRole('button', { name: '关闭' }).click();
 }

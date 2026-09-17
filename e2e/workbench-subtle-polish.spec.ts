@@ -154,6 +154,8 @@ test('正式工作台保留模块顺序，项目操作、弹层焦点、滚动�
     const drawer = page.getByRole('dialog', { name: '序列号地址更新' });
     await expect(drawer).toBeVisible();
     expect(await drawer.evaluate((node) => ({ width: node.getBoundingClientRect().width <= innerWidth, overflow: getComputedStyle(node.querySelector('.layer-body')!).overflowY }))).toEqual({ width: true, overflow: 'auto' });
+    await drawer.getByRole('button', { name: '查看记录' }).click();
+    await expect(drawer.getByRole('searchbox', { name: '查找记录' })).toBeFocused();
     await drawer.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(addressEntry).toBeFocused();
     expect(errors).toEqual([]);

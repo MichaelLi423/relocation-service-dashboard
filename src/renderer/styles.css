@@ -237,13 +237,56 @@ html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
   }
 }
 
-/* 序列号地址更新：宽屏并排核对，中窄窗口让记录区使用完整宽度。 */
+/* 序列号地址更新：所有桌面宽度均按登记、记录的任务顺序纵向排列。 */
 .wide-drawer .serial-address-module {
-  grid-template-columns: minmax(360px, 380px) minmax(660px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+.serial-address-form {
+  width: min(920px, 100%);
+}
+.serial-address-form-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.serial-address-form-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.serial-address-form-heading p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.serial-address-form-heading .text-action {
+  flex: 0 0 auto;
+  min-height: 40px;
+}
+.serial-address-module .module-list {
+  width: 100%;
+  margin-top: 4px;
+  scroll-margin-top: 12px;
+}
+.serial-address-table-scroll {
+  max-height: clamp(280px, 42dvh, 460px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
 }
 .serial-address-table {
   min-width: 650px;
   table-layout: fixed;
+}
+.serial-address-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--soft);
 }
 .serial-address-table th:nth-child(1) { width: 22%; }
 .serial-address-table th:nth-child(2) { width: 31%; }
@@ -295,12 +338,6 @@ html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
   min-height: 40px;
 }
 
-@media (max-width: 1179px) {
-  .wide-drawer .serial-address-module {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .serial-address-module .module-list { margin-top: 4px; }
-}
 @media (max-width: 900px) {
   .serial-address-module .module-search {
     grid-template-columns: minmax(0, 1fr) minmax(130px, .55fr) minmax(130px, .55fr) auto !important;
@@ -308,8 +345,12 @@ html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
   .serial-address-module .module-search label:first-child { grid-column: 1 / -1; }
 }
 @media (max-width: 759px) {
+  .serial-address-form-heading { align-items: flex-start; }
   .serial-address-form .form-grid { grid-template-columns: minmax(0, 1fr); }
-  .serial-address-table-scroll { overflow-x: visible; }
+  .serial-address-table-scroll {
+    max-height: none;
+    overflow: visible;
+  }
   .serial-address-table {
     display: block;
     min-width: 0;
