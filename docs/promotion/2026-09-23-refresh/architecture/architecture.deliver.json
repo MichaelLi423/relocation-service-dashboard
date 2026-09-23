@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/michael/Developer/OpenSource/deliver-service-dashboard/docs/promotion/2026-09-23-refresh/architecture/architecture.json",
+  "output": "/Users/michael/Developer/OpenSource/deliver-service-dashboard/docs/promotion/2026-09-23-refresh/architecture/architecture.html",
+  "specification": {
+    "sha256": "b8fa13bde88832496d7b9efaa45800e64337196983a1e2a38bd0a613dd868b50",
+    "bytes": 6296
+  },
+  "artifact": {
+    "sha256": "7b4b538030c0fbe3bad56bf252c923eb028bba3b626f68bf428d0d64527b5994",
+    "bytes": 810941
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

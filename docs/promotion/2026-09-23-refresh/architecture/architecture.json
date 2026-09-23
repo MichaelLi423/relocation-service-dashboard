@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "搬迁业务工作台与移动受控只读架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/promotion/2026-09-23-refresh/architecture/architecture.html",
+    "views": [
+      {
+        "id": "full-pipeline",
+        "label": "端到端系统架构",
+        "focus": [
+          "renderer",
+          "preload",
+          "main_process",
+          "sqlite_db",
+          "snapshot_publisher",
+          "readonly_service",
+          "mobile_web"
+        ],
+        "note": "展示从桌面本地权威录入到移动端现场受控只读查阅的完整单向流转链路。"
+      },
+      {
+        "id": "local-authoritative",
+        "label": "本地业务权威写入",
+        "focus": [
+          "renderer",
+          "preload",
+          "main_process",
+          "sqlite_db"
+        ],
+        "note": "以本地 SQLite 为单一真实源，渲染端经 Preload 与共享 IPC 契约实现强类型事务调用。"
+      },
+      {
+        "id": "readonly-publish",
+        "label": "按需发布与现场只读",
+        "focus": [
+          "sqlite_db",
+          "snapshot_publisher",
+          "readonly_service",
+          "mobile_web"
+        ],
+        "note": "桌面按需提取白名单快照推送至独立只读服务，移动端凭 Basic 凭证进行现场只读检索。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "renderer",
+      "type": "frontend",
+      "label": "桌面工作台 UI",
+      "sublabel": "React 18 / 沙箱隔离",
+      "tag": "window.workbench",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "preload",
+      "type": "security",
+      "label": "Preload 契约通道",
+      "sublabel": "contextBridge / 隔离通道",
+      "tag": "最小暴露面",
+      "pos": [
+        300,
+        110
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "main_process",
+      "type": "backend",
+      "label": "Electron 主进程",
+      "sublabel": "业务生命周期 / 事务调度",
+      "tag": "本地唯一写入者",
+      "pos": [
+        560,
+        110
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "sqlite_db",
+      "type": "database",
+      "label": "本地 SQLite 数据库",
+      "sublabel": "node:sqlite / 单机真实源",
+      "tag": "本地权威存储",
+      "pos": [
+        560,
+        290
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "snapshot_publisher",
+      "type": "backend",
+      "label": "只读快照发布模块",
+      "sublabel": "白名单提取 / 全量替换",
+      "tag": "默认关闭·按需启用",
+      "pos": [
+        830,
+        290
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "readonly_service",
+      "type": "cloud",
+      "label": "独立只读服务",
+      "sublabel": "Node.js / 文件快照持久化",
+      "tag": "无业务库·无写回",
+      "pos": [
+        1110,
+        290
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "mobile_web",
+      "type": "frontend",
+      "label": "移动端只读 Web",
+      "sublabel": "React Web / 现场查询",
+      "tag": "六类记录·不支持离线",
+      "pos": [
+        1110,
+        110
+      ],
+      "size": [
+        160,
+        66
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "桌面端运行环境（本地离线业务与权威写入）",
+      "wraps": [
+        "renderer",
+        "preload",
+        "main_process",
+        "sqlite_db",
+        "snapshot_publisher"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "独立只读环境（按需发布与现场查阅）",
+      "wraps": [
+        "readonly_service",
+        "mobile_web"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "renderer-preload",
+      "from": "renderer",
+      "to": "preload",
+      "label": "window.workbench",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "preload-main",
+      "from": "preload",
+      "to": "main_process",
+      "label": "共享 IPC 契约",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "main-sqlite",
+      "from": "main_process",
+      "to": "sqlite_db",
+      "label": "事务读写",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        645,
+        233
+      ]
+    },
+    {
+      "id": "sqlite-publisher",
+      "from": "sqlite_db",
+      "to": "snapshot_publisher",
+      "label": "白名单提取",
+      "variant": "default",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "publisher-service",
+      "from": "snapshot_publisher",
+      "to": "readonly_service",
+      "label": "HTTPS Bearer 发布",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "mobile-service",
+      "from": "mobile_web",
+      "to": "readonly_service",
+      "label": "Basic 认证查询",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1190,
+        233
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "本地权威与离线可用",
+      "items": [
+        "业务数据以本地 SQLite 为单一真实源，支持完整离线录入与报表导出",
+        "渲染进程沙箱隔离，仅经 contextBridge 与共享 IPC 契约调用能力"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "按需发布与凭证分离",
+      "items": [
+        "移动只读功能默认关闭，由用户在桌面端按需配置与启用发布",
+        "白名单提取项目与六类关联记录，采用独立 Bearer 发布凭证与 Basic 查询凭证"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "单向无库与现场只读",
+      "items": [
+        "独立只读服务采用内存加 current.json 文件持久化，无业务数据库与写回逻辑",
+        "移动 Web 仅供现场查询检索，不支持在线修改与离线数据暂存"
+      ]
+    }
+  ]
+}
