@@ -8,7 +8,6 @@ import {
   cleanupImportE2eFiles,
   createImportE2eFiles,
   firstWindow,
-  initializeAndEnterWorkbench,
   installNativeDialogStubs,
   launchImportApp,
   restoreNativeDialogStubs,
@@ -75,7 +74,7 @@ async function createFormalProject(
   await dialog.getByLabel('合同开始日期').fill('2026-08-01');
   await dialog.getByLabel('合同截止日期').fill('2027-07-31');
   // 保存意图选「正式进单」：ECC/进单日期/合同金额仅随正式进单提交
-  await dialog.getByLabel('正式进单').check();
+  await dialog.getByRole('radio', { name: /正式进单/ }).check();
   await dialog.getByLabel(/^ECC/).fill(ecc);
   if (contractAmount !== undefined) {
     // 合同金额为空时正式进单须另行录入最终可确认金额 > 0（领域校验）；
@@ -145,7 +144,7 @@ test.describe('真实打包 Electron UI 冒烟补充（WorkbenchV2 · 临时 use
     try {
       app = await launchImportApp(files.userData);
       const page = await firstWindow(app);
-      await initializeAndEnterWorkbench(page);
+      await expect(page.getByRole('button', { name: '新建搬迁项目' })).toBeVisible();
 
       // 正式进单一个无任何掉票历史的项目（有掉票历史禁止取消）。
       // 合同金额为空时正式进单必须另行录入最终可确认金额 > 0（领域校验）。
@@ -200,7 +199,7 @@ test.describe('真实打包 Electron UI 冒烟补充（WorkbenchV2 · 临时 use
       const page = await firstWindow(app);
       // 主进程侧打桩 showSaveDialog（复用导入向导 fixture 的原生 dialog stubs 方案）
       await installNativeDialogStubs(app, { savePath: exports.xlsx, openPaths: [] });
-      await initializeAndEnterWorkbench(page);
+      await expect(page.getByRole('button', { name: '新建搬迁项目' })).toBeVisible();
 
       // 造数：正式进单项目 + 本月一张掉票（报表 monthly_invoice / 条形图有数据）
       await createFormalProject(page, 'E2E 报表导出客户', 'E2E-EXPORT-0001', 'East', '100000');
@@ -216,6 +215,13 @@ test.describe('真实打包 Electron UI 冒烟补充（WorkbenchV2 · 临时 use
       const reportDialog = page.getByRole('dialog');
       await reportDialog.getByLabel('起始月份').fill(month);
       await reportDialog.getByLabel('截止月份').fill(month);
+
+      // 工作范围筛选控件存在，选择区域时给出排除提示
+      await expect(reportDialog.getByLabel('工作范围')).toBeVisible();
+      await reportDialog.getByLabel('区域').fill('East');
+      await expect(reportDialog.getByText(/不关联项目的独立记录（含中大型项目开单）会被排除/)).toBeVisible();
+      await reportDialog.getByLabel('区域').fill('');
+
       await reportDialog.getByRole('button', { name: '实时计算报表' }).click();
       await expect(reportDialog.getByText('月度掉票').first()).toBeVisible();
 

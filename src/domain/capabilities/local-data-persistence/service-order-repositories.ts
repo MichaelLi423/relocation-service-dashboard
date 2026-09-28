@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { ServiceOrder, OrderType } from '../service-order-recording';
+import type { ServiceOrder, OrderType, ServiceOrderWorkScope } from '../service-order-recording';
 import type { ServiceOrderRepository } from '../service-order-recording';
 import { mapConstraintError } from './repositories';
 
@@ -31,15 +31,17 @@ export class SqliteServiceOrderRepository implements ServiceOrderRepository {
         .prepare(
           `INSERT INTO service_orders (
              id, order_type, service_order_no, ordered_at, engineer, customer_name,
-             project_id, note, account_id, username_snapshot, created_at, updated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+             project_id, note, account_id, username_snapshot, created_at, updated_at,
+             work_scope
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(id) DO UPDATE SET
              order_type=excluded.order_type, service_order_no=excluded.service_order_no,
              ordered_at=excluded.ordered_at, engineer=excluded.engineer,
              customer_name=excluded.customer_name, project_id=excluded.project_id,
              note=excluded.note,
              account_id=excluded.account_id, username_snapshot=excluded.username_snapshot,
-             updated_at=excluded.updated_at
+             updated_at=excluded.updated_at,
+             work_scope=excluded.work_scope
         `,
         )
         .run(
@@ -55,6 +57,7 @@ export class SqliteServiceOrderRepository implements ServiceOrderRepository {
           order.usernameSnapshot,
           order.createdAt,
           order.updatedAt,
+          order.workScope ?? 'other',
         );
     } catch (err) {
       throw mapConstraintError(err, `开单记录保存失败（非空服务单号全局唯一）`);
@@ -82,6 +85,7 @@ function rowToServiceOrder(row: Record<string, unknown>): ServiceOrder {
   return {
     id: String(row.id),
     orderType: row.order_type as OrderType,
+    workScope: (row.work_scope === 'medium_large' ? 'medium_large' : 'other') as ServiceOrderWorkScope,
     serviceOrderNo: row.service_order_no === null ? null : String(row.service_order_no),
     orderedAt: String(row.ordered_at),
     engineer: row.engineer === null ? null : String(row.engineer),

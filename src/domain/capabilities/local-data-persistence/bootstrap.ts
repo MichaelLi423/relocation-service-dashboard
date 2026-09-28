@@ -91,6 +91,10 @@ import {
   TRANSFERRED_STATUS_MIGRATION_VERSION,
 } from './schema-v21';
 import {
+  applyServiceOrderWorkScopeMigration,
+  SERVICE_ORDER_WORK_SCOPE_MIGRATION_VERSION,
+} from './schema-v22';
+import {
   buildFinancialIntegrityHint,
   hasAnyFinancialIntegrityIssue,
   readFinancialIntegrityCounts,
@@ -246,6 +250,13 @@ export const TRANSFERRED_STATUS_MIGRATION: Migration = {
   up: (db) => applyTransferredStatusMigration(db),
 };
 
+/** v22 迁移：新增开单工作范围 work_scope（'other'|'medium_large'，默认 'other'）。 */
+export const SERVICE_ORDER_WORK_SCOPE_MIGRATION: Migration = {
+  version: SERVICE_ORDER_WORK_SCOPE_MIGRATION_VERSION,
+  name: 'service-order-work-scope',
+  up: (db) => applyServiceOrderWorkScopeMigration(db),
+};
+
 /** 当前迁移序列（后续 schema 升级追加新 Migration，不修改已发布迁移）。 */
 export const MIGRATIONS: readonly Migration[] = [
   INITIAL_MIGRATION,
@@ -269,6 +280,7 @@ export const MIGRATIONS: readonly Migration[] = [
   UNDER_REPAIR_STATUS_MIGRATION,
   SERVICE_ORDER_ENGINEER_NULLABLE_MIGRATION,
   TRANSFERRED_STATUS_MIGRATION,
+  SERVICE_ORDER_WORK_SCOPE_MIGRATION,
 ];
 
 export interface BootstrapOptions {

@@ -139,4 +139,147 @@ describe('开单工程师补录 renderer', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '清空工程师' }));
     await waitFor(() => expect(apiWithEngineer.v2Mutate).toHaveBeenCalledWith({ op: 'service_order_engineer_update', payload: { orderId: 'order-1', engineer: null } }));
   });
+
+  it('跨项目历史展示中大型与其他/既有，既有无项目记录不误判为中大型，且支持补录/清空工程师与删除', async () => {
+    const api = mockApi({
+      v2HistoryPage: vi.fn().mockImplementation((req: { kind: string }) => {
+        if (req.kind === 'service_order') {
+          return Promise.resolve({
+            businessRevision: 1,
+            kind: 'service_order',
+            rows: [
+              {
+                kind: 'service_order',
+                id: 'so-large-1',
+                projectId: null,
+                customerName: '中大型企业客户',
+                ecc: null,
+                tempNo: '',
+                orderType: 'relocation',
+                serviceOrderNo: 'SO-ML-001',
+                orderedAt: '2026-09-01',
+                engineer: null,
+                businessDate: '2026-09-01',
+                createdAt: '2026-09-01T00:00:00Z',
+                workScope: 'medium_large',
+              },
+              {
+                kind: 'service_order',
+                id: 'so-legacy-no-proj',
+                projectId: null,
+                customerName: '既有独立认证客户',
+                ecc: null,
+                tempNo: '',
+                orderType: 'certification',
+                serviceOrderNo: 'SO-LEGACY-002',
+                orderedAt: '2026-07-15',
+                engineer: '既有工程师乙',
+                businessDate: '2026-07-15',
+                createdAt: '2026-07-15T00:00:00Z',
+                workScope: 'other',
+              },
+            ],
+            total: 2,
+            nextCursor: null,
+            limit: 50,
+          });
+        }
+        return Promise.resolve({ businessRevision: 1, kind: req.kind, rows: [], total: 0, nextCursor: null, limit: 50 });
+      }),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    // 打开浏览全部记录
+    fireEvent.click(screen.getByRole('button', { name: '浏览全部记录' }));
+    const historyDialog = await screen.findByRole('dialog', { name: '浏览往期与全部记录' });
+    expect(historyDialog).toBeInTheDocument();
+
+    // 验证中大型记录与既有无项目记录的工作范围标识
+    const table = await within(historyDialog).findByRole('table');
+    expect(within(table).getByText('中大型企业客户')).toBeInTheDocument();
+    expect(within(table).getByText('中大型')).toBeInTheDocument();
+
+    expect(within(table).getByText('既有独立认证客户')).toBeInTheDocument();
+    expect(within(table).getByText('其他/既有')).toBeInTheDocument();
+
+    // 验证删除按钮存在
+    const deleteButtons = within(table).getAllByRole('button', { name: '删除' });
+    expect(deleteButtons.length).toBeGreaterThanOrEqual(2);
+
+    // 验证工程师为空时提供“补充工程师”入口
+    const supplementBtn = within(table).getByRole('button', { name: '补充工程师' });
+    expect(supplementBtn).toBeInTheDocument();
+    fireEvent.click(supplementBtn);
+
+    // 打开维护工程师弹窗
+    const engineerModal = await screen.findByRole('dialog', { name: '维护工程师' });
+    expect(engineerModal).toBeInTheDocument();
+    expect(within(engineerModal).getByText('中大型')).toBeInTheDocument();
+    const input = within(engineerModal).getByLabelText(/工程师/) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(within(engineerModal).getByRole('button', { name: '清空工程师' })).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: '独立项目工程师' } });
+    fireEvent.click(within(engineerModal).getByRole('button', { name: '补充工程师' }));
+
+    await waitFor(() =>
+      expect(api.v2Mutate).toHaveBeenCalledWith({
+        op: 'service_order_engineer_update',
+        payload: { orderId: 'so-large-1', engineer: '独立项目工程师' },
+      }),
+    );
+
+    // 验证有值工程师行显示“保存/清空工程师”入口
+    const editEngineerBtn = within(table).getByRole('button', { name: '保存/清空工程师' });
+    expect(editEngineerBtn).toBeInTheDocument();
+    fireEvent.click(editEngineerBtn);
+
+    const editModal = await screen.findByRole('dialog', { name: '维护工程师' });
+    const clearBtn = within(editModal).getByRole('button', { name: '清空工程师' });
+    expect(clearBtn).not.toBeDisabled();
+    fireEvent.click(clearBtn);
+
+    await waitFor(() =>
+      expect(api.v2Mutate).toHaveBeenCalledWith({
+        op: 'service_order_engineer_update',
+        payload: { orderId: 'so-legacy-no-proj', engineer: null },
+      }),
+    );
+  });
+
+  it('原项目快速记录开单提交时默认携带 workScope other', async () => {
+    const api = mockApi();
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+
+    fireEvent.click(screen.getAllByRole('button', { name: '快速记录' })[0]!);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /开单记录/ }));
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.change(within(dialog).getByLabelText(/服务单号/), { target: { value: 'SO-PROJ-001' } });
+    fireEvent.change(within(dialog).getByLabelText(/开单日期/), { target: { value: '2026-08-10' } });
+    fireEvent.change(within(dialog).getByLabelText(/工程师/), { target: { value: '张三' } });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
+
+    await waitFor(() =>
+      expect(api.v2Mutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          op: 'submit_action',
+          projectId: 'p-1',
+          action: expect.objectContaining({
+            type: 'order',
+            projectId: 'p-1',
+            values: expect.objectContaining({
+              serviceOrderNo: 'SO-PROJ-001',
+              workScope: 'other',
+            }),
+          }),
+        }),
+      ),
+    );
+  });
 });

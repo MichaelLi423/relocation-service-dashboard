@@ -1104,7 +1104,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
         temporaryInstrumentModel: 'BS-200',
         temporaryHasUps: true,
         plannedInstallAt: '2026-09-01',
-        plannedVisitAt: '2026-09-20',
+        plannedVisitAt: '2026-12-20',
         plannedTransportAt: '2026-09-18',
         siteConfirmed: true,
       },
@@ -1130,7 +1130,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     expect(d.contractEndDate).toBe('2027-07-31');
 
     // 执行准备：计划上门/计划运输/场地确认/是否暂存 + 计划装机日期（更名契约字段）
-    expect(d.planVisitAt).toBe('2026-09-20');
+    expect(d.planVisitAt).toBe('2026-12-20');
     expect(d.planTransportAt).toBe('2026-09-18');
     expect(d.siteConfirmed).toBe(true);
     expect(d.isTemporaryStorage).toBe(true);
@@ -1847,6 +1847,109 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     expect(() =>
       orderStmt.run('so-np-dup', 'certification', 'SO-NP-001', '2026-08-10', '工程师丁', '另一客户', null, null, 't', 't'),
     ).toThrow(/UNIQUE/);
+    closeDatabase(db);
+  });
+
+  it('跨项目历史展示中大型与其他/既有范围，客户单位回退且项目分节排除独立开单（tasks 4.2）', () => {
+    const ctx = makeFacade();
+    const { db, facade, projectId } = ctx;
+
+    // 1. 既有有项目开单（默认 other）
+    facade.v2Mutate({
+      op: 'submit_action',
+      projectId,
+      action: {
+        type: 'order',
+        projectId,
+        values: {
+          orderType: 'relocation',
+          serviceOrderNo: 'SO-PROJ-OTHER',
+          orderedAt: '2026-08-10',
+          engineer: '工程师甲',
+        },
+      },
+    });
+
+    // 2. 既有无项目独立开单（存量无 project_id，默认 other）
+    db.prepare(
+      `INSERT INTO service_orders (id, order_type, work_scope, service_order_no, ordered_at, engineer, customer_name, project_id, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).run('so-hist-other', 'pm', 'other', 'SO-IND-OTHER', '2026-08-11', null, '既有独立客户', null, '2026-08-11T10:00:00+08:00', '2026-08-11T10:00:00+08:00');
+
+    // 3. 中大型独立开单（无 project_id，显式 medium_large）
+    facade.v2Mutate({
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'relocation',
+          serviceOrderNo: 'SO-IND-ML',
+          customerName: '中大型历史客户',
+          orderedAt: '2026-08-12',
+          engineer: null,
+        },
+      },
+    });
+
+    const page = facade.v2HistoryPage({ kind: 'service_order' });
+    expect(page.total).toBe(3);
+
+    // 检查中大型记录
+    const mlRow = page.rows.find((r) => r.kind === 'service_order' && r.serviceOrderNo === 'SO-IND-ML') as Extract<typeof page.rows[number], { kind: 'service_order' }>;
+    expect(mlRow).toBeDefined();
+    expect(mlRow.workScope).toBe('medium_large');
+    expect(mlRow.customerName).toBe('中大型历史客户');
+    expect(mlRow.projectId).toBeNull();
+    expect(mlRow.engineer).toBeNull();
+
+    // 检查既有无项目记录（客户名回退，workScope 映射为 other）
+    const otherIndRow = page.rows.find((r) => r.kind === 'service_order' && r.serviceOrderNo === 'SO-IND-OTHER') as Extract<typeof page.rows[number], { kind: 'service_order' }>;
+    expect(otherIndRow).toBeDefined();
+    expect(otherIndRow.workScope).toBe('other');
+    expect(otherIndRow.customerName).toBe('既有独立客户');
+    expect(otherIndRow.projectId).toBeNull();
+
+    // 检查项目关联记录（客户名取自项目，workScope 为 other）
+    const projRow = page.rows.find((r) => r.kind === 'service_order' && r.serviceOrderNo === 'SO-PROJ-OTHER') as Extract<typeof page.rows[number], { kind: 'service_order' }>;
+    expect(projRow).toBeDefined();
+    expect(projRow.workScope).toBe('other');
+    expect(projRow.customerName).toBe('集成客户甲');
+    expect(projRow.projectId).toBe(projectId);
+
+    // 项目分节（v2SectionPage orders）：仅展示有项目开单，两笔独立开单均不出现在项目内
+    const projectOrders = facade.v2SectionPage({ kind: 'orders', projectId });
+    expect(projectOrders.total).toBe(1);
+    const orderRow = projectOrders.rows[0] as Extract<WorkbenchV2SectionRow, { kind: 'orders' }>;
+    expect(orderRow.serviceOrderNo).toBe('SO-PROJ-OTHER');
+
+    // 工程师补录操作：中大型记录保留工程师补录入口，补录后 workScope 不变
+    const mlId = mlRow.id;
+    facade.v2Mutate({
+      op: 'service_order_engineer_update',
+      payload: {
+        orderId: mlId,
+        engineer: '补录工程师张三',
+      },
+    });
+    const afterUpdate = facade.v2HistoryPage({ kind: 'service_order' });
+    const updatedMlRow = afterUpdate.rows.find((r) => r.id === mlId) as Extract<typeof page.rows[number], { kind: 'service_order' }>;
+    expect(updatedMlRow.engineer).toBe('补录工程师张三');
+    expect(updatedMlRow.workScope).toBe('medium_large');
+
+    // 工程师清空操作：清空后 engineer 为 null，workScope 仍不变
+    facade.v2Mutate({
+      op: 'service_order_engineer_update',
+      payload: {
+        orderId: mlId,
+        engineer: null,
+      },
+    });
+    const afterClear = facade.v2HistoryPage({ kind: 'service_order' });
+    const clearedMlRow = afterClear.rows.find((r) => r.id === mlId) as Extract<typeof page.rows[number], { kind: 'service_order' }>;
+    expect(clearedMlRow.engineer).toBeNull();
+    expect(clearedMlRow.workScope).toBe('medium_large');
+
     closeDatabase(db);
   });
 });

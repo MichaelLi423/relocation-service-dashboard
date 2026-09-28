@@ -1,4 +1,4 @@
-import type { OrderType } from '../service-order-recording';
+import type { OrderType, ServiceOrderWorkScope } from '../service-order-recording';
 
 /**
  * operational-reporting 能力（运营报表）——指标口径字典与筛选（design D10 / tasks 7.1）。
@@ -37,8 +37,11 @@ export const REPORT_FILTER_FIELDS = [
   'engineer', // 参与工程师（开单量可选筛选）
   'operator', // 责任人（按动作记录持久化的用户名快照筛选，工作量指标可选筛选）
   'tagIds', // 项目分类标签（多选 OR；启用时仅匹配关联项目事实）
+  'workScope', // 开单工作范围（other = 其他/既有，medium_large = 中大型；仅开单量可选筛选）
 ] as const;
 export type ReportFilterField = (typeof REPORT_FILTER_FIELDS)[number];
+
+export type { ServiceOrderWorkScope };
 
 /** 报表筛选条件：月份区间必填；其余可选（null = 不筛选）。 */
 export interface ReportFilter {
@@ -58,6 +61,8 @@ export interface ReportFilter {
   operator?: string | null;
   /** 项目分类标签多选：undefined/空数组不限制；非空按任一标签 OR 匹配。 */
   tagIds?: readonly string[];
+  /** 开单工作范围（other = 其他/既有，medium_large = 中大型；null = 全部；仅开单量筛选）。 */
+  workScope?: ServiceOrderWorkScope | null;
 }
 
 /** 指标口径字典条目。 */
@@ -114,7 +119,7 @@ export const REPORT_METRIC_DEFINITIONS: readonly ReportMetricDefinition[] = [
     label: '月度开单量',
     timeAttribution: '开单时间（ordered_at，未填默认当前时间）所属月份',
     factSource: 'service_orders（按唯一非空服务单号计一次，四类业务分组）',
-    filters: ['monthFrom', 'monthTo', 'region', 'orderType', 'engineer', 'tagIds'],
+    filters: ['monthFrom', 'monthTo', 'region', 'orderType', 'engineer', 'tagIds', 'workScope'],
     hasDrillDown: true,
   },
   {

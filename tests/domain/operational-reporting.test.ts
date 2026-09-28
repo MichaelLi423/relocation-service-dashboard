@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import * as reportingModule from '../../src/domain/capabilities/operational-reporting';
 import {
+  REPORT_FILTER_FIELDS,
   REPORT_METRIC_DEFINITIONS,
   REPORT_METRIC_KEYS,
   ReportingService,
   type ReportFilter,
+  type ServiceOrderWorkScope,
 } from '../../src/domain/capabilities/operational-reporting';
 import type { Project, Contract } from '../../src/domain/capabilities/relocation-project-lifecycle';
 import type { InvoiceRecord } from '../../src/domain/capabilities/project-financial-closure';
@@ -107,6 +109,7 @@ function makeOrder(overrides: Partial<ServiceOrder> = {}): ServiceOrder {
   return {
     id: 'o1',
     orderType: 'relocation',
+    workScope: 'other',
     serviceOrderNo: 'ORD-001',
     orderedAt: '2026-07-10',
     engineer: '工程师甲',
@@ -481,6 +484,208 @@ describe('开单工程师空值与报表归属（v20）', () => {
     expect(service.buildReport({ ...JULY, engineer: '工程师甲' }).monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
     const details = service.getMetricDetails('monthly_service_order_count', { ...JULY, engineer: '工程师甲' }) as Array<{ orderId: string; engineer: string | null }>;
     expect(details.map((d) => d.orderId).sort()).toEqual(['o1', 'o2']);
+  });
+});
+
+describe('月度开单量与工作范围（add-independent-large-project-orders tasks 3.1/3.2）', () => {
+  it('REPORT_FILTER_FIELDS 包含 workScope，月度开单量指标定义声明支持 workScope 筛选', () => {
+    expect(REPORT_FILTER_FIELDS).toContain('workScope');
+    const orderMetricDef = REPORT_METRIC_DEFINITIONS.find((d) => d.key === 'monthly_service_order_count');
+    expect(orderMetricDef).toBeDefined();
+    expect(orderMetricDef!.filters).toContain('workScope');
+  });
+
+  it('月度开单总量包含中大型开单且类型分组保持四类（未指定工作范围汇总全部）', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', orderType: 'relocation', serviceOrderNo: 'ORD-001', workScope: 'other' }),
+      makeOrder({ id: 'o2', orderType: 'certification', serviceOrderNo: 'ORD-002', workScope: 'other' }),
+      makeOrder({ id: 'o3', orderType: 'parts_by_mail', serviceOrderNo: 'ORD-003', workScope: 'other' }),
+      makeOrder({ id: 'o4', orderType: 'pm', serviceOrderNo: 'ORD-004', workScope: 'other' }),
+      makeOrder({ id: 'ml-1', orderType: 'relocation', serviceOrderNo: 'ML-001', projectId: null, workScope: 'medium_large' }),
+      makeOrder({ id: 'ml-2', orderType: 'certification', serviceOrderNo: 'ML-002', projectId: null, workScope: 'medium_large' }),
+      makeOrder({ id: 'ml-3', orderType: 'parts_by_mail', serviceOrderNo: 'ML-003', projectId: null, workScope: 'medium_large' }),
+      makeOrder({ id: 'ml-4', orderType: 'pm', serviceOrderNo: 'ML-004', projectId: null, workScope: 'medium_large' }),
+    ];
+
+    const report = service.buildReport(JULY);
+    const byKey = new Map(report.monthlyServiceOrders.map((r) => [r.orderType, r.count]));
+    expect(report.monthlyServiceOrders).toHaveLength(4);
+    expect(byKey.get('relocation')).toBe(2);
+    expect(byKey.get('certification')).toBe(2);
+    expect(byKey.get('parts_by_mail')).toBe(2);
+    expect(byKey.get('pm')).toBe(2);
+    expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(8);
+  });
+
+  it('按工作范围筛选开单量：medium_large 仅中大型，other 仅其他/既有', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', orderType: 'relocation', serviceOrderNo: 'ORD-001', workScope: 'other' }),
+      makeOrder({ id: 'o2', orderType: 'pm', serviceOrderNo: 'ORD-002', workScope: 'other' }),
+      makeOrder({ id: 'ml-1', orderType: 'relocation', serviceOrderNo: 'ML-001', projectId: null, workScope: 'medium_large' }),
+    ];
+
+    const onlyLarge = service.buildReport({ ...JULY, workScope: 'medium_large' });
+    expect(onlyLarge.monthlyServiceOrders).toEqual([
+      { month: '2026-07', orderType: 'relocation', count: 1 },
+    ]);
+
+    const onlyOther = service.buildReport({ ...JULY, workScope: 'other' });
+    const otherMap = new Map(onlyOther.monthlyServiceOrders.map((r) => [r.orderType, r.count]));
+    expect(otherMap.get('relocation')).toBe(1);
+    expect(otherMap.get('pm')).toBe(1);
+    expect(onlyOther.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
+  });
+
+  it('存量历史记录默认归入 other / 既有口径', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1' })];
+    const legacyOrder = makeOrder({ id: 'legacy-1', serviceOrderNo: 'LEGACY-001' });
+    const largeOrder = makeOrder({ id: 'ml-1', serviceOrderNo: 'ML-001', projectId: null, workScope: 'medium_large' });
+    facts.serviceOrders = [legacyOrder, largeOrder];
+
+    // 默认全部
+    const all = service.buildReport(JULY);
+    expect(all.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
+
+    // other 筛选：包含存量记录
+    const other = service.buildReport({ ...JULY, workScope: 'other' });
+    expect(other.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+
+    // medium_large 筛选：不包含存量记录
+    const large = service.buildReport({ ...JULY, workScope: 'medium_large' });
+    expect(large.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+  });
+
+  it('同一服务单号多工程师或多次上门仍只计一次（跨范围唯一）', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'ml-1a', serviceOrderNo: 'ML-SAME-001', engineer: '工程师甲', projectId: null, workScope: 'medium_large' }),
+      makeOrder({ id: 'ml-1b', serviceOrderNo: 'ML-SAME-001', engineer: '工程师乙', projectId: null, workScope: 'medium_large' }),
+    ];
+
+    const report = service.buildReport(JULY);
+    expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+  });
+
+  it('组合筛选：月份区间 + 工作范围 + 工程师 + 开单类型', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'ml-june', orderedAt: '2026-06-15', serviceOrderNo: 'ML-JUN', engineer: '工程师甲', projectId: null, workScope: 'medium_large', orderType: 'relocation' }),
+      makeOrder({ id: 'ml-july-a', orderedAt: '2026-07-10', serviceOrderNo: 'ML-JUL-A', engineer: '工程师甲', projectId: null, workScope: 'medium_large', orderType: 'relocation' }),
+      makeOrder({ id: 'ml-july-b', orderedAt: '2026-07-15', serviceOrderNo: 'ML-JUL-B', engineer: '工程师乙', projectId: null, workScope: 'medium_large', orderType: 'relocation' }),
+      makeOrder({ id: 'ml-july-pm', orderedAt: '2026-07-20', serviceOrderNo: 'ML-JUL-PM', engineer: '工程师甲', projectId: null, workScope: 'medium_large', orderType: 'pm' }),
+      makeOrder({ id: 'other-july', orderedAt: '2026-07-25', serviceOrderNo: 'OTH-JUL', engineer: '工程师甲', projectId: 'p1', workScope: 'other', orderType: 'relocation' }),
+    ];
+
+    const combined = service.buildReport({
+      monthFrom: '2026-07',
+      monthTo: '2026-07',
+      workScope: 'medium_large',
+      engineer: '工程师甲',
+      orderType: 'relocation',
+    });
+    expect(combined.monthlyServiceOrders).toEqual([
+      { month: '2026-07', orderType: 'relocation', count: 1 },
+    ]);
+  });
+
+  it('区域与项目分类标签筛选排除无项目关联独立开单（含中大型独立开单）', () => {
+    const { facts, service } = setup();
+    facts.projects = [
+      makeProject({ id: 'p1', region: 'East' }),
+      makeProject({ id: 'p2', region: 'South' }),
+    ];
+    facts.serviceOrders = [
+      makeOrder({ id: 'p-east', projectId: 'p1', serviceOrderNo: 'PE-1', workScope: 'other' }),
+      makeOrder({ id: 'p-south', projectId: 'p2', serviceOrderNo: 'PS-1', workScope: 'other' }),
+      makeOrder({ id: 'ind-other', projectId: null, serviceOrderNo: 'INDO-1', workScope: 'other' }),
+      makeOrder({ id: 'ml-ind', projectId: null, serviceOrderNo: 'ML-1', workScope: 'medium_large' }),
+    ];
+    Object.assign(facts, {
+      listProjectTagAssignments: () => [{ projectId: 'p1', tagId: 'tag-a' }],
+      listProjectTagIds: () => ['tag-a', 'tag-b'],
+    });
+
+    // 区域筛选：排除无项目的独立开单（无论 other 还是 medium_large）
+    const eastReport = service.buildReport({ ...JULY, region: 'East' });
+    expect(eastReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+    const eastDetails = service.getMetricDetails('monthly_service_order_count', { ...JULY, region: 'East' }) as Array<{ serviceOrderNo: string | null }>;
+    expect(eastDetails.map((d) => d.serviceOrderNo)).toEqual(['PE-1']);
+
+    // 项目分类标签筛选：排除无项目的独立开单
+    const tagReport = service.buildReport({ ...JULY, tagIds: ['tag-a'] });
+    expect(tagReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+    const tagDetails = service.getMetricDetails('monthly_service_order_count', { ...JULY, tagIds: ['tag-a'] }) as Array<{ serviceOrderNo: string | null }>;
+    expect(tagDetails.map((d) => d.serviceOrderNo)).toEqual(['PE-1']);
+  });
+
+  it('工作范围筛选仅约束开单量指标，不影响其他业务指标', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1', region: 'East', entryAt: '2026-07-01' })];
+    facts.contracts = [makeContract({ projectId: 'p1', entryAmountSnapshotCents: 500000n })];
+    facts.invoices = [makeInvoice({ id: 'inv-1', projectId: 'p1', amountCents: 200000n, invoicedAt: '2026-07-10' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', serviceOrderNo: 'ORD-001', workScope: 'other' }),
+      makeOrder({ id: 'ml-1', serviceOrderNo: 'ML-001', projectId: null, workScope: 'medium_large' }),
+    ];
+
+    const report = service.buildReport({ ...JULY, workScope: 'medium_large' });
+    // 开单量按 medium_large 过滤
+    expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+    // 进单金额、掉票金额等不受 workScope 影响
+    expect(report.entryAmountByRegion).toHaveLength(1);
+    expect(report.monthlyInvoices).toHaveLength(1);
+    expect(report.filters.workScope).toBe('medium_large');
+  });
+
+  it('未知工作范围筛选抛出 ValidationError', () => {
+    const { service } = setup();
+    expect(() =>
+      service.buildReport({ ...JULY, workScope: 'invalid_scope' as any }),
+    ).toThrow(/未知工作范围/);
+  });
+
+  it('下钻明细携带客户单位与工作范围，且筛选口径与汇总严格一致', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1', region: 'East' })];
+    facts.serviceOrders = [
+      makeOrder({ id: 'o1', serviceOrderNo: 'ORD-001', customerName: '客户单位A', engineer: '工程师甲', workScope: 'other', projectId: 'p1' }),
+      makeOrder({ id: 'ml-1', serviceOrderNo: 'ML-001', customerName: '客户单位B', engineer: '工程师乙', workScope: 'medium_large', projectId: null }),
+    ];
+
+    const allDetails = service.getMetricDetails('monthly_service_order_count', JULY) as Array<{
+      customerName: string;
+      workScope: ServiceOrderWorkScope;
+      serviceOrderNo: string | null;
+      region: string | null;
+    }>;
+    expect(allDetails).toHaveLength(2);
+    expect(allDetails.find((d) => d.serviceOrderNo === 'ORD-001')).toMatchObject({
+      customerName: '客户单位A',
+      workScope: 'other',
+      region: 'East',
+    });
+    expect(allDetails.find((d) => d.serviceOrderNo === 'ML-001')).toMatchObject({
+      customerName: '客户单位B',
+      workScope: 'medium_large',
+      region: null,
+    });
+
+    const mlDetails = service.getMetricDetails('monthly_service_order_count', { ...JULY, workScope: 'medium_large' }) as Array<{
+      customerName: string;
+      workScope: ServiceOrderWorkScope;
+    }>;
+    expect(mlDetails).toHaveLength(1);
+    expect(mlDetails[0]).toMatchObject({
+      customerName: '客户单位B',
+      workScope: 'medium_large',
+    });
   });
 });
 

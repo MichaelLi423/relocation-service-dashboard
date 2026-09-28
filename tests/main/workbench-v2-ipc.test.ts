@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { readBusinessRevision } from '../../src/domain/capabilities/local-data-persistence/identity';
 import { SqliteAccountRepository } from '../../src/domain/capabilities/local-data-persistence/repositories';
+import { SystemClock } from '../../src/domain/core/time';
 import { LocalAccountService } from '../../src/domain/capabilities/workbench-access';
 import {
   IPC_CHANNELS,
@@ -720,5 +721,202 @@ describe('IPC：固定每页 20 与完整提醒/泳道读取（tasks 7.3/7.5/7.6
     expect(nextCol.projects.map((p) => p.projectId)).toEqual(
       Array.from({ length: 10 }, (_, i) => `lane-${String(i + 10).padStart(2, '0')}`),
     );
+  });
+});
+
+describe('IPC：中大型项目开单独立提交与非法关联（task 2.2）', () => {
+  async function loggedIn() {
+    const dir = makeTempDir('ipc-ml-order-');
+    dirs.push(dir);
+    const ctx = makeContext(dir);
+    registerIpcHandlers(ctx.bus, ctx.deps);
+    await establishSession(ctx);
+    return ctx;
+  }
+
+  it('submit_action 经 IPC：中大型开单独立提交（无 projectId）成功，省略日期默认业务当天，显式日期保持', async () => {
+    const ctx = await loggedIn();
+    const bus = ctx.bus;
+    const today = new SystemClock().today();
+
+    // 1. 独立中大型开单提交：成功路径无任何 projectId，省略 orderedAt 默认业务当天
+    const result = (await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'relocation',
+          serviceOrderNo: 'ML-IPC-001',
+          customerName: '中大型客户IPC',
+          engineer: '工程师甲',
+        },
+      },
+    } as WorkbenchV2MutationRequest)) as { changed: { projectId?: string } };
+    expect(result.changed?.projectId).toBeUndefined();
+
+    // 数据库校验：project_id 为 null，work_scope 为 medium_large，ordered_at 为业务当天
+    const row = ctx.db().prepare('SELECT * FROM service_orders WHERE service_order_no = ?').get('ML-IPC-001') as Record<string, unknown>;
+    expect(row).toBeDefined();
+    expect(row.project_id).toBeNull();
+    expect(row.work_scope).toBe('medium_large');
+    expect(row.customer_name).toBe('中大型客户IPC');
+    expect(row.ordered_at).toBe(today);
+
+    // 历史分页查询：返回该中大型开单，workScope 为 medium_large，客户名为中大型客户IPC，businessDate 为业务当天
+    const history = (await bus.invoke(IPC_CHANNELS.workbenchV2HistoryPage, 100, {
+      kind: 'service_order',
+    })) as { rows: Array<{ serviceOrderNo: string | null; workScope: string; customerName: string; projectId: string | null; businessDate: string }> };
+    const histRow = history.rows.find((r) => r.serviceOrderNo === 'ML-IPC-001');
+    expect(histRow).toBeDefined();
+    expect(histRow!.workScope).toBe('medium_large');
+    expect(histRow!.customerName).toBe('中大型客户IPC');
+    expect(histRow!.projectId).toBeNull();
+    expect(histRow!.businessDate).toBe(today);
+
+    // 2. 显式提供日期保持
+    await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'certification',
+          serviceOrderNo: 'ML-IPC-002',
+          customerName: '显式日期客户',
+          orderedAt: '2026-08-15',
+        },
+      },
+    } as WorkbenchV2MutationRequest);
+    const row2 = ctx.db().prepare('SELECT ordered_at FROM service_orders WHERE service_order_no = ?').get('ML-IPC-002') as { ordered_at: string };
+    expect(row2.ordered_at).toBe('2026-08-15');
+  });
+
+  it('submit_action 经 IPC：顶层请求携带 projectId、action 携带 projectId 或缺少客户单位被拒绝且失败零写入', async () => {
+    const ctx = await loggedIn();
+    const bus = ctx.bus;
+
+    // 先创建一个真实项目供测试注入关联
+    const created = (await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'create_project',
+      payload: {
+        intent: 'formal',
+        customerName: '项目客户IPC',
+        ecc: 'ECC-IPC-ORD',
+        region: 'East',
+        instrumentCount: 1,
+        contractAmount: '1000',
+      },
+    } as WorkbenchV2MutationRequest)) as { changed: { projectId: string } };
+    const projectId = created.changed.projectId;
+
+    const countBefore = (ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+
+    // 1. 顶层请求携带 projectId 配合 medium_large：不静默丢弃，领域服务拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        projectId,
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'FAIL-IPC-TOP',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'LARGE_PROJECT_ORDER_NO_PROJECT' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 2. action 显式塞入 projectId 配合 medium_large：领域服务拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          projectId,
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'FAIL-IPC-ACT',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'LARGE_PROJECT_ORDER_NO_PROJECT' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 3. medium_large 缺少客户单位：IPC 拒绝
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'FAIL-IPC-NAME',
+            customerName: '',
+            orderedAt: '2026-08-11',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'CUSTOMER_NAME_REQUIRED' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 4. 显式空字符串 workScope: ''：由领域校验拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: '',
+            orderType: 'pm',
+            serviceOrderNo: 'FAIL-IPC-EMPTY-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'ILLEGAL_WORK_SCOPE' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 5. 显式 null workScope: null：由领域校验拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: null,
+            orderType: 'pm',
+            serviceOrderNo: 'FAIL-IPC-NULL-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'ILLEGAL_WORK_SCOPE' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 6. 显式非法字符串 workScope: 'illegal'：由领域校验拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'illegal_scope',
+            orderType: 'pm',
+            serviceOrderNo: 'FAIL-IPC-VAL-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'ILLEGAL_WORK_SCOPE' });
+    expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
   });
 });

@@ -44,6 +44,7 @@ import {
   pngBarLabel,
   pngBarHeight,
   type ReportModel,
+  type ServiceOrderWorkScope,
 } from '../../src/domain/capabilities/operational-reporting';
 import { ProjectService } from '../../src/domain/capabilities/relocation-project-lifecycle/project-service';
 import { CustomerService } from '../../src/domain/capabilities/relocation-project-lifecycle/customer-service';
@@ -484,7 +485,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       expect(pngText).toBeDefined();
       const meta = JSON.parse(pngText);
       expect(meta.range).toEqual({ from: '2026-07', to: '2026-07' });
-      expect(meta.filters).toEqual({ region: 'East', orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [] });
+      expect(meta.filters).toEqual({ region: 'East', orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null });
       const invoiceSection = meta.sections.find((s: { key: string }) => s.key === 'monthly_invoice');
       expect(invoiceSection.rows).toContainEqual(['2026-07', '5000.00', '1']);
 
@@ -655,7 +656,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       const png = ctx.exporter.exportPng(model);
       const pngText = extractPngTextChunk(png, 'Report');
       const meta = JSON.parse(pngText);
-      expect(meta.filters).toEqual({ region: null, orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [] });
+      expect(meta.filters).toEqual({ region: null, orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null });
       const shipToSection = meta.sections.find((s: { key: string }) => s.key === 'ship_to_request_workload');
       expect(shipToSection.header).toEqual(['月份', '责任人', '首次提交数']);
       expect(shipToSection.rows).toContainEqual(['2026-07', '负责人甲', '1']);
@@ -700,6 +701,221 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       cleanupTempDir(dir);
     }
   });
+
+  it('开单工作范围筛选、历史默认口径与下钻/导出一致性（tasks 3.1/3.2 真实落库闭环）', async () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const pEast = seedEnteredProject(ctx, { region: 'East', entryAt: '2026-07-01', snapshot: '10000' });
+      ctx.db.prepare('INSERT INTO project_tag_assignments (project_id, tag_id) VALUES (?, ?)')
+        .run(pEast, 'project-tag-project-type-relocation');
+
+      // 1. 存量项目内开单（其他/既有，关联 East 项目，默认 workScope: other）
+      ctx.orderService.recordOrder(
+        { orderType: 'relocation', serviceOrderNo: 'ORD-EAST-1', orderedAt: '2026-07-10', engineer: '工程师甲', customerName: '华东客户', projectId: pEast },
+        ACTOR,
+      );
+      // 2. 存量无项目独立开单（其他/既有，无项目）
+      ctx.orderService.recordOrder(
+        { orderType: 'pm', serviceOrderNo: 'ORD-IND-1', orderedAt: '2026-07-11', engineer: '工程师乙', customerName: '独立客户', projectId: null },
+        ACTOR,
+      );
+
+      // 3. 中大型独立搬迁开单（通过真实 ctx.orderService.recordOrder 落库，无需伪造 Reader）
+      ctx.orderService.recordOrder(
+        {
+          orderType: 'relocation',
+          workScope: 'medium_large',
+          serviceOrderNo: 'ML-ORD-1',
+          orderedAt: '2026-07-12',
+          engineer: '工程师甲',
+          customerName: '中大型客户',
+          projectId: null,
+        },
+        ACTOR,
+      );
+
+      // 4. 中大型独立认证开单（真实落库）
+      const mlCertification = ctx.orderService.recordOrder(
+        {
+          orderType: 'certification',
+          workScope: 'medium_large',
+          serviceOrderNo: 'ML-ORD-2',
+          orderedAt: '2026-07-13',
+          engineer: '工程师丙',
+          customerName: '中大型认证单位',
+          projectId: null,
+        },
+        ACTOR,
+      );
+
+      // 直接使用基于真实 SqliteReportingFactReader 的 ctx.reporting
+      const reporting = ctx.reporting;
+      const month = { monthFrom: '2026-07', monthTo: '2026-07' };
+
+      // 1. 全量与范围总量断言：
+      // 未指定 workScope：汇总全部（存量 2 + 中大型 2 = 4）
+      const allReport = reporting.buildReport(month);
+      expect(allReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(4);
+
+      // workScope='other'：仅统计其他/既有（2 笔存量记录默认 other）
+      const otherReport = reporting.buildReport({ ...month, workScope: 'other' });
+      expect(otherReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(2);
+
+      // workScope='medium_large'：仅统计中大型（2 笔：1 relocation, 1 certification）
+      const mlReport = reporting.buildReport({ ...month, workScope: 'medium_large' });
+      expect(mlReport.monthlyServiceOrders).toEqual([
+        { month: '2026-07', orderType: 'certification', count: 1 },
+        { month: '2026-07', orderType: 'relocation', count: 1 },
+      ]);
+
+      // 2. 组合筛选：medium_large + 工程师甲
+      const mlEngineerReport = reporting.buildReport({ ...month, workScope: 'medium_large', engineer: '工程师甲' });
+      expect(mlEngineerReport.monthlyServiceOrders).toEqual([
+        { month: '2026-07', orderType: 'relocation', count: 1 },
+      ]);
+      const mlEngineerMismatch = reporting.buildReport({ ...month, workScope: 'medium_large', engineer: '工程师乙' });
+      expect(mlEngineerMismatch.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(0);
+
+      // 3. region / tag + scope 组合断言：
+      // 区域筛选：排除无项目独立记录（存量无项目与中大型均排除，仅剩关联 East 的 ORD-EAST-1）
+      const eastReport = reporting.buildReport({ ...month, region: 'East' });
+      expect(eastReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+
+      // 区域筛选 + medium_large 组合：中大型均为无项目，与区域筛选交集为空
+      const eastMlReport = reporting.buildReport({ ...month, region: 'East', workScope: 'medium_large' });
+      expect(eastMlReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(0);
+
+      // 区域筛选 + other 组合：仅剩关联 East 的 1 笔
+      const eastOtherReport = reporting.buildReport({ ...month, region: 'East', workScope: 'other' });
+      expect(eastOtherReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+
+      // 标签筛选：无项目独立记录（含中大型）均排除，仅命中打标项目的 ORD-EAST-1
+      const tagReport = reporting.buildReport({ ...month, tagIds: ['project-tag-project-type-relocation'] });
+      expect(tagReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+
+      // 标签筛选 + medium_large 组合：交集为空
+      const tagMlReport = reporting.buildReport({
+        ...month,
+        tagIds: ['project-tag-project-type-relocation'],
+        workScope: 'medium_large',
+      });
+      expect(tagMlReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(0);
+
+      // 标签筛选 + other 组合：仅命中打标项目的 ORD-EAST-1
+      const tagOtherReport = reporting.buildReport({
+        ...month,
+        tagIds: ['project-tag-project-type-relocation'],
+        workScope: 'other',
+      });
+      expect(tagOtherReport.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(1);
+
+      // 4. 下钻明细：包含客户单位与工作范围
+      const allDetails = reporting.getMetricDetails('monthly_service_order_count', month) as Array<{
+        customerName: string;
+        workScope: ServiceOrderWorkScope;
+        serviceOrderNo: string | null;
+        region: string | null;
+      }>;
+      expect(allDetails).toHaveLength(4);
+      expect(allDetails.find((d) => d.serviceOrderNo === 'ORD-EAST-1')).toMatchObject({
+        customerName: '华东客户',
+        workScope: 'other',
+        region: 'East',
+      });
+      expect(allDetails.find((d) => d.serviceOrderNo === 'ORD-IND-1')).toMatchObject({
+        customerName: '独立客户',
+        workScope: 'other',
+        region: null,
+      });
+      expect(allDetails.find((d) => d.serviceOrderNo === 'ML-ORD-1')).toMatchObject({
+        customerName: '中大型客户',
+        workScope: 'medium_large',
+        region: null,
+      });
+      expect(allDetails.find((d) => d.serviceOrderNo === 'ML-ORD-2')).toMatchObject({
+        customerName: '中大型认证单位',
+        workScope: 'medium_large',
+        region: null,
+      });
+
+      // medium_large 下钻明细：仅 2 笔中大型
+      const mlDetails = reporting.getMetricDetails('monthly_service_order_count', { ...month, workScope: 'medium_large' }) as Array<{
+        customerName: string;
+        workScope: ServiceOrderWorkScope;
+        serviceOrderNo: string | null;
+      }>;
+      expect(mlDetails).toHaveLength(2);
+      expect(mlDetails.every((d) => d.workScope === 'medium_large')).toBe(true);
+
+      // 5. 导出三种格式：Excel / PDF / PNG 汇总跟随筛选且不新增逐条明细
+      // 5.1 Excel
+      const mlExcel = await ctx.exporter.exportExcel(mlReport);
+      expect(mlExcel.subarray(0, 4).toString('latin1')).toBe('PK\u0003\u0004');
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(mlExcel as unknown as Parameters<typeof wb.xlsx.load>[0]);
+      const ws = wb.worksheets[0];
+      const excelValues: string[] = [];
+      for (const row of ws.getSheetValues()) {
+        if (!row) continue;
+        for (const val of Object.values(row as object)) {
+          if (val !== undefined && val !== null) excelValues.push(String(val));
+        }
+      }
+      expect(excelValues.some((v) => v.includes('WorkScope: medium_large'))).toBe(true);
+      expect(excelValues.some((v) => v.includes('月度开单量（唯一服务单号，四类业务分组）'))).toBe(true);
+      // 确认未新增逐条明细导出
+      expect(excelValues.some((v) => v === '华东客户')).toBe(false);
+
+      // 5.2 PDF
+      const mlPdf = await ctx.exporter.exportPdf(mlReport);
+      expect(mlPdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+      const loadedPdf = await import('pdf-lib').then((m) => m.PDFDocument.load(mlPdf));
+      const pdfMeta = loadedPdf.getSubject() ?? '';
+      expect(pdfMeta).toContain('"workScope":"medium_large"');
+      expect(pdfMeta).toContain('monthly_service_order_count');
+
+      // 5.3 PNG
+      const mlPng = ctx.exporter.exportPng(mlReport);
+      expect(mlPng.subarray(0, 8).toString('latin1')).toBe('\u0089PNG\r\n\u001a\n');
+      const pngMeta = JSON.parse(extractPngTextChunk(mlPng, 'Report'));
+      expect(pngMeta.filters.workScope).toBe('medium_large');
+      const orderSection = pngMeta.sections.find((s: { key: string }) => s.key === 'monthly_service_order_count');
+      expect(orderSection.rows).toEqual([
+        ['2026-07', 'certification', '1'],
+        ['2026-07', 'relocation', '1'],
+      ]);
+
+      // 区域筛选导出：验证无项目独立记录排除在导出中一致生效
+      const eastPng = ctx.exporter.exportPng(eastReport);
+      const eastPngMeta = JSON.parse(extractPngTextChunk(eastPng, 'Report'));
+      const eastOrderSection = eastPngMeta.sections.find((s: { key: string }) => s.key === 'monthly_service_order_count');
+      expect(eastOrderSection.rows).toEqual([['2026-07', 'relocation', '1']]);
+
+      // 6. 删除后统计更新断言：
+      // 删除中大型开单 ML-ORD-2
+      ctx.orderService.delete(mlCertification.id);
+
+      // 重查全量报告：总量从 4 降至 3
+      const afterDeleteAll = reporting.buildReport(month);
+      expect(afterDeleteAll.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(3);
+
+      // 重查 medium_large 报告：从 2 降至 1（仅剩 relocation）
+      const afterDeleteMl = reporting.buildReport({ ...month, workScope: 'medium_large' });
+      expect(afterDeleteMl.monthlyServiceOrders).toEqual([
+        { month: '2026-07', orderType: 'relocation', count: 1 },
+      ]);
+
+      // 重查下钻明细：已删除的 ML-ORD-2 不再存在
+      const afterDeleteDetails = reporting.getMetricDetails('monthly_service_order_count', month);
+      expect(afterDeleteDetails).toHaveLength(3);
+      expect(afterDeleteDetails.some((d: any) => d.serviceOrderNo === 'ML-ORD-2')).toBe(false);
+
+      closeDatabase(ctx.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
 });
 
 describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例精确（BigInt 定点）', () => {
@@ -707,7 +923,7 @@ describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例
   function invoiceOnlyReport(amounts: bigint[]): ReportModel {
     return {
       range: { from: '2026-07', to: '2026-07' },
-      filters: { region: null, orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [] },
+      filters: { region: null, orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null },
       generatedAt: '2026-07-31T00:00:00+08:00',
       pipeline: [],
       entryAmountByRegion: [],

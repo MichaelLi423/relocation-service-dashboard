@@ -1104,6 +1104,7 @@ export class WorkbenchReadRepository {
           serviceOrderNo: nullString(r.service_order_no),
           orderedAt: String(r.ordered_at),
           engineer: nullString(r.engineer),
+          workScope: (r.work_scope === 'medium_large' ? 'medium_large' : 'other') as 'other' | 'medium_large',
           businessDate: String(r.ordered_at),
           createdAt: String(r.created_at),
         };
@@ -1783,7 +1784,7 @@ const HISTORY_SPECS: Record<WorkbenchV2HistoryKind, HistorySpec> = {
     fromSql:
       'FROM service_orders o LEFT JOIN projects p ON p.id = o.project_id LEFT JOIN customers cu ON cu.id = p.customer_id LEFT JOIN contracts c ON c.project_id = p.id',
     selectSql:
-      "o.id, o.project_id, o.order_type, o.service_order_no, o.ordered_at, o.engineer, o.created_at, CASE WHEN o.project_id IS NULL THEN o.customer_name ELSE cu.name END AS customer_name, c.ecc, p.temp_no",
+      "o.id, o.project_id, o.order_type, o.service_order_no, o.ordered_at, o.engineer, o.created_at, CASE WHEN o.project_id IS NULL THEN o.customer_name ELSE cu.name END AS customer_name, c.ecc, p.temp_no, o.work_scope",
     idExpr: 'o.id',
     dateExpr: 'o.ordered_at',
   },

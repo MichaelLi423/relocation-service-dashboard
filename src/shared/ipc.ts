@@ -1085,6 +1085,7 @@ export type WorkbenchV2HistoryRow =
       orderedAt: string;
       /** 参与工程师（可空，允许后续补录）。 */
       engineer: string | null;
+      workScope: 'other' | 'medium_large';
       businessDate: string;
       createdAt: string;
     }
@@ -1858,6 +1859,8 @@ export interface ReportFilterDto {
   orderType?: 'relocation' | 'certification' | 'parts_by_mail' | 'pm' | null;
   transportCompany?: string | null;
   engineer?: string | null;
+  /** 开单工作范围（other = 其他/既有，medium_large = 中大型；null = 全部；仅开单量指标生效）。 */
+  workScope?: 'other' | 'medium_large' | null;
   /** 可选项目分类标签多选：undefined 或空数组不限制；非空按任一标签（OR）匹配。 */
   tagIds?: readonly string[];
 }

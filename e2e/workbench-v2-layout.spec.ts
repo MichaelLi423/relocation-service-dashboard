@@ -152,6 +152,204 @@ test('最新布局：主导航直接显示标签库并打开现有标签库', as
   }
 });
 
+test('最新布局：顶部主导航二维码申请后紧邻呈现中大型项目开单独立入口', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rw-v2-large-order-entry-'));
+  const userData = join(root, 'user-data');
+  let app: ElectronApplication | null = null;
+  try {
+    app = await electron.launch({ executablePath: executable, env: { ...process.env, WORKBENCH_E2E_USER_DATA_DIR: userData } });
+    const page = await app.firstWindow();
+    await initialize(page);
+
+    const nav = page.getByRole('navigation', { name: '主导航' });
+    const buttons = nav.getByRole('button');
+    const texts = await buttons.allTextContents();
+    const qrIndex = texts.findIndex((t) => t.includes('二维码申请'));
+    const largeIndex = texts.findIndex((t) => t.includes('中大型项目开单'));
+    expect(qrIndex).toBeGreaterThan(-1);
+    expect(largeIndex).toBe(qrIndex + 1);
+
+    const largeOrderBtn = nav.getByRole('button', { name: '中大型项目开单', exact: true });
+    await expect(largeOrderBtn).toBeVisible();
+    await largeOrderBtn.click();
+
+    const dialog = page.getByRole('dialog', { name: '中大型项目开单' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel(/客户单位/)).toBeVisible();
+    await expect(dialog.getByLabel(/开单类型/)).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  } finally {
+    await app?.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('中大型项目开单端到端验收：四类独立保存、preload 历史范围、项目队列与阶段数保持及报表下钻一致', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'rw-v2-large-orders-flow-'));
+  const userData = join(root, 'user-data');
+  let app: ElectronApplication | null = null;
+  try {
+    app = await electron.launch({ executablePath: executable, env: { ...process.env, WORKBENCH_E2E_USER_DATA_DIR: userData } });
+    const page = await app.firstWindow();
+    await initialize(page);
+
+    // 1. 先新建一个基准搬迁项目，用于对比队列行数与项目阶段
+    await page.getByRole('button', { name: '新建搬迁项目' }).click();
+    const create = page.getByRole('dialog', { name: '新建搬迁项目' });
+    await create.getByRole('radio', { name: /保存为待进单/ }).check();
+    await create.getByLabel(/客户名称/).fill('基准搬迁对比客户');
+    await create.getByLabel(/区域/).selectOption('East');
+    await create.getByRole('button', { name: '保存为待进单' }).click();
+    await expect(create).toBeHidden();
+
+    const queueRegion = page.getByRole('region', { name: /^项目队列(?: \d+)?$/ });
+    await expect(queueRegion).toBeVisible();
+    await expect(queueRegion.getByText('基准搬迁对比客户')).toBeVisible();
+
+    // 记录保存中大型开单前通过 preload 获取的基准项目指标、阶段计数与队列行数
+    const beforeState = await page.evaluate(async () => {
+      const api = (window as unknown as {
+        workbench: {
+          v2Overview: () => Promise<{ metrics: { totalProjects: number }; stages: Array<{ status: string; count: number }> }>;
+          v2ProjectPage: (req: unknown) => Promise<{ total: number; projects: Array<{ id: string; customerName: string }> }>;
+        };
+      }).workbench;
+      const [overview, pageDto] = await Promise.all([
+        api.v2Overview(),
+        api.v2ProjectPage({ cursor: null, limit: 20 }),
+      ]);
+      return {
+        totalProjects: overview.metrics.totalProjects,
+        stages: overview.stages,
+        queueTotal: pageDto.total,
+        projectIds: pageDto.projects.map((p) => p.id),
+      };
+    });
+    expect(beforeState.totalProjects, '新建基准项目后项目总数应为 1').toBe(1);
+    expect(beforeState.queueTotal, '队列项目总数应为 1').toBe(1);
+    const beforeQueueRowCount = await queueRegion.getByRole('row').count();
+
+    // 2. 依次以独立表单保存搬迁、认证、单寄备件、PM 四类中大型开单
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const currentDate = `${currentMonth}-${String(now.getDate()).padStart(2, '0')}`;
+    const seed = Date.now();
+
+    const orders = [
+      { type: 'relocation', label: '搬迁', orderNo: `SO-E2E-RL-${seed}`, customer: `中大型搬迁客户-${seed}`, engineer: '工程师甲' },
+      { type: 'certification', label: '认证', orderNo: `SO-E2E-CT-${seed}`, customer: `中大型认证客户-${seed}`, engineer: '' },
+      { type: 'parts_by_mail', label: '单寄备件', orderNo: `SO-E2E-PT-${seed}`, customer: `中大型备件客户-${seed}`, engineer: '工程师乙' },
+      { type: 'pm', label: 'PM', orderNo: `SO-E2E-PM-${seed}`, customer: `中大型维保客户-${seed}`, engineer: '' },
+    ] as const;
+
+    const nav = page.getByRole('navigation', { name: '主导航' });
+    const largeOrderBtn = nav.getByRole('button', { name: '中大型项目开单', exact: true });
+
+    for (const item of orders) {
+      await largeOrderBtn.click();
+      const dialog = page.getByRole('dialog', { name: '中大型项目开单' });
+      await expect(dialog).toBeVisible();
+
+      await dialog.getByLabel(/开单类型/).selectOption(item.type);
+      await dialog.getByLabel(/服务单号/).fill(item.orderNo);
+      await dialog.getByLabel(/开单日期/).fill(currentDate);
+      await dialog.getByLabel(/客户单位/).fill(item.customer);
+      if (item.engineer) {
+        await dialog.getByLabel(/工程师/).fill(item.engineer);
+      }
+
+      await dialog.getByRole('button', { name: '保存开单' }).click();
+      await expect(page.getByRole('status').filter({ hasText: '中大型项目开单已保存' })).toBeVisible();
+      await expect(dialog).toBeHidden();
+    }
+
+    // 3. 验证原项目队列与阶段数保持不变：搬迁项目总数仍为 1，四类中大型开单客户均不进项目队列，各阶段项目数不变
+    await expect(queueRegion.getByText('基准搬迁对比客户')).toBeVisible();
+    for (const item of orders) {
+      await expect(queueRegion.getByText(item.customer)).toHaveCount(0);
+    }
+    const afterQueueRowCount = await queueRegion.getByRole('row').count();
+    expect(afterQueueRowCount, '保存中大型开单后队列行数应与保存前一致').toBe(beforeQueueRowCount);
+
+    const afterState = await page.evaluate(async () => {
+      const api = (window as unknown as {
+        workbench: {
+          v2Overview: () => Promise<{ metrics: { totalProjects: number }; stages: Array<{ status: string; count: number }> }>;
+          v2ProjectPage: (req: unknown) => Promise<{ total: number; projects: Array<{ id: string; customerName: string }> }>;
+        };
+      }).workbench;
+      const [overview, pageDto] = await Promise.all([
+        api.v2Overview(),
+        api.v2ProjectPage({ cursor: null, limit: 20 }),
+      ]);
+      return {
+        totalProjects: overview.metrics.totalProjects,
+        stages: overview.stages,
+        queueTotal: pageDto.total,
+        projectIds: pageDto.projects.map((p) => p.id),
+      };
+    });
+
+    expect(afterState.totalProjects, '四类中大型开单保存后搬迁项目总数保持不变').toBe(beforeState.totalProjects);
+    expect(afterState.queueTotal, '四类中大型开单保存后队列总数保持不变').toBe(beforeState.queueTotal);
+    expect(afterState.projectIds, '项目列表 ID 应保持为原基准项目').toEqual(beforeState.projectIds);
+    expect(afterState.stages, '生命周期各阶段计数保持不变').toEqual(beforeState.stages);
+
+    // 4. 验证通过 preload 的 v2HistoryPage 能读到四笔中大型记录：workScope='medium_large'、projectId=null、customerName 对应填写值
+    const history = await page.evaluate(async () => {
+      const api = (window as unknown as {
+        workbench: {
+          v2HistoryPage: (req: unknown) => Promise<{
+            rows: Array<{
+              id: string;
+              projectId: string | null;
+              customerName: string;
+              serviceOrderNo: string;
+              workScope?: string;
+            }>;
+          }>;
+        };
+      }).workbench;
+      return await api.v2HistoryPage({ kind: 'service_order', from: null, to: null, cursor: null, limit: 50 });
+    });
+
+    for (const item of orders) {
+      const row = history.rows.find((r) => r.serviceOrderNo === item.orderNo);
+      expect(row, `preload 历史记录中应能检索到服务单 ${item.orderNo}`).toBeDefined();
+      expect(row!.projectId, '中大型开单 projectId 必须为 null').toBeNull();
+      expect(row!.customerName, '中大型开单客户名应为独立录入的客户单位').toBe(item.customer);
+      expect(row!.workScope, '中大型开单 workScope 必须为 medium_large').toBe('medium_large');
+    }
+
+    // 5. 验证报表界面中大型筛选与下钻明细一致性
+    await nav.getByRole('button', { name: '运营报表', exact: true }).click();
+    const reportDialog = page.getByRole('dialog', { name: '运营报表' });
+    await expect(reportDialog).toBeVisible();
+    await reportDialog.getByLabel(/起始月份/).fill(currentMonth);
+    await reportDialog.getByLabel(/截止月份/).fill(currentMonth);
+    await reportDialog.getByLabel(/工作范围/).selectOption('medium_large');
+    await reportDialog.getByRole('button', { name: '实时计算报表' }).click();
+
+    const orderSection = reportDialog.locator('.report-section').filter({ hasText: '月度开单' });
+    await expect(orderSection).toBeVisible();
+    await orderSection.getByRole('button', { name: '查看明细' }).click();
+
+    const detailsSection = reportDialog.locator('.report-details');
+    await expect(detailsSection).toBeVisible();
+    await expect(detailsSection.getByText(orders[0].customer)).toBeVisible();
+    await expect(detailsSection.getByText('工作范围')).toBeVisible();
+    await expect(detailsSection.getByText('中大型').first()).toBeVisible();
+
+    await reportDialog.getByRole('button', { name: '关闭' }).click();
+    await expect(reportDialog).toBeHidden();
+  } finally {
+    await app?.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 async function assertIndependentDrawer(
   page: Page,
   width: 720 | 820 | 1024 | 1090 | 1190,

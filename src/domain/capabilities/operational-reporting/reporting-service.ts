@@ -15,7 +15,7 @@ import type { ProjectStatusOrCancelled } from '../relocation-project-lifecycle';
 import type { OrderType } from '../service-order-recording';
 import type { PartCurrency, PartStatus } from '../damage-repair-tracking';
 import type { QrRequestTypeCode } from '../qr-request-tracking';
-import type { ReportFilter, ReportMetricKey } from './metrics';
+import type { ReportFilter, ReportMetricKey, ServiceOrderWorkScope } from './metrics';
 import type { ReportingFactReader } from './reporting-facts';
 
 /**
@@ -201,6 +201,7 @@ export interface ReportModel {
     engineer: string | null;
     operator: string | null;
     tagIds: readonly string[];
+    workScope: ServiceOrderWorkScope | null;
   };
   /** 报表生成时间（带偏移 ISO，注入时钟）。 */
   generatedAt: string;
@@ -223,7 +224,17 @@ export type MetricDetailRow =
   | ProjectPipelineRow
   | EntryAmountRow
   | { month: MonthKey; invoiceId: string; projectTempNo: string; invoicedAt: BusinessDate; amountCents: bigint; region: string }
-  | { month: MonthKey; orderId: string; orderType: OrderType; serviceOrderNo: string | null; orderedAt: BusinessDate; engineer: string | null; region: string | null }
+  | {
+      month: MonthKey;
+      orderId: string;
+      orderType: OrderType;
+      serviceOrderNo: string | null;
+      orderedAt: BusinessDate;
+      engineer: string | null;
+      customerName: string;
+      workScope: ServiceOrderWorkScope;
+      region: string | null;
+    }
   | DamageDetailRow
   | { month: MonthKey; feeId: string; batchId: string; projectTempNo: string; transportCompany: string | null; appliedAt: BusinessDate; budgetPriceCents: bigint; dealPriceCents: bigint; costCents: bigint; cancelled: boolean }
   | LogisticsRatioRow
@@ -267,6 +278,7 @@ export class ReportingService {
         engineer: f.engineer ?? null,
         operator: f.operator ?? null,
         tagIds: f.tagIds,
+        workScope: f.workScope ?? null,
       },
       generatedAt: this.now(),
       pipeline: this.pipelineRows(all, f),
@@ -386,7 +398,11 @@ export class ReportingService {
       .filter((o) => this.inRange(toMonthKey(o.orderedAt), f))
       .filter((o) => f.orderType === null || o.orderType === f.orderType)
       .filter((o) => f.engineer === null || (o.engineer ?? '').includes(f.engineer))
-      .filter((o) => o.projectId === null ? !this.tagFiltering(f) : this.projectInScope(o.projectId, f))
+      .filter((o) => {
+        if (f.workScope === null) return true;
+        return o.workScope === f.workScope;
+      })
+      .filter((o) => (o.projectId === null ? !this.tagFiltering(f) : this.projectInScope(o.projectId, f)))
       .filter((o) => {
         if (f.region === null) return true;
         if (o.projectId === null) return false; // 区域筛选下无项目关联的开单不计
@@ -400,6 +416,8 @@ export class ReportingService {
         serviceOrderNo: o.serviceOrderNo,
         orderedAt: o.orderedAt,
         engineer: o.engineer,
+        customerName: o.customerName,
+        workScope: o.workScope,
         region: o.projectId === null ? null : this.regionKey(projectsById.get(o.projectId)!),
       }));
   }
@@ -744,6 +762,14 @@ export class ReportingService {
         '月份区间起始不得晚于截止',
       );
     }
+    if (
+      filter.workScope !== undefined &&
+      filter.workScope !== null &&
+      filter.workScope !== 'other' &&
+      filter.workScope !== 'medium_large'
+    ) {
+      throw new ValidationError('INVALID_WORK_SCOPE', `未知工作范围筛选: ${String(filter.workScope)}`);
+    }
   }
 
   private normalizeFilter(filter: ReportFilter): NormalizedFilter {
@@ -759,6 +785,7 @@ export class ReportingService {
       engineer: filter.engineer && filter.engineer.trim() !== '' ? filter.engineer.trim() : null,
       operator: filter.operator && filter.operator.trim() !== '' ? filter.operator.trim() : null,
       tagIds: [...new Set(filter.tagIds ?? [])],
+      workScope: filter.workScope ?? null,
       matchingProjectIds: null,
     };
   }
@@ -852,6 +879,8 @@ interface OrderAggDetail {
   serviceOrderNo: string | null;
   orderedAt: BusinessDate;
   engineer: string | null;
+  customerName: string;
+  workScope: ServiceOrderWorkScope;
   region: string | null;
 }
 
@@ -970,6 +999,7 @@ interface NormalizedFilter {
   engineer: string | null;
   operator: string | null;
   tagIds: readonly string[];
+  workScope: ServiceOrderWorkScope | null;
   matchingProjectIds: Set<string> | null;
 }
 

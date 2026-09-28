@@ -20,6 +20,7 @@ import { ExecutionService } from '../../src/domain/capabilities/relocation-execu
 import { ShipToService, type ShipToRepository } from '../../src/domain/capabilities/ship-to-management';
 import { QrRequestService, type QrRequestRepository } from '../../src/domain/capabilities/qr-request-tracking';
 import { LocalAccountService } from '../../src/domain/capabilities/workbench-access';
+import { SystemClock } from '../../src/domain/core/time';
 import { WorkbenchFacade } from '../../src/main/workbench-facade';
 import type {
   ProjectWizardPayload,
@@ -252,7 +253,8 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     expect(() => facade.submitShipToRequest(requestId)).toThrow(/不可再次提交/);
     expect(() => facade.v2Mutate({ op: 'ship_to_complete', requestId, accountId: 'ACC-901' })).toThrow(/仅处理中/);
     // 工作量：仅首次提交计一次（草稿与后续状态更新不重复计数）
-    const report = facade.reportDto({ monthFrom: '2026-08', monthTo: '2026-08' });
+    const currentMonth = new SystemClock().today().slice(0, 7);
+    const report = facade.reportDto({ monthFrom: currentMonth, monthTo: currentMonth });
     const workload = report.sections.find((s) => s.key === 'ship_to_request_workload')?.rows ?? [];
     expect(workload).toHaveLength(1);
     expect(workload[0]).toMatchObject({ count: 1 });
@@ -278,7 +280,8 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     });
     expect(facade.v2LookupPage({ kind: 'ship_to_requests' }).total).toBe(1);
     expect(shipToRows()[0].status).toBe('completed');
-    const report = facade.reportDto({ monthFrom: '2026-08', monthTo: '2026-08' });
+    const currentMonth = new SystemClock().today().slice(0, 7);
+    const report = facade.reportDto({ monthFrom: currentMonth, monthTo: currentMonth });
     const workload = report.sections.find((s) => s.key === 'ship_to_request_workload')?.rows ?? [];
     expect(workload).toHaveLength(1);
     expect(workload[0]).toMatchObject({ count: 1 });
@@ -906,5 +909,241 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     expect(() =>
       facade.v2Mutate({ op: 'batch_edit', payload: { batchId: 'no-such-batch', planTransportDate: '2026-08-12' } }),
     ).toThrow(/搬迁批次不存在/);
+  });
+
+  it('中大型项目独立开单（task 2.2）：独立请求无 projectId 成功保存，省略日期默认当天，显式日期保持，不影响项目队列', async () => {
+    const { facade, db } = await makeFacade();
+    const created = facade.v2Mutate({
+      op: 'create_project',
+      payload: wizard({ customerName: '项目客户甲', region: 'East', ecc: 'ECC-ML-TEST' }),
+    });
+    const selectedProjectId = projectIdOf(created);
+    const initialProjectCount = facade.v2Overview().metrics.totalProjects;
+    const today = new SystemClock().today();
+
+    // 1. 独立中大型开单：成功路径无任何 projectId，省略 orderedAt 默认当天
+    const result = facade.v2Mutate({
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'relocation',
+          serviceOrderNo: 'ML-FACADE-001',
+          customerName: '中大型单位A',
+          engineer: '工程师甲',
+        },
+      },
+    });
+    expect(result.changed?.projectId).toBeUndefined();
+
+    // 数据库中记录存在且 project_id IS NULL，work_scope = 'medium_large'，ordered_at 默认为业务当天
+    const row = db.prepare('SELECT * FROM service_orders WHERE service_order_no = ?').get('ML-FACADE-001') as Record<string, unknown>;
+    expect(row).toBeDefined();
+    expect(row.project_id).toBeNull();
+    expect(row.work_scope).toBe('medium_large');
+    expect(row.customer_name).toBe('中大型单位A');
+    expect(row.ordered_at).toBe(today);
+
+    // 不生成伪项目，项目队列/概览总数不变
+    expect(facade.v2Overview().metrics.totalProjects).toBe(initialProjectCount);
+
+    // 选中项目的 orders section 中不包含该独立开单
+    const section = facade.v2SectionPage({ projectId: selectedProjectId, kind: 'orders' });
+    expect(section.rows.some((r) => (r as { serviceOrderNo?: string | null }).serviceOrderNo === 'ML-FACADE-001')).toBe(false);
+
+    // 跨四类业务类型（认证、单寄备件、PM）独立提交并保留显式开单日期
+    for (const [type, no, date] of [
+      ['certification', 'ML-CERT-01', '2026-08-11'],
+      ['parts_by_mail', 'ML-PARTS-01', '2026-08-12'],
+      ['pm', 'ML-PM-01', '2026-08-13'],
+    ] as const) {
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'medium_large',
+            orderType: type,
+            serviceOrderNo: no,
+            customerName: '中大型单位通用',
+            orderedAt: date,
+          },
+        },
+      });
+      const r = db.prepare('SELECT work_scope, project_id, ordered_at FROM service_orders WHERE service_order_no = ?').get(no) as Record<string, unknown>;
+      expect(r.work_scope).toBe('medium_large');
+      expect(r.project_id).toBeNull();
+      expect(r.ordered_at).toBe(date);
+    }
+  });
+
+  it('项目内开单保留原有客户派生且 scope 默认 other，省略日期默认业务当天（task 2.2）', async () => {
+    const { facade, db } = await makeFacade();
+    const created = facade.v2Mutate({
+      op: 'create_project',
+      payload: wizard({ customerName: '项目派生客户', region: 'East', ecc: 'ECC-DERIVE-1' }),
+    });
+    const projectId = projectIdOf(created);
+    const today = new SystemClock().today();
+
+    facade.v2Mutate({
+      op: 'submit_action',
+      projectId,
+      action: {
+        type: 'order',
+        projectId,
+        values: {
+          orderType: 'relocation',
+          serviceOrderNo: 'ORD-PROJECT-001',
+        },
+      },
+    });
+
+    const row = db.prepare('SELECT * FROM service_orders WHERE service_order_no = ?').get('ORD-PROJECT-001') as Record<string, unknown>;
+    expect(row).toBeDefined();
+    expect(row.project_id).toBe(projectId);
+    expect(row.work_scope).toBe('other');
+    expect(row.customer_name).toBe('项目派生客户');
+    expect(row.ordered_at).toBe(today);
+    expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({
+      serviceOrderNo: 'ORD-PROJECT-001',
+      customerName: '项目派生客户',
+    });
+  });
+
+  it('越过界面提交非法关联（错误顶层id/错误action id）及失败零写入（task 2.2）', async () => {
+    const { facade, db } = await makeFacade();
+    const created = facade.v2Mutate({
+      op: 'create_project',
+      payload: wizard({ customerName: '合法项目客户', region: 'East', ecc: 'ECC-ILLEGAL-1' }),
+    });
+    const projectId = projectIdOf(created);
+    const countBefore = (db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+
+    // 1. medium_large 请求携带错误顶层 projectId：不静默丢弃，领域服务拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        projectId, // 顶层显式带有 projectId
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'ILLEGAL-TOP-01',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/中大型项目工作范围开单不得关联搬迁项目|LARGE_PROJECT_ORDER_NO_PROJECT/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 2. medium_large 请求携带错误 action.projectId：领域服务拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          projectId, // action 显式塞入 projectId
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'ILLEGAL-ACT-01',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/中大型项目工作范围开单不得关联搬迁项目|LARGE_PROJECT_ORDER_NO_PROJECT/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 3. medium_large 未填客户单位：报错且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'ILLEGAL-ML-02',
+            customerName: '   ',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/客户单位必填|CUSTOMER_NAME_REQUIRED/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 4. other 工作范围下的搬迁开单无 projectId：领域拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'other',
+            orderType: 'relocation',
+            serviceOrderNo: 'ILLEGAL-OTH-01',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/搬迁开单关联的搬迁项目/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 5. 显式空字符串 workScope: '' 由领域校验拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: '',
+            orderType: 'pm',
+            serviceOrderNo: 'ILLEGAL-EMPTY-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      }),
+    ).toThrow(/开单工作范围仅限|ILLEGAL_WORK_SCOPE/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 6. 显式 null workScope: null 由领域校验拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: null,
+            orderType: 'pm',
+            serviceOrderNo: 'ILLEGAL-NULL-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      }),
+    ).toThrow(/开单工作范围仅限|ILLEGAL_WORK_SCOPE/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
+
+    // 7. 显式非法范围 workScope: 'illegal_scope' 由领域校验拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        action: {
+          type: 'order',
+          values: {
+            workScope: 'illegal_scope',
+            orderType: 'pm',
+            serviceOrderNo: 'ILLEGAL-VAL-SCOPE',
+            customerName: '某客户',
+          },
+        },
+      }),
+    ).toThrow(/开单工作范围仅限|ILLEGAL_WORK_SCOPE/);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
   });
 });

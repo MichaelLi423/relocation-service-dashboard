@@ -8,13 +8,19 @@ import {
   type Clock,
 } from '../../core/time';
 import type { ProjectRepository } from '../relocation-project-lifecycle';
-import { ORDER_TYPES, type OrderType, type ServiceOrder } from './service-order';
+import {
+  ORDER_TYPES,
+  WORK_SCOPES,
+  type OrderType,
+  type ServiceOrder,
+  type ServiceOrderWorkScope,
+} from './service-order';
 import type { ServiceOrderRepository } from './service-order-repositories';
 
 /**
  * service-order-recording 领域服务（tasks 3.8~3.10）。
  *
- * - 3.8 四类开单：搬迁开单关联搬迁项目；认证/单寄备件/PM 开单可独立保存
+ * - 3.8 四类开单：搬迁开单关联搬迁项目（中大型项目工作范围除外）；认证/单寄备件/PM 开单可独立保存
  *   （无项目），亦可在项目上下文中归档关联当前项目——该关联仅为归档/查询
  *   关系，不进入搬迁项目生命周期；开单时间未填默认当前时间（TBD-22）。
  * - 3.9 非空服务单号全局唯一、四类共用唯一空间（TBD-21）；开单不改变项目
@@ -23,9 +29,11 @@ import type { ServiceOrderRepository } from './service-order-repositories';
  * 必须经本服务的独立 recordOrder 动作登记。
  */
 
-/** 手工登记开单输入（3.8/3.9；v20 起 engineer 可空后续补录）。 */
+/** 手工登记开单输入（3.8/3.9；v20 起 engineer 可空后续补录；v22 增加 workScope）。 */
 export interface ServiceOrderInput {
   orderType: OrderType;
+  /** 开单工作范围（other = 其他/既有，medium_large = 中大型；未显式指定默认 other）。 */
+  workScope?: ServiceOrderWorkScope;
   /** 非空服务单号全局唯一（四类共用唯一空间）。 */
   serviceOrderNo: string;
   /** 开单日期（未填默认当天，TBD-22）。 */
@@ -34,7 +42,7 @@ export interface ServiceOrderInput {
   engineer?: string | null;
   /** 客户单位（必填）。 */
   customerName: string;
-  /** 项目归档关联（内部 ID）：搬迁开单必填；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */
+  /** 项目归档关联（内部 ID）：非中大型搬迁开单必填；中大型四类必须无项目；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */
   projectId?: string | null;
   /** 备注可选。 */
   note?: string | null;
@@ -55,7 +63,8 @@ export class ServiceOrderService {
 
   /**
    * 手工登记开单记录。
-   * - 搬迁开单必须关联一个已存在的搬迁项目。
+   * - 搬迁开单必须关联一个已存在的搬迁项目（中大型项目工作范围除外）。
+   * - 中大型项目工作范围下的四类开单必须不关联任何项目（projectId 为 null）。
    * - 认证/单寄备件/PM 开单可独立保存；提供 projectId 时仅作归档/查询关联
    *   （验证项目存在），不进入搬迁项目生命周期。
    */
@@ -66,6 +75,13 @@ export class ServiceOrderService {
         `开单类型仅限 ${ORDER_TYPES.join('、')}`,
       );
     }
+    const workScope: ServiceOrderWorkScope = input.workScope ?? 'other';
+    if (!(WORK_SCOPES as readonly string[]).includes(workScope)) {
+      throw new ValidationError(
+        'ILLEGAL_WORK_SCOPE',
+        `开单工作范围仅限 ${WORK_SCOPES.join('、')}`,
+      );
+    }
     const orderNo = assertRequiredText(input.serviceOrderNo, '服务单号');
     const rawEngineer = input.engineer == null ? null : String(input.engineer).trim();
     const engineer = rawEngineer === '' ? null : rawEngineer;
@@ -73,17 +89,27 @@ export class ServiceOrderService {
     this.assertOrderNoUnique(orderNo);
 
     let projectId: string | null = null;
-    if (input.orderType === 'relocation') {
-      projectId = assertRequiredText(input.projectId ?? null, '搬迁开单关联的搬迁项目');
-      if (this.projects && !this.projects.findById(projectId)) {
-        throw new ValidationError('PROJECT_NOT_FOUND', `搬迁项目不存在: ${projectId}`);
+    if (workScope === 'medium_large') {
+      if (input.projectId != null && String(input.projectId).trim() !== '') {
+        throw new ValidationError(
+          'LARGE_PROJECT_ORDER_NO_PROJECT',
+          '中大型项目工作范围开单不得关联搬迁项目',
+        );
       }
-    } else if (input.projectId) {
-      // 认证/单寄备件/PM：可选项目归档关联（仅归档/查询关系，不进入搬迁生命周期）。
-      // 提供时验证项目存在；未提供（缺省/空）保持独立保存。
-      projectId = input.projectId;
-      if (this.projects && !this.projects.findById(projectId)) {
-        throw new ValidationError('PROJECT_NOT_FOUND', `项目不存在: ${projectId}`);
+      projectId = null;
+    } else {
+      if (input.orderType === 'relocation') {
+        projectId = assertRequiredText(input.projectId ?? null, '搬迁开单关联的搬迁项目');
+        if (this.projects && !this.projects.findById(projectId)) {
+          throw new ValidationError('PROJECT_NOT_FOUND', `搬迁项目不存在: ${projectId}`);
+        }
+      } else if (input.projectId) {
+        // 认证/单寄备件/PM：可选项目归档关联（仅归档/查询关系，不进入搬迁生命周期）。
+        // 提供时验证项目存在；未提供（缺省/空）保持独立保存。
+        projectId = input.projectId;
+        if (this.projects && !this.projects.findById(projectId)) {
+          throw new ValidationError('PROJECT_NOT_FOUND', `项目不存在: ${projectId}`);
+        }
       }
     }
 
@@ -93,6 +119,7 @@ export class ServiceOrderService {
     const order: ServiceOrder = {
       id: newInternalId(),
       orderType: input.orderType,
+      workScope,
       serviceOrderNo: orderNo,
       orderedAt,
       engineer,

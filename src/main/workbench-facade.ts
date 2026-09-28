@@ -5,7 +5,7 @@ import { ValidationError } from '../domain/core/errors';
 import { SystemClock, assertValidBusinessDate } from '../domain/core/time';
 import { CustomerService, ProjectService, isFormallyEntered, isTerminal, type ProjectStatusOrCancelled } from '../domain/capabilities/relocation-project-lifecycle';
 import { ExecutionService, type BatchQuoteInput, type LogisticsFeeInput, type WorkType } from '../domain/capabilities/relocation-execution';
-import { ServiceOrderService } from '../domain/capabilities/service-order-recording';
+import { ServiceOrderService, type ServiceOrderWorkScope } from '../domain/capabilities/service-order-recording';
 import { ReminderService } from '../domain/capabilities/workbench-todos';
 import { ShipToService } from '../domain/capabilities/ship-to-management';
 import { DamageRepairService, type DamageItemStatus, type PartCurrency, type PartStatus } from '../domain/capabilities/damage-repair-tracking';
@@ -1183,19 +1183,50 @@ export class WorkbenchFacade {
           // section；非 relocation 的项目关联仅为归档/查询关系，不进入搬迁
           // 生命周期。无项目上下文时（projectId 为空）非搬迁开单独立保存，
           // relocation 仍由领域服务强制要求项目。
+          // 中大型项目开单（workScope='medium_large'）必须独立保存无项目，
+          // 客户单位必填；顶层若显式传入 projectId 则传给领域校验拦截，不静默丢弃。
           const orderType = text(v.orderType) as 'relocation' | 'certification' | 'parts_by_mail' | 'pm';
+          const rawScope = v.workScope;
+          // 仅在缺失（undefined）时默认 'other'；显式传入空字符串、null 或非法范围均传给领域校验拒绝
+          const workScope = rawScope === undefined
+            ? 'other'
+            : (rawScope === null ? ('' as ServiceOrderWorkScope) : (String(rawScope).trim() as ServiceOrderWorkScope));
           let orderCustomerName = text(v.customerName);
-          const orderProject = projectId ? this.projects.findById(projectId) : undefined;
-          const orderCustomer = orderProject?.customerId
-            ? new SqliteCustomerRepository(this.db).findById(orderProject.customerId)
-            : undefined;
-          if (orderCustomer) {
-            orderCustomerName = orderCustomer.name;
+          let targetProjectId: string | null = null;
+
+          if (workScope === 'medium_large') {
+            targetProjectId = projectId ? projectId : null;
+            if (orderCustomerName === '') {
+              throw new ValidationError('CUSTOMER_NAME_REQUIRED', '中大型项目开单客户单位必填');
+            }
+          } else if (workScope === 'other') {
+            targetProjectId = projectId || null;
+            const orderProject = targetProjectId ? this.projects.findById(targetProjectId) : undefined;
+            const orderCustomer = orderProject?.customerId
+              ? new SqliteCustomerRepository(this.db).findById(orderProject.customerId)
+              : undefined;
+            if (orderCustomer) {
+              orderCustomerName = orderCustomer.name;
+            }
+            if (orderCustomerName === '') {
+              throw new ValidationError('CUSTOMER_NAME_REQUIRED', '开单客户信息从项目客户读取失败，请先关联客户');
+            }
+          } else {
+            // 未知/非法工作范围（如显式空串、null、非法字符串）：透传由领域服务拒绝
+            targetProjectId = projectId || null;
           }
-          if (orderCustomerName === '') {
-            throw new ValidationError('CUSTOMER_NAME_REQUIRED', '开单客户信息从项目客户读取失败，请先关联客户');
-          }
-          new ServiceOrderService(this.orders, this.projects).recordOrder({orderType,serviceOrderNo:text(v.serviceOrderNo),orderedAt:businessDate(v.orderedAt,'开单日期') ?? '',engineer:text(v.engineer) === '' ? null : text(v.engineer),customerName:orderCustomerName,projectId:projectId || null,note:optional(v.note)},actor); break;
+
+          new ServiceOrderService(this.orders, this.projects).recordOrder({
+            orderType,
+            workScope,
+            serviceOrderNo: text(v.serviceOrderNo),
+            orderedAt: businessDate(v.orderedAt, '开单日期'),
+            engineer: text(v.engineer) === '' ? null : text(v.engineer),
+            customerName: orderCustomerName,
+            projectId: targetProjectId,
+            note: optional(v.note),
+          }, actor);
+          break;
         }
         case 'logistics': {
           // 记录物流费用（部分费用语义）：全部字段可选；空金额不得转 0、空日期不得

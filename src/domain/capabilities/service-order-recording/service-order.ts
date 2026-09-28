@@ -15,9 +15,14 @@ import type { BusinessDate } from '../../core/time';
 export const ORDER_TYPES = ['relocation', 'certification', 'parts_by_mail', 'pm'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
 
+export const WORK_SCOPES = ['other', 'medium_large'] as const;
+export type ServiceOrderWorkScope = (typeof WORK_SCOPES)[number];
+
 export interface ServiceOrder {
   id: string;
   orderType: OrderType;
+  /** 开单工作范围（other = 其他/既有，medium_large = 中大型；默认 other）。 */
+  workScope: ServiceOrderWorkScope;
   /** 非空服务单号全局唯一（四类共用唯一空间）。 */
   serviceOrderNo: string | null;
   /** 开单日期（业务日期；未填默认当天，TBD-22）。 */
@@ -26,7 +31,7 @@ export interface ServiceOrder {
   engineer: string | null;
   /** 客户单位（必填）。 */
   customerName: string;
-  /** 项目归档关联（内部 ID）：搬迁开单必填；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */
+  /** 项目归档关联（内部 ID）：搬迁开单必填（中大型除外）；认证/单寄备件/PM 可选（仅归档/查询关系，不进入搬迁生命周期）。 */
   projectId: string | null;
   /** 备注可选。 */
   note: string | null;

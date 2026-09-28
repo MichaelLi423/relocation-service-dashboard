@@ -275,7 +275,7 @@ interface Filters {
   query: string;
 }
 type LayerState =
-  | { kind: "new" | "quick" | "reminder" | "reminder-all" | "cancel" | "report" | "history" | "clean" | "tags" | "edit-project" | "correct-entry" }
+  | { kind: "new" | "quick" | "reminder" | "reminder-all" | "cancel" | "report" | "history" | "clean" | "tags" | "edit-project" | "correct-entry" | "large-project-order" }
   | {
       kind: "edit-project-tags";
       projectId: string;
@@ -994,6 +994,11 @@ export function WorkbenchV2({
           >
             二维码申请
           </button>
+          <button
+            onClick={() => setLayer({ kind: "large-project-order" })}
+          >
+            中大型项目开单
+          </button>
           <button onClick={() => setLayer({ kind: "history" })}>浏览全部记录</button>
           <button onClick={() => setLayer({ kind: "report" })}>运营报表</button>
           <button onClick={() => setLayer({ kind: "tags" })}>标签库</button>
@@ -1513,7 +1518,9 @@ export function WorkbenchV2({
           className={layer.kind === "edit-project-tags" ? "project-tag-modal" : undefined}
           initialFocusSelector={layer.kind === "new"
             ? '[name="customerName"]'
-            : layer.kind === "edit-project-tags"
+            : layer.kind === "large-project-order"
+              ? '[name="orderType"]'
+              : layer.kind === "edit-project-tags"
               ? tagCatalogError
                 ? "[data-tag-picker-retry]"
                 : !tagCatalogLoading && !tagCatalog?.groups.length
@@ -1544,6 +1551,15 @@ export function WorkbenchV2({
               onRetryCatalog={loadTagCatalog}
               onSave={(payload) =>
                 mutate({ op: "create_project", payload }, "搬迁项目已创建")
+              }
+            />
+          ) : layer.kind === "large-project-order" ? (
+            <LargeProjectOrderForm
+              onSave={(action) =>
+                mutate(
+                  { op: "submit_action", action },
+                  "中大型项目开单已保存",
+                )
               }
             />
           ) : layer.kind === "edit-project-tags" ? (
@@ -1711,7 +1727,18 @@ export function WorkbenchV2({
           ) : layer.kind === "tags" ? (
             <TagLibraryPanel catalog={tagCatalog} loading={tagCatalogLoading} error={tagCatalogError} onRefresh={loadTagCatalog} onRename={renameCatalogItem} />
           ) : layer.kind === "history" ? (
-            <HistoryBrowserV2 onRevision={(next) => { revision.current = Math.max(revision.current, next); }} onDelete={(request, success) => deleteRecord(request, success, false)} />
+            <HistoryBrowserV2
+              onRevision={(next) => {
+                revision.current = Math.max(revision.current, next);
+              }}
+              onDelete={(request, success) =>
+                deleteRecord(request, success, false)
+              }
+              onToast={(msg) => {
+                setToast(msg);
+                window.setTimeout(() => setToast(""), 2800);
+              }}
+            />
           ) : layer.kind === "reminder-all" ? (
             <ReminderBrowserV2 onSelect={(item) => { setLayer(null); selectReminder(item); }} onRevision={(next) => { revision.current = Math.max(revision.current, next); }} />
           ) : layer.kind === "clean" ? (
@@ -2847,7 +2874,12 @@ function ActionFormV2({
         if (instrumentCount) set("instrumentCount", Number(instrumentCount));
         if (values.siteConfirmed === true) set("siteConfirmed", true);
         await onSupplement(payload);
-      } else await onSave({ type, projectId: project.id, values });
+      } else {
+        if (type === "order" && !values.workScope) {
+          values.workScope = "other";
+        }
+        await onSave({ type, projectId: project.id, values });
+      }
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -2899,6 +2931,146 @@ function ActionFormV2({
       {warning && <div className="inline-warning" role="status">{warning}</div>}
       <div className="form-footer">
         <span>保存后仅刷新受影响的项目和当前详情</span>
+      </div>
+    </form>
+  );
+}
+
+function LargeProjectOrderForm({
+  onSave,
+}: {
+  onSave: (action: WorkbenchActionPayload) => Promise<void>;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [orderType, setOrderType] = useState<"relocation" | "certification" | "parts_by_mail" | "pm">("relocation");
+  const [serviceOrderNo, setServiceOrderNo] = useState("");
+  const [orderedAt, setOrderedAt] = useState(todayDate());
+  const [customerName, setCustomerName] = useState("");
+  const [engineer, setEngineer] = useState("");
+  const [note, setNote] = useState("");
+  const submitLock = useRef(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (submitLock.current) return;
+    const trimmedCustomer = customerName.trim();
+    if (!trimmedCustomer) {
+      setError("请填写客户单位");
+      return;
+    }
+    const trimmedOrderNo = serviceOrderNo.trim();
+    if (!trimmedOrderNo) {
+      setError("请填写服务单号");
+      return;
+    }
+    submitLock.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await onSave({
+        type: "order",
+        values: {
+          workScope: "medium_large",
+          orderType,
+          serviceOrderNo: trimmedOrderNo,
+          orderedAt: orderedAt.trim() || todayDate(),
+          customerName: trimmedCustomer,
+          engineer: engineer.trim() || null,
+          ...(note.trim() ? { note: note.trim() } : {}),
+        },
+      });
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      submitLock.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      id="large-project-order-form"
+      onSubmit={(event) => void submit(event)}
+    >
+      <LayerHeaderAction>
+        <button
+          form="large-project-order-form"
+          className="button primary"
+          disabled={busy}
+        >
+          {busy ? "正在保存…" : "保存开单"}
+        </button>
+      </LayerHeaderAction>
+      <p className="notice">
+        中大型开单独立记录，不关联任何搬迁项目，不影响项目队列与生命周期。
+      </p>
+      <div className="form-grid">
+        <Select
+          name="orderType"
+          label="开单类型"
+          value={orderType}
+          onChange={(event) =>
+            setOrderType(
+              event.target.value as "relocation" | "certification" | "parts_by_mail" | "pm",
+            )
+          }
+          options={[
+            ["relocation", "搬迁"],
+            ["certification", "认证"],
+            ["parts_by_mail", "单寄备件"],
+            ["pm", "PM"],
+          ]}
+        />
+        <Field
+          name="serviceOrderNo"
+          label="服务单号"
+          required
+          value={serviceOrderNo}
+          onChange={(event) => setServiceOrderNo(event.target.value)}
+          placeholder="请输入服务单号"
+        />
+        <Field
+          name="orderedAt"
+          label="开单日期"
+          type="date"
+          required
+          value={orderedAt}
+          onChange={(event) => setOrderedAt(event.target.value)}
+        />
+        <Field
+          name="customerName"
+          label="客户单位"
+          required
+          value={customerName}
+          onChange={(event) => setCustomerName(event.target.value)}
+          placeholder="请输入客户单位全称"
+          help="必填，用于在跨项目历史和月度明细中辨识客户。"
+        />
+        <Field
+          name="engineer"
+          label="工程师"
+          optional
+          value={engineer}
+          onChange={(event) => setEngineer(event.target.value)}
+          help="可留空后补，后续可在完整记录中补充或清空。"
+        />
+        <Field
+          name="note"
+          label="备注"
+          optional
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="可选备注信息"
+        />
+      </div>
+      {error && (
+        <div className="inline-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-footer">
+        <span>中大型开单独立保存，不关联任何搬迁项目</span>
       </div>
     </form>
   );
@@ -4730,9 +4902,100 @@ function historyRecordText(row: WorkbenchV2HistoryRow): string {
   return `${row.newSiteAddress} · ${row.status}`;
 }
 
-function HistoryBrowserV2({ onDelete, onRevision }: {
+function HistoryEngineerEditForm({
+  order,
+  onClose,
+  onSave,
+}: {
+  order: Extract<WorkbenchV2HistoryRow, { kind: "service_order" }>;
+  onClose: () => void;
+  onSave: (engineer: string | null) => Promise<void>;
+}): JSX.Element {
+  const [engineer, setEngineer] = useState(order.engineer ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isMediumLarge = (order as any).workScope === "medium_large";
+  const workScopeText = isMediumLarge ? "中大型" : "其他/既有";
+
+  async function handleSave(val: string | null): Promise<void> {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave(val);
+    } catch (cause) {
+      setError(messageOf(cause));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void handleSave(engineer.trim() || null);
+      }}
+      className="record-edit-form"
+    >
+      <div className="readonly-record compact">
+        <div>
+          <span>服务单号</span>
+          <strong>{order.serviceOrderNo || "待补"}</strong>
+        </div>
+        <div>
+          <span>工作范围</span>
+          <strong>{workScopeText}</strong>
+        </div>
+        <div>
+          <span>当前工程师</span>
+          <strong>{order.engineer || "待补"}</strong>
+        </div>
+      </div>
+      <Field
+        name="engineer"
+        label="工程师"
+        optional
+        value={engineer}
+        onChange={(e) => setEngineer(e.target.value)}
+        help="可后补或更正，清空后保存会移除工程师。"
+        autoFocus
+      />
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <div className="form-footer" style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+        <button
+          className="button"
+          type="button"
+          disabled={busy}
+          onClick={onClose}
+        >
+          取消
+        </button>
+        <button
+          className="button small"
+          type="button"
+          disabled={busy || !order.engineer}
+          onClick={() => {
+            setEngineer("");
+            void handleSave(null);
+          }}
+        >
+          清空工程师
+        </button>
+        <button
+          className="button primary small"
+          type="submit"
+          disabled={busy}
+        >
+          {busy ? "正在保存…" : order.engineer ? "保存工程师" : "补充工程师"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function HistoryBrowserV2({ onDelete, onRevision, onToast }: {
   onDelete: (request: DeleteInput, success: string) => Promise<void>;
   onRevision: (revision: number) => void;
+  onToast?: (message: string) => void;
 }): JSX.Element {
   const [kind, setKind] = useState<HistoryKind>("service_order");
   const [from, setFrom] = useState(""); const [to, setTo] = useState("");
@@ -4740,6 +5003,7 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
   const [stack, setStack] = useState<Array<string | null>>([null]);
   const [error, setError] = useState("");
   const [revoke, setRevoke] = useState<Extract<WorkbenchV2HistoryRow, { kind: "invoice" }> | null>(null);
+  const [editingEngineerOrder, setEditingEngineerOrder] = useState<Extract<WorkbenchV2HistoryRow, { kind: "service_order" }> | null>(null);
   const independent = kind === "serial_address" || kind === "qr_request";
   async function load(cursor: string | null): Promise<void> {
     setError("");
@@ -4753,7 +5017,7 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
       setPage(next);
     } catch { setError("历史记录读取失败，请调整日期后重试。"); }
   }
-  useEffect(() => { setStack([null]); setRevoke(null); void load(null); }, [kind]);
+  useEffect(() => { setStack([null]); setRevoke(null); setEditingEngineerOrder(null); void load(null); }, [kind]);
   const rows = page?.rows ?? [];
   async function remove(request: DeleteInput, success = "记录已删除"): Promise<boolean> {
     try { await onDelete(request, success); await load(stack.at(-1) ?? null); return true; }
@@ -4776,6 +5040,46 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
         <button className="button primary">查看记录</button>
       </form>
       {revoke && <div className="history-inline-action"><InvoiceMutationForm mode="revoke" invoice={revoke} onSave={async (values) => { if (await remove({ kind: "invoice", id: revoke.id, revokedAt: values.time, revokeReason: values.reason }, "掉票已撤销")) setRevoke(null); }} /></div>}
+      {editingEngineerOrder && (
+        <div
+          className="dialog-backdrop modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setEditingEngineerOrder(null);
+          }}
+        >
+          <div
+            className="dialog-card modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="维护工程师"
+            style={{ maxWidth: 440 }}
+          >
+            <div className="dialog-header">
+              <h3>维护工程师</h3>
+              <p className="description">
+                {editingEngineerOrder.serviceOrderNo || "服务单号待补"} · {editingEngineerOrder.customerName}
+              </p>
+            </div>
+            <HistoryEngineerEditForm
+              order={editingEngineerOrder}
+              onClose={() => setEditingEngineerOrder(null)}
+              onSave={async (engineer) => {
+                const api = bridge();
+                if (!api) throw new Error("当前环境未连接主进程");
+                const res = await api.v2Mutate({
+                  op: "service_order_engineer_update",
+                  payload: { orderId: editingEngineerOrder.id, engineer },
+                });
+                onRevision(res.businessRevision);
+                setEditingEngineerOrder(null);
+                onToast?.(engineer ? "工程师已保存" : "工程师已清空");
+                await load(stack.at(-1) ?? null);
+              }}
+            />
+          </div>
+        </div>
+      )}
       {error && <div className="inline-error" role="alert">{error}</div>}
       <div className="history-table table-scroll"><table className="data-table"><thead><tr><th>项目 / 客户</th><th>业务记录</th><th>业务日期</th><th>操作</th></tr></thead><tbody>{rows.map((row) => {
         if (row.kind === "serial_address" || row.kind === "qr_request") {
@@ -4783,6 +5087,64 @@ function HistoryBrowserV2({ onDelete, onRevision }: {
           const record = row.kind === "serial_address" ? `${row.serialNo} · ${row.accountId}` : `${row.applicant} · ${row.types.map((type) => QR_REQUEST_TYPE_LABEL.get(type) ?? type).join("、")}`;
           const date = row.kind === "serial_address" ? row.updatedAt : row.requestedAt;
           return <tr key={row.id}><td><strong>{context}</strong><small>独立登记</small></td><td>{record}</td><td>{businessDate(date)}</td><td><div className="restricted-action"><button className="button danger small" onClick={() => { if (window.confirm("删除后无法恢复，确认删除这条记录？")) void remove({ kind: row.kind, id: row.id }); }}>删除</button><small>{row.kind === "serial_address" ? "地址事实有误时，删除后重新登记。" : "申请内容有误时，删除后重新登记。"}</small></div></td></tr>;
+        }
+        if (row.kind === "service_order") {
+          const isMediumLarge = (row as any).workScope === "medium_large";
+          const workScopeLabel = isMediumLarge ? "中大型" : "其他/既有";
+          const orderTypeLabels: Record<string, string> = {
+            relocation: "搬迁",
+            certification: "认证",
+            parts_by_mail: "单寄备件",
+            pm: "PM",
+          };
+          const typeText = orderTypeLabels[row.orderType] ?? row.orderType;
+          const request = historyDeleteRequest(row);
+          return (
+            <tr key={row.id}>
+              <td>
+                <strong>{row.customerName}</strong>
+                <small>
+                  <span>{workScopeLabel}</span>
+                  {row.ecc || row.tempNo ? (
+                    <>
+                      {" · "}
+                      <span>{row.ecc ?? row.tempNo}</span>
+                    </>
+                  ) : isMediumLarge ? (
+                    " · 独立开单"
+                  ) : (
+                    " · 既有记录"
+                  )}
+                </small>
+              </td>
+              <td>
+                {typeText} · {row.serviceOrderNo || "服务单号待补"} · {row.engineer || "工程师待补"}
+              </td>
+              <td>{row.businessDate || row.orderedAt || "—"}</td>
+              <td>
+                <div className="restricted-action">
+                  <button
+                    className="button small"
+                    type="button"
+                    onClick={() => setEditingEngineerOrder(row)}
+                  >
+                    {row.engineer ? "保存/清空工程师" : "补充工程师"}
+                  </button>
+                  <button
+                    className="button danger small"
+                    type="button"
+                    onClick={() => {
+                      if (request && window.confirm("删除后无法恢复，确认删除这条记录？")) {
+                        void remove(request);
+                      }
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              </td>
+            </tr>
+          );
         }
         const request = historyDeleteRequest(row);
         return <tr key={row.id}><td><strong>{row.customerName}</strong><small>{row.ecc ?? row.tempNo}</small></td><td>{historyRecordText(row)}</td><td>{row.businessDate || "—"}</td><td>{row.kind === "invoice" ? (row.active ? <button className="button danger small" onClick={() => setRevoke(row)}>撤销</button> : <span className="terminal-note">已撤销；如需更正，请新增有效掉票。</span>) : <div className="restricted-action"><button className="button danger small" onClick={() => { if (request && window.confirm("删除后无法恢复，确认删除这条记录？")) void remove(request); }}>删除</button>{row.kind === "activity" && <small>到访或工作事实有误时，删除后重新登记。</small>}{row.kind === "acceptance" && <small>验收已有后续依赖时应保留原事实，当前不支持原位修改。</small>}{row.kind === "ship_to_request" && <small>申请资料有误时，按正确客户与新址重新发起。</small>}</div>}</td></tr>;
@@ -4822,20 +5184,53 @@ export function DataCleanPanel({ onComplete }: { onComplete: () => Promise<void>
     {error && <div className="inline-error clean-recheck-error" role="alert">{error}</div>}</div>;
 }
 
+type WorkbenchReportFilter = ReportFilterDto & {
+  workScope?: "other" | "medium_large" | null;
+};
+
+function reportFiltersMatch(a: WorkbenchReportFilter, b: WorkbenchReportFilter | null): boolean {
+  if (!b) return false;
+  if (a.monthFrom !== b.monthFrom) return false;
+  if (a.monthTo !== b.monthTo) return false;
+  if ((a.region || null) !== (b.region || null)) return false;
+  if ((a.orderType || null) !== (b.orderType || null)) return false;
+  if ((a.workScope || null) !== (b.workScope || null)) return false;
+  if ((a.transportCompany || null) !== (b.transportCompany || null)) return false;
+  if ((a.engineer || null) !== (b.engineer || null)) return false;
+  const aTags = [...(a.tagIds ?? [])].sort();
+  const bTags = [...(b.tagIds ?? [])].sort();
+  if (aTags.length !== bTags.length) return false;
+  for (let i = 0; i < aTags.length; i++) {
+    if (aTags[i] !== bTags[i]) return false;
+  }
+  return true;
+}
+
 function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }: TagCatalogProps): JSX.Element {
-  const [draftFilter, setDraftFilter] = useState<ReportFilterDto>({
+  const [draftFilter, setDraftFilter] = useState<WorkbenchReportFilter>({
     monthFrom: "",
     monthTo: "",
     region: null,
     orderType: null,
     transportCompany: null,
     engineer: null,
+    workScope: null,
   });
-  const [appliedFilter, setAppliedFilter] = useState<ReportFilterDto | null>(null);
+  const [appliedFilter, setAppliedFilter] = useState<WorkbenchReportFilter | null>(null);
   const [report, setReport] = useState<ReportDto | null>(null);
   const [details, setDetails] = useState<Array<Record<string, string | number | boolean | null>>>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"build" | "xlsx" | "png" | "pdf" | "">("");
+  const isStale = Boolean(report && appliedFilter && !reportFiltersMatch(draftFilter, appliedFilter));
+
+  function serializeFilter(filter: WorkbenchReportFilter): ReportFilterDto {
+    const { workScope, ...rest } = filter;
+    return {
+      ...rest,
+      ...(workScope ? { workScope } : {}),
+      ...(filter.tagIds ? { tagIds: [...filter.tagIds] } : {}),
+    } as ReportFilterDto;
+  }
   async function build(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setBusy("build");
@@ -4843,7 +5238,7 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
-      const nextReport = await api.buildReport(draftFilter);
+      const nextReport = await api.buildReport(serializeFilter(draftFilter));
       setReport(nextReport);
       setAppliedFilter({ ...draftFilter, ...(draftFilter.tagIds ? { tagIds: [...draftFilter.tagIds] } : {}) });
       setDetails([]);
@@ -4857,8 +5252,8 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
-      if (!appliedFilter) return;
-      setDetails(await api.drillDown(key, appliedFilter));
+      if (!appliedFilter || isStale) return;
+      setDetails(await api.drillDown(key, serializeFilter(appliedFilter)));
     } catch (cause) {
       setError(messageOf(cause));
     }
@@ -4869,8 +5264,8 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
-      if (!appliedFilter) return;
-      const result = await api.exportReport(format, appliedFilter);
+      if (!appliedFilter || isStale) return;
+      const result = await api.exportReport(format, serializeFilter(appliedFilter));
       if (!result.saved) setError("已取消保存，未生成导出文件。");
     } catch (cause) {
       setError(`导出失败：${messageOf(cause)}`);
@@ -4907,10 +5302,33 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
         <Select name="reportOrderType" label="开单类型" value={draftFilter.orderType ?? ""}
           options={[["", "全部开单类型"], ["relocation", "搬迁"], ["certification", "认证"], ["parts_by_mail", "单寄备件"], ["pm", "PM"]]}
           onChange={(event) => setDraftFilter((old) => ({ ...old, orderType: (event.target.value || null) as ReportFilterDto["orderType"] }))} />
+        <Select
+          name="reportWorkScope"
+          label="工作范围"
+          value={draftFilter.workScope ?? ""}
+          options={[
+            ["", "全部工作范围"],
+            ["other", "其他/既有"],
+            ["medium_large", "中大型"],
+          ]}
+          onChange={(event) =>
+            setDraftFilter((old) => ({
+              ...old,
+              workScope: ((event.target.value as "other" | "medium_large") || null),
+            }))
+          }
+        />
         <Field name="reportTransportCompany" label="运输公司" placeholder="全部运输公司" help="留空表示全部运输公司" value={draftFilter.transportCompany ?? ""}
           onChange={(event) => setDraftFilter((old) => ({ ...old, transportCompany: event.target.value || null }))} />
         <Field name="reportEngineer" label="工程师" placeholder="全部工程师" help="留空表示全部工程师" value={draftFilter.engineer ?? ""}
           onChange={(event) => setDraftFilter((old) => ({ ...old, engineer: event.target.value || null }))} />
+        {(Boolean(draftFilter.region) || Boolean(draftFilter.tagIds?.length)) && (
+          <div className="report-exclusion-notice notice" role="status" style={{ gridColumn: "1 / -1", margin: "4px 0" }}>
+            {isStale || !appliedFilter
+              ? "提示：项目区域或标签筛选仅适用于搬迁项目；点击计算后应用筛选，不关联项目的独立记录（含中大型项目开单）会被排除在统计、下钻及导出中。"
+              : "提示：项目区域或标签筛选仅适用于搬迁项目；不关联项目的独立记录（含中大型项目开单）已排除在当前统计、下钻及导出中。"}
+          </div>
+        )}
         <div className="report-tag-filter full">
           <GroupedTagPicker catalog={catalog} loading={catalogLoading} error={catalogError} selected={draftFilter.tagIds ?? []} onChange={(tagIds) => setDraftFilter((old) => ({ ...old, tagIds }))} onRetry={() => void onRetryCatalog()} legend="按项目分类标签筛选" />
           <div className="report-tag-filter-footer"><span>{draftFilter.tagIds?.length ? `已选择 ${draftFilter.tagIds.length} 个标签，匹配任一标签` : "未选择标签，不限制报表结果"}</span><button className="text-action" type="button" disabled={!draftFilter.tagIds?.length} onClick={() => setDraftFilter((old) => ({ ...old, tagIds: [] }))}>清空标签筛选</button></div>
@@ -4924,28 +5342,70 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
       )}
       {report && (
         <section className="report-results">
+          {isStale && (
+            <div className="report-stale-banner inline-warning notice" role="status" style={{ marginBottom: "12px" }}>
+              <span>筛选条件已更改，点击计算后应用筛选；当前旧结果、明细与导出已锁定。</span>
+            </div>
+          )}
           <div className="report-section-head"><div><p className="overline">计算结果</p><h3>{report.range.from} 至 {report.range.to}</h3></div><span>{report.sections.length} 项指标</span></div>
-          <div className="report-metric-grid">{report.sections.map((section) => (
-            <article className="report-section" key={section.key}>
-              <span>指标</span><strong>{section.label.replaceAll("Ship-to", "Account ID")}</strong>
-              <b>{section.rows.length}<small> 行</small></b>
-              <button className="button small" onClick={() => void drill(section.key)}>查看明细</button>
-            </article>
-          ))}</div>
+          <div className="report-metric-grid">{report.sections.map((section) => {
+            const isOrderMetric = section.key === "monthly_service_order_count" || section.key === "monthly_order";
+            const orderTotalCount = isOrderMetric
+              ? section.rows.reduce((sum, r) => sum + (Number(r.count) || 0), 0)
+              : null;
+            return (
+              <article className="report-section" key={section.key}>
+                <span>指标</span><strong>{section.label.replaceAll("Ship-to", "Account ID")}</strong>
+                {orderTotalCount !== null ? (
+                  <b>
+                    {orderTotalCount}<small> 单</small>
+                    <small className="report-group-count" style={{ display: "block", fontSize: "12px", fontWeight: "normal", color: "var(--text-muted)" }}>
+                      共 {section.rows.length} 组分类
+                    </small>
+                  </b>
+                ) : (
+                  <b>{section.rows.length}<small> 行</small></b>
+                )}
+                <button
+                  className="button small"
+                  disabled={Boolean(busy) || isStale}
+                  title={isStale ? "筛选条件已修改，请点击“实时计算报表”应用筛选后再查看明细" : undefined}
+                  onClick={() => void drill(section.key)}
+                >
+                  查看明细
+                </button>
+              </article>
+            );
+          })}</div>
           <div className="report-export"><div><strong>导出当前结果</strong><span>使用同一筛选范围生成文件</span></div><div className="row-actions">
-            <button className="button" disabled={Boolean(busy)} onClick={() => void exportFile("xlsx")}>
+            <button
+              className="button"
+              disabled={Boolean(busy) || isStale}
+              title={isStale ? "筛选条件已修改，请点击“实时计算报表”应用筛选后再导出" : undefined}
+              onClick={() => void exportFile("xlsx")}
+            >
               {busy === "xlsx" ? "正在导出…" : "导出 Excel"}
             </button>
-            <button className="button" disabled={Boolean(busy)} onClick={() => void exportFile("png")}>
+            <button
+              className="button"
+              disabled={Boolean(busy) || isStale}
+              title={isStale ? "筛选条件已修改，请点击“实时计算报表”应用筛选后再导出" : undefined}
+              onClick={() => void exportFile("png")}
+            >
               {busy === "png" ? "正在导出…" : "导出 PNG"}
             </button>
-            <button className="button" disabled={Boolean(busy)} onClick={() => void exportFile("pdf")}>
+            <button
+              className="button"
+              disabled={Boolean(busy) || isStale}
+              title={isStale ? "筛选条件已修改，请点击“实时计算报表”应用筛选后再导出" : undefined}
+              onClick={() => void exportFile("pdf")}
+            >
               {busy === "pdf" ? "正在导出…" : "导出 PDF"}
             </button>
           </div></div>
         </section>
       )}
-      {details.length > 0 && (
+      {details.length > 0 && !isStale && (
         <section className="report-details">
           <div className="report-section-head"><div><p className="overline">核对数据</p><h3>下钻明细</h3></div><span>{details.length} 行</span></div>
           <div className="table-scroll"><table className="data-table"><thead><tr>{Object.keys(details[0] ?? {}).map((key) => <th key={key}>{reportColumnLabel(key)}</th>)}</tr></thead><tbody>{details.map((row, index) => <tr key={String(row.id ?? index)}>{Object.entries(row).map(([key,value]) => <td key={key}>{reportCellText(key, value)}</td>)}</tr>)}</tbody></table></div>
@@ -4971,6 +5431,7 @@ function reportColumnLabel(key: string): string {
     costCents: "实际物流费用（RMB）", costUsdCents: "物流费用（USD）", dealOverBudget: "成交价超过预算",
     planTransportDate: "计划运输日期", submittedAt: "提交日期", applicant: "申请人", requestedAt: "申请日期",
     typeCode: "二维码申请类型", updatedAt: "更新日期", serialNo: "序列号",
+    workScope: "工作范围", customer: "客户单位",
   };
   return labels[key] ?? "其他信息";
 }
@@ -4982,6 +5443,7 @@ function reportCellText(key: string, value: string | number | boolean | null): s
   const enumLabels: Record<string, Record<string, string>> = {
     status: { ...STATUS_LABEL },
     orderType: { relocation: "搬迁", certification: "认证", parts_by_mail: "单寄备件", pm: "PM" },
+    workScope: { other: "其他/既有", medium_large: "中大型" },
     partStatus: { pending_submit: "待提交", processing: "处理中", arrived: "已到件", used: "已使用" },
     typeCode: Object.fromEntries(QR_REQUEST_TYPE_LABEL),
   };
@@ -4993,6 +5455,7 @@ function reportCellText(key: string, value: string | number | boolean | null): s
 function layerRequiresDirtyProtection(layer: LayerState): boolean {
   return [
     "new",
+    "large-project-order",
     "edit-project",
     "correct-entry",
     "action",
@@ -5317,6 +5780,7 @@ function Empty({ title, copy }: { title: string; copy: string }): JSX.Element {
 }
 function layerTitle(layer: LayerState): string {
   if (layer.kind === "new") return "新建搬迁项目";
+  if (layer.kind === "large-project-order") return "中大型项目开单";
   if (layer.kind === "edit-project") return "编辑项目资料";
   if (layer.kind === "edit-project-tags") return "编辑项目标签";
   if (layer.kind === "correct-entry") return "更正进单/合同资料";
@@ -5347,6 +5811,7 @@ function layerDescription(
   project: WorkbenchProjectRow | null,
 ): string {
   if (layer.kind === "new") return "四组资料在同一页完成";
+  if (layer.kind === "large-project-order") return "独立开单 · 四类类型不关联搬迁项目";
   if (layer.kind === "edit-project") return project ? `${project.customerName} · 项目级资料` : "项目级资料";
   if (layer.kind === "edit-project-tags") return `${layer.customerName} · ${layer.identifier}`;
   if (layer.kind === "correct-entry") return project ? `${project.customerName} · 已正式进单项目` : "已正式进单项目";

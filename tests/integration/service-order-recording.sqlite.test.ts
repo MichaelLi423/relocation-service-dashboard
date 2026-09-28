@@ -208,4 +208,140 @@ describe('service-order-recording SQLite 集成（3.12）', () => {
     }
   });
 
+  it('中大型开单落库、回读、关闭重开保留，补录工程师与备注不改工作范围，删除彻底', () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const project = createPendingProject();
+      ctx.projects.save(project);
+
+      // 中大型四类开单均允许无项目保存
+      const mlRelocation = ctx.orderService.recordOrder(
+        {
+          orderType: 'relocation',
+          workScope: 'medium_large',
+          serviceOrderNo: 'ORD-ML-101',
+          engineer: null,
+          customerName: '中大型药业',
+        },
+        ACTOR,
+      );
+      const mlCertification = ctx.orderService.recordOrder(
+        {
+          orderType: 'certification',
+          workScope: 'medium_large',
+          serviceOrderNo: 'ORD-ML-102',
+          engineer: '工A',
+          customerName: '中大型检测',
+          note: '初始备注',
+        },
+        ACTOR,
+      );
+      // 普通搬迁开单（默认 other）
+      const standardOrder = ctx.orderService.recordOrder(
+        {
+          orderType: 'relocation',
+          serviceOrderNo: 'ORD-STD-101',
+          engineer: '工B',
+          customerName: '普通客户',
+          projectId: project.id,
+        },
+        ACTOR,
+      );
+
+      expect(mlRelocation.workScope).toBe('medium_large');
+      expect(mlRelocation.projectId).toBeNull();
+      expect(mlCertification.workScope).toBe('medium_large');
+      expect(standardOrder.workScope).toBe('other');
+
+      // 数据库底层字段验证
+      const rowMl = ctx.db.prepare('SELECT work_scope, project_id FROM service_orders WHERE id = ?').get(mlRelocation.id) as { work_scope: string; project_id: string | null };
+      expect(rowMl.work_scope).toBe('medium_large');
+      expect(rowMl.project_id).toBeNull();
+
+      const rowStd = ctx.db.prepare('SELECT work_scope, project_id FROM service_orders WHERE id = ?').get(standardOrder.id) as { work_scope: string; project_id: string | null };
+      expect(rowStd.work_scope).toBe('other');
+      expect(rowStd.project_id).toBe(project.id);
+
+      // 关闭重开保留验证
+      closeDatabase(ctx.db);
+      const reopened = openService(dir);
+
+      const loadedMl = reopened.orders.findById(mlRelocation.id);
+      expect(loadedMl?.workScope).toBe('medium_large');
+      expect(loadedMl?.projectId).toBeNull();
+      expect(loadedMl?.engineer).toBeNull();
+
+      const loadedStd = reopened.orders.findById(standardOrder.id);
+      expect(loadedStd?.workScope).toBe('other');
+      expect(loadedStd?.projectId).toBe(project.id);
+
+      // 补录工程师不改变工作范围与项目关联
+      const engUpdated = reopened.orderService.updateEngineer(mlRelocation.id, '后补工程师', ACTOR);
+      expect(engUpdated.engineer).toBe('后补工程师');
+      expect(engUpdated.workScope).toBe('medium_large');
+      expect(engUpdated.projectId).toBeNull();
+
+      const rawAfterEng = reopened.db.prepare('SELECT work_scope, engineer FROM service_orders WHERE id = ?').get(mlRelocation.id) as { work_scope: string; engineer: string };
+      expect(rawAfterEng.work_scope).toBe('medium_large');
+      expect(rawAfterEng.engineer).toBe('后补工程师');
+
+      // 补录备注不改变工作范围
+      const noteUpdated = reopened.orderService.updateNote(mlCertification.id, '更新后的备注', ACTOR);
+      expect(noteUpdated.note).toBe('更新后的备注');
+      expect(noteUpdated.workScope).toBe('medium_large');
+
+      // 删除中大型开单：记录彻底删除，不触碰搬迁项目及其他开单
+      reopened.orderService.delete(mlRelocation.id);
+      expect(reopened.orders.findById(mlRelocation.id)).toBeUndefined();
+      expect(reopened.projects.findById(project.id)).toBeDefined();
+      expect(reopened.orders.findById(standardOrder.id)).toBeDefined();
+
+      closeDatabase(reopened.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
+  it('SQLite 仓储直接保存与回读：缺省 workScope 保持 other，ON CONFLICT 保留范围', () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      // 直接通过仓储保存一个未设或设为 other 的实体
+      const order = {
+        id: 'so-direct-1',
+        orderType: 'pm' as const,
+        workScope: 'other' as const,
+        serviceOrderNo: 'SO-DIR-1',
+        orderedAt: '2026-08-10',
+        engineer: null,
+        customerName: '直存客户',
+        projectId: null,
+        note: null,
+        accountId: null,
+        usernameSnapshot: null,
+        createdAt: '2026-08-10T00:00:00+08:00',
+        updatedAt: '2026-08-10T00:00:00+08:00',
+      };
+      ctx.orders.save(order);
+
+      const fetched = ctx.orders.findById('so-direct-1');
+      expect(fetched?.workScope).toBe('other');
+      expect(ctx.orders.findByServiceOrderNo('SO-DIR-1')?.workScope).toBe('other');
+
+      // 保存 medium_large 实体
+      const mlOrder = {
+        ...order,
+        id: 'so-direct-ml',
+        workScope: 'medium_large' as const,
+        serviceOrderNo: 'SO-DIR-ML',
+      };
+      ctx.orders.save(mlOrder);
+      expect(ctx.orders.findById('so-direct-ml')?.workScope).toBe('medium_large');
+
+      closeDatabase(ctx.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
 });

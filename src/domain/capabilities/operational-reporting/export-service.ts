@@ -239,6 +239,7 @@ function headerLines(report: ReportModel): string[] {
     `TransportCompany: ${f.transportCompany ?? 'ALL'}`,
     `Engineer: ${f.engineer ?? 'ALL'}`,
     `Operator: ${f.operator ?? 'ALL'}`,
+    `WorkScope: ${f.workScope ?? 'ALL'}`,
   ];
   return parts;
 }
@@ -447,7 +448,7 @@ function renderPng(report: ReportModel): Buffer {
   lines.push(`RANGE: ${report.range.from} TO ${report.range.to}`);
   const f = report.filters;
   lines.push(
-    `FILTERS: REGION=${f.region ?? 'ALL'} ORDERTYPE=${f.orderType ?? 'ALL'} TRANSPORT=${f.transportCompany ?? 'ALL'} ENGINEER=${f.engineer ?? 'ALL'} OPERATOR=${f.operator ?? 'ALL'}`,
+    `FILTERS: REGION=${f.region ?? 'ALL'} ORDERTYPE=${f.orderType ?? 'ALL'} TRANSPORT=${f.transportCompany ?? 'ALL'} ENGINEER=${f.engineer ?? 'ALL'} OPERATOR=${f.operator ?? 'ALL'} WORKSCOPE=${f.workScope ?? 'ALL'}`,
   );
   lines.push('');
 
