@@ -159,7 +159,7 @@ export const REPORT_METRIC_DEFINITIONS: readonly ReportMetricDefinition[] = [
     label: 'Account ID 申请工作量',
     timeAttribution: '首次实际提交时间（submitted_at）所属月份；待提交草稿不计、状态更新不重复计数',
     factSource: 'ship_to_requests（首次提交记录；按提交时持久化的账号内部 ID 与用户名快照归属责任人）',
-    filters: ['monthFrom', 'monthTo', 'operator', 'tagIds'],
+    filters: ['monthFrom', 'monthTo', 'region', 'operator', 'tagIds'],
     hasDrillDown: true,
   },
   {
@@ -167,7 +167,7 @@ export const REPORT_METRIC_DEFINITIONS: readonly ReportMetricDefinition[] = [
     label: '二维码申请工作量',
     timeAttribution: '申请时间（requested_at）所属月份',
     factSource: 'qr_requests × 去重后选中类型（不按仪器/项目计数；按申请时持久化的账号内部 ID 与用户名快照归属责任人）',
-    filters: ['monthFrom', 'monthTo', 'operator', 'tagIds'],
+    filters: ['monthFrom', 'monthTo', 'region', 'operator', 'tagIds'],
     hasDrillDown: true,
   },
   {
@@ -175,7 +175,7 @@ export const REPORT_METRIC_DEFINITIONS: readonly ReportMetricDefinition[] = [
     label: '序列号地址更新记录数',
     timeAttribution: '更新时间（updated_at）所属月份',
     factSource: 'serial_address_updates（逐条记录计数，可按客户分组；按登记时持久化的账号内部 ID 与用户名快照归属责任人）',
-    filters: ['monthFrom', 'monthTo', 'operator', 'tagIds'],
+    filters: ['monthFrom', 'monthTo', 'region', 'operator', 'tagIds'],
     hasDrillDown: true,
   },
 ];

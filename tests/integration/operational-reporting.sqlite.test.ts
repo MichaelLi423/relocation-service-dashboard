@@ -41,8 +41,10 @@ import { SqliteReportingFactReader } from '../../src/domain/capabilities/local-d
 import {
   ReportingService,
   ReportingExportService,
+  reportSummaryJson,
   pngBarLabel,
   pngBarHeight,
+  type ReportFilter,
   type ReportModel,
   type ServiceOrderWorkScope,
 } from '../../src/domain/capabilities/operational-reporting';
@@ -216,6 +218,22 @@ function extractPngTextChunk(pngBytes: Buffer, keyword: string): string {
     offset += 12 + length;
   }
   return '';
+}
+
+/** 读取 Excel 首张工作表全部单元格文本（用于三种导出一致性断言）。 */
+async function excelTexts(buffer: Buffer): Promise<string[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  const sheet = workbook.worksheets[0];
+  const texts: string[] = [];
+  for (const row of sheet.getSheetValues()) {
+    if (row === undefined || row === null) continue;
+    for (const value of Object.values(row as object)) {
+      if (value === undefined || value === null) continue;
+      texts.push(String(value));
+    }
+  }
+  return texts;
 }
 
 describe('operational-reporting SQLite 集成（7.11）', () => {
@@ -910,6 +928,104 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       const afterDeleteDetails = reporting.getMetricDetails('monthly_service_order_count', month);
       expect(afterDeleteDetails).toHaveLength(3);
       expect(afterDeleteDetails.some((d: any) => d.serviceOrderNo === 'ML-ORD-2')).toBe(false);
+
+      closeDatabase(ctx.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+
+  it('区域/标签筛选：独立开单与三类无项目工作量在指标、下钻及 Excel/PNG/PDF 导出一致排除（含 tag+导出证据）', async () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const pEast = seedEnteredProject(ctx, { region: 'East', entryAt: '2026-07-01', snapshot: '10000' });
+      ctx.db
+        .prepare('INSERT INTO project_tag_assignments (project_id, tag_id) VALUES (?, ?)')
+        .run(pEast, 'project-tag-project-type-relocation');
+      const instrumentId = seedInstrument(ctx, pEast, 'SN-DIM');
+
+      // 项目内开单（East + 打标）与两类无项目独立开单（other / medium_large）
+      ctx.orderService.recordOrder(
+        { orderType: 'relocation', serviceOrderNo: 'ORD-EAST-1', orderedAt: '2026-07-10', engineer: '工程师甲', customerName: '华东客户', projectId: pEast },
+        ACTOR,
+      );
+      ctx.orderService.recordOrder(
+        { orderType: 'pm', serviceOrderNo: 'ORD-IND-1', orderedAt: '2026-07-11', engineer: '工程师乙', customerName: '独立客户', projectId: null },
+        ACTOR,
+      );
+      ctx.orderService.recordOrder(
+        { orderType: 'relocation', workScope: 'medium_large', serviceOrderNo: 'ML-IND-1', orderedAt: '2026-07-12', engineer: '工程师甲', customerName: '中大型独立客户', projectId: null },
+        ACTOR,
+      );
+
+      // 三类无项目独立工作量事实（区域/标签都无法匹配）
+      const shipTo = ctx.shipToService.createRequest({ customerName: '华东医药', newSiteAddress: '新址A' }, ACTOR);
+      ctx.shipToService.submit(shipTo.id, ACTOR);
+      ctx.db.prepare('UPDATE ship_to_requests SET submitted_at = ? WHERE id = ?').run('2026-07-05', shipTo.id);
+      ctx.qrService.createRequest({ applicant: '负责人甲', requestedAt: '2026-07-08', types: ['A'] }, ACTOR);
+      ctx.serialService.register(
+        instrumentId,
+        { customerName: '华东医药', newSiteAddress: '新址A', serialNo: 'SN-DIM', accountId: 'ACC-001', updatedAt: '2026-07-09' },
+        ACTOR,
+      );
+
+      const month = { monthFrom: '2026-07', monthTo: '2026-07' };
+      const tagId = 'project-tag-project-type-relocation';
+
+      // 基线：无 region/tag 时三类工作量与独立开单均正常计入
+      const baseline = ctx.reporting.buildReport(month);
+      expect(baseline.shipToWorkload.reduce((s, r) => s + r.count, 0)).toBe(1);
+      expect(baseline.qrWorkload.reduce((s, r) => s + r.count, 0)).toBe(1);
+      expect(baseline.serialAddressUpdates.reduce((s, r) => s + r.count, 0)).toBe(1);
+      expect(baseline.monthlyServiceOrders.reduce((s, r) => s + r.count, 0)).toBe(3);
+      expect(ctx.reporting.getMetricDetails('ship_to_request_workload', month)).toHaveLength(1);
+
+      const filters: Record<string, ReportFilter> = {
+        regionOnly: { ...month, region: 'East' },
+        tagOnly: { ...month, tagIds: [tagId] },
+        combined: { ...month, region: 'East', tagIds: [tagId] },
+      };
+
+      // 指标与下钻：region only / tag only / region+tag 均排除三类独立工作量与独立开单
+      for (const [label, filter] of Object.entries(filters)) {
+        const report = ctx.reporting.buildReport(filter);
+        expect(report.shipToWorkload, `${label} shipToWorkload`).toEqual([]);
+        expect(report.qrWorkload, `${label} qrWorkload`).toEqual([]);
+        expect(report.serialAddressUpdates, `${label} serialAddressUpdates`).toEqual([]);
+        expect(ctx.reporting.getMetricDetails('ship_to_request_workload', filter), `${label} shipTo 下钻`).toEqual([]);
+        expect(ctx.reporting.getMetricDetails('qr_request_workload', filter), `${label} qr 下钻`).toEqual([]);
+        expect(ctx.reporting.getMetricDetails('serial_address_update_count', filter), `${label} serial 下钻`).toEqual([]);
+        expect(report.monthlyServiceOrders.reduce((s, r) => s + r.count, 0), `${label} 独立开单`).toBe(1);
+      }
+
+      // 导出数值与同次实时模型一致：Excel / PNG / PDF（tag-only 为本次补齐的证据）
+      for (const filter of [filters.regionOnly, filters.tagOnly, filters.combined]) {
+        const report = ctx.reporting.buildReport(filter);
+
+        // PNG 与 PDF 直读同一 reportSummaryJson（filters + sections），验证数值一致
+        const pngMeta = JSON.parse(extractPngTextChunk(ctx.exporter.exportPng(report), 'Report'));
+        expect(pngMeta.filters).toEqual(report.filters);
+        for (const key of ['ship_to_request_workload', 'qr_request_workload', 'serial_address_update_count']) {
+          expect(pngMeta.sections.find((s: { key: string }) => s.key === key).rows, `PNG ${key}`).toEqual([]);
+        }
+        expect(
+          pngMeta.sections.find((s: { key: string }) => s.key === 'monthly_service_order_count').rows,
+          'PNG 开单量',
+        ).toEqual([['2026-07', 'relocation', '1']]);
+
+        const pdf = await ctx.exporter.exportPdf(report);
+        const loadedPdf = await import('pdf-lib').then((m) => m.PDFDocument.load(pdf));
+        expect(loadedPdf.getSubject()).toBe(reportSummaryJson(report));
+
+        // Excel：独立工作量与独立开单数据行不出现，开单量仅剩项目内 1 笔
+        const texts = await excelTexts(await ctx.exporter.exportExcel(report));
+        expect(texts).not.toContain('华东医药');
+        expect(texts).not.toContain('负责人甲');
+        expect(texts).not.toContain('独立客户');
+        expect(texts).not.toContain('中大型独立客户');
+        expect(texts.some((t) => t.includes(`Region: ${filter.region ?? 'ALL'}`))).toBe(true);
+      }
 
       closeDatabase(ctx.db);
     } finally {

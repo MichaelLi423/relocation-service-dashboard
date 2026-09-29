@@ -607,7 +607,7 @@ export class ReportingService {
   // ---- 7.7 工作量：Ship-to 申请 / 二维码申请 / 序列号地址更新 ----
 
   private shipToWorkloadRows(all: ReportingFactReader, f: NormalizedFilter): ShipToWorkloadRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     const counts = new Map<string, number>();
     for (const request of all.listShipToRequests()) {
       if (request.submittedAt === null) continue; // 待提交草稿不计
@@ -630,7 +630,7 @@ export class ReportingService {
   }
 
   private shipToDetailRows(all: ReportingFactReader, f: NormalizedFilter): MetricDetailRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     return all
       .listShipToRequests()
       .filter((r) => r.submittedAt !== null)
@@ -647,7 +647,7 @@ export class ReportingService {
   }
 
   private qrWorkloadRows(all: ReportingFactReader, f: NormalizedFilter): QrWorkloadRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     const counts = new Map<string, number>();
     for (const request of all.listQrRequests()) {
       if (!this.inRange(toMonthKey(request.requestedAt), f)) continue;
@@ -672,7 +672,7 @@ export class ReportingService {
   }
 
   private qrDetailRows(all: ReportingFactReader, f: NormalizedFilter): MetricDetailRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     return all
       .listQrRequests()
       .filter((r) => this.inRange(toMonthKey(r.requestedAt), f))
@@ -693,7 +693,7 @@ export class ReportingService {
   }
 
   private serialUpdateRows(all: ReportingFactReader, f: NormalizedFilter): SerialAddressUpdateRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     const counts = new Map<string, number>();
     for (const update of all.listSerialAddressUpdates()) {
       if (!this.inRange(toMonthKey(update.updatedAt), f)) continue;
@@ -716,7 +716,7 @@ export class ReportingService {
   }
 
   private serialDetailRows(all: ReportingFactReader, f: NormalizedFilter): MetricDetailRow[] {
-    if (this.tagFiltering(f)) return [];
+    if (this.projectDimensionConstrained(f)) return [];
     return all
       .listSerialAddressUpdates()
       .filter((u) => this.inRange(toMonthKey(u.updatedAt), f))
@@ -810,6 +810,15 @@ export class ReportingService {
 
   private tagFiltering(f: NormalizedFilter): boolean {
     return f.tagIds.length > 0;
+  }
+
+  /**
+   * 项目维度约束：区域或项目分类标签筛选启用时，任何无项目关联的独立事实
+   * （Ship-to 申请 / 二维码申请 / 序列号地址更新）都无法匹配项目区域或项目标签，
+   * 因此统一从对应指标、下钻与导出中排除。工作范围 workScope 不在此列（仅作用于月度开单量）。
+   */
+  private projectDimensionConstrained(f: NormalizedFilter): boolean {
+    return f.region !== null || this.tagFiltering(f);
   }
 
   private projectInScope(projectId: string, f: NormalizedFilter): boolean {

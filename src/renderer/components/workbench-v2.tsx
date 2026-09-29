@@ -5194,11 +5194,11 @@ function reportFiltersMatch(a: WorkbenchReportFilter, b: WorkbenchReportFilter |
   if (!b) return false;
   if (a.monthFrom !== b.monthFrom) return false;
   if (a.monthTo !== b.monthTo) return false;
-  if ((a.region || null) !== (b.region || null)) return false;
+  if ((a.region?.trim() || null) !== (b.region?.trim() || null)) return false;
   if ((a.orderType || null) !== (b.orderType || null)) return false;
   if ((a.workScope || null) !== (b.workScope || null)) return false;
-  if ((a.transportCompany || null) !== (b.transportCompany || null)) return false;
-  if ((a.engineer || null) !== (b.engineer || null)) return false;
+  if ((a.transportCompany?.trim() || null) !== (b.transportCompany?.trim() || null)) return false;
+  if ((a.engineer?.trim() || null) !== (b.engineer?.trim() || null)) return false;
   const aTags = [...(a.tagIds ?? [])].sort();
   const bTags = [...(b.tagIds ?? [])].sort();
   if (aTags.length !== bTags.length) return false;
@@ -5221,45 +5221,110 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
   const [appliedFilter, setAppliedFilter] = useState<WorkbenchReportFilter | null>(null);
   const [report, setReport] = useState<ReportDto | null>(null);
   const [details, setDetails] = useState<Array<Record<string, string | number | boolean | null>>>([]);
+  const [detailMetricKey, setDetailMetricKey] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"build" | "xlsx" | "png" | "pdf" | "">("");
+
+  const reportReqSeq = useRef(0);
+  const drillReqSeq = useRef(0);
+  // 记录当前正在执行的 buildReport 所提交的 filter 快照（请求进行中存在，完成后清理）
+  const pendingBuildFilterRef = useRef<WorkbenchReportFilter | null>(null);
+
+  // 只要草稿中的非范围字段与已应用不一致，或者当 draftFilter.workScope 与 appliedFilter.workScope 不一致时视为 stale
   const isStale = Boolean(report && appliedFilter && !reportFiltersMatch(draftFilter, appliedFilter));
 
   function serializeFilter(filter: WorkbenchReportFilter): ReportFilterDto {
     const { workScope, ...rest } = filter;
     return {
       ...rest,
+      region: filter.region && filter.region.trim() !== "" ? filter.region.trim() : null,
+      transportCompany:
+        filter.transportCompany && filter.transportCompany.trim() !== ""
+          ? filter.transportCompany.trim()
+          : null,
+      engineer: filter.engineer && filter.engineer.trim() !== "" ? filter.engineer.trim() : null,
       ...(workScope ? { workScope } : {}),
       ...(filter.tagIds ? { tagIds: [...filter.tagIds] } : {}),
     } as ReportFilterDto;
   }
-  async function build(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+
+  async function executeBuild(
+    filterToApply: WorkbenchReportFilter
+  ): Promise<void> {
+    const reqSeq = ++reportReqSeq.current;
+    pendingBuildFilterRef.current = filterToApply;
+    drillReqSeq.current++;
     setBusy("build");
     setError("");
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
-      const nextReport = await api.buildReport(serializeFilter(draftFilter));
+      const nextReport = await api.buildReport(serializeFilter(filterToApply));
+      if (reqSeq !== reportReqSeq.current) return;
       setReport(nextReport);
-      setAppliedFilter({ ...draftFilter, ...(draftFilter.tagIds ? { tagIds: [...draftFilter.tagIds] } : {}) });
+      setAppliedFilter({ ...filterToApply, ...(filterToApply.tagIds ? { tagIds: [...filterToApply.tagIds] } : {}) });
       setDetails([]);
+      setDetailMetricKey(null);
     } catch (cause) {
-      setError(messageOf(cause));
+      if (reqSeq === reportReqSeq.current) {
+        setError(messageOf(cause));
+      }
     } finally {
-      setBusy("");
+      if (reqSeq === reportReqSeq.current) {
+        pendingBuildFilterRef.current = null;
+        setBusy("");
+      }
     }
   }
+
+  async function build(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    await executeBuild(draftFilter);
+  }
+
+  function handleWorkScopeChange(newScope: "other" | "medium_large" | null): void {
+    // 只有在已选有效月份且已存在报表（appliedFilter 存在）或正有正在执行的手动计算时才自动更新报表
+    // 未初次计算时，仍需用户点击“实时计算报表”；已计算后切换工作范围，自动更新
+    const hasValidMonths = Boolean(
+      draftFilter.monthFrom &&
+      draftFilter.monthTo &&
+      draftFilter.monthFrom <= draftFilter.monthTo
+    );
+
+    if (hasValidMonths && (appliedFilter || pendingBuildFilterRef.current)) {
+      // 若当前有正在进行或刚发起的手动 build（如用户修改了 8 月点击手动计算尚未返回），
+      // 则以此最新请求所用的 filter + 新 scope 发最新请求，避免以旧月份（如 7 月）覆盖回退；
+      // 若无 pending 则以当前已应用的 appliedFilter 合并新范围。
+      const baseFilter = pendingBuildFilterRef.current ?? appliedFilter!;
+      const filterToApply: WorkbenchReportFilter = {
+        ...baseFilter,
+        workScope: newScope,
+      };
+      setDraftFilter((current) => ({ ...current, workScope: newScope }));
+      void executeBuild(filterToApply);
+    } else {
+      setDraftFilter((current) => ({ ...current, workScope: newScope }));
+    }
+  }
+
   async function drill(key: string): Promise<void> {
+    const reqSeq = ++drillReqSeq.current;
+    const currentReportSeq = reportReqSeq.current;
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
       if (!appliedFilter || isStale) return;
-      setDetails(await api.drillDown(key, serializeFilter(appliedFilter)));
+      const rows = await api.drillDown(key, serializeFilter(appliedFilter));
+      if (reqSeq !== drillReqSeq.current || currentReportSeq !== reportReqSeq.current) return;
+      setDetails(rows);
+      setDetailMetricKey(key);
     } catch (cause) {
-      setError(messageOf(cause));
+      if (reqSeq === drillReqSeq.current && currentReportSeq === reportReqSeq.current) {
+        setError(messageOf(cause));
+      }
     }
   }
+
   async function exportFile(format: "xlsx" | "png" | "pdf"): Promise<void> {
     setBusy(format);
     setError("");
@@ -5314,17 +5379,14 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
             ["medium_large", "中大型"],
           ]}
           onChange={(event) =>
-            setDraftFilter((old) => ({
-              ...old,
-              workScope: ((event.target.value as "other" | "medium_large") || null),
-            }))
+            handleWorkScopeChange(((event.target.value as "other" | "medium_large") || null))
           }
         />
         <Field name="reportTransportCompany" label="运输公司" placeholder="全部运输公司" help="留空表示全部运输公司" value={draftFilter.transportCompany ?? ""}
           onChange={(event) => setDraftFilter((old) => ({ ...old, transportCompany: event.target.value || null }))} />
         <Field name="reportEngineer" label="工程师" placeholder="全部工程师" help="留空表示全部工程师" value={draftFilter.engineer ?? ""}
           onChange={(event) => setDraftFilter((old) => ({ ...old, engineer: event.target.value || null }))} />
-        {(Boolean(draftFilter.region) || Boolean(draftFilter.tagIds?.length)) && (
+        {(Boolean(draftFilter.region?.trim()) || Boolean(draftFilter.tagIds?.length)) && (
           <div className="report-exclusion-notice notice" role="status" style={{ gridColumn: "1 / -1", margin: "4px 0" }}>
             {isStale || !appliedFilter
               ? "提示：项目区域或标签筛选仅适用于搬迁项目；点击计算后应用筛选，不关联项目的独立记录（含中大型项目开单）会被排除在统计、下钻及导出中。"
@@ -5410,14 +5472,17 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
       {details.length > 0 && !isStale && (
         <section className="report-details">
           <div className="report-section-head"><div><p className="overline">核对数据</p><h3>下钻明细</h3></div><span>{details.length} 行</span></div>
-          <div className="table-scroll"><table className="data-table"><thead><tr>{Object.keys(details[0] ?? {}).map((key) => <th key={key}>{reportColumnLabel(key)}</th>)}</tr></thead><tbody>{details.map((row, index) => <tr key={String(row.id ?? index)}>{Object.entries(row).map(([key,value]) => <td key={key}>{reportCellText(key, value)}</td>)}</tr>)}</tbody></table></div>
+          <div className="table-scroll"><table className="data-table"><thead><tr>{Object.keys(details[0] ?? {}).map((key) => <th key={key}>{reportColumnLabel(key, detailMetricKey)}</th>)}</tr></thead><tbody>{details.map((row, index) => <tr key={String(row.id ?? index)}>{Object.entries(row).map(([key,value]) => <td key={key}>{reportCellText(key, value, detailMetricKey)}</td>)}</tr>)}</tbody></table></div>
         </section>
       )}
     </div>
   );
 }
 
-function reportColumnLabel(key: string): string {
+function reportColumnLabel(key: string, metricKey?: string | null): string {
+  if (key === "customerName" && (metricKey === "monthly_service_order_count" || metricKey === "monthly_order")) {
+    return "客户单位";
+  }
   const labels: Record<string, string> = {
     id: "记录编号", itemId: "维修事项编号", projectId: "项目编号", projectTempNo: "项目临时编号",
     invoiceId: "掉票记录编号", orderId: "开单记录编号", feeId: "物流费用编号", batchId: "搬迁批次编号",
@@ -5438,7 +5503,7 @@ function reportColumnLabel(key: string): string {
   return labels[key] ?? "其他信息";
 }
 
-function reportCellText(key: string, value: string | number | boolean | null): string {
+function reportCellText(key: string, value: string | number | boolean | null, metricKey?: string | null): string {
   if (value === null) return "—";
   if (typeof value === "boolean") return value ? "是" : "否";
   const text = String(value);
@@ -5450,7 +5515,7 @@ function reportCellText(key: string, value: string | number | boolean | null): s
     typeCode: Object.fromEntries(QR_REQUEST_TYPE_LABEL),
   };
   if (key in enumLabels) return enumLabels[key]?.[text] ?? "其他";
-  if (reportColumnLabel(key) === "其他信息" && (/^[a-z]+(?:_[a-z0-9]+)+$/.test(text) || /[a-z][A-Z]/.test(text))) return "其他";
+  if (reportColumnLabel(key, metricKey) === "其他信息" && (/^[a-z]+(?:_[a-z0-9]+)+$/.test(text) || /[a-z][A-Z]/.test(text))) return "其他";
   return text;
 }
 

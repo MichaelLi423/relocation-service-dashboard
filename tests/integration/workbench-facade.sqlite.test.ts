@@ -1146,4 +1146,128 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     ).toThrow(/开单工作范围仅限|ILLEGAL_WORK_SCOPE/);
     expect((db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
   });
+
+  it('顶层与 action 项目 ID 冲突（空串/null/不一致）明确拒绝且零写入；一致与无 ID 独立开单保持兼容（task 2.2）', async () => {
+    const { facade, db } = await makeFacade();
+    const projectA = projectIdOf(
+      facade.v2Mutate({
+        op: 'create_project',
+        payload: wizard({ customerName: '冲突项目甲', region: 'East', ecc: 'ECC-CONFLICT-A' }),
+      }),
+    );
+    const projectB = projectIdOf(
+      facade.v2Mutate({
+        op: 'create_project',
+        payload: wizard({ customerName: '冲突项目乙', region: 'East', ecc: 'ECC-CONFLICT-B' }),
+      }),
+    );
+    const countBefore = (db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+    const countOrders = (): number =>
+      (db.prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+
+    // 1. 顶层真实 ID + action 空串（medium_large）：action 空串不得遮蔽顶层关联，明确拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: '',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'CONFLICT-EMPTY',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/项目 ID 冲突|V2_MUTATION_PROJECT_CONFLICT/);
+    expect(countOrders()).toBe(countBefore);
+
+    // 2. 顶层真实 ID + action null（medium_large）：同样拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: null as unknown as string,
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'CONFLICT-NULL',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      }),
+    ).toThrow(/项目 ID 冲突|V2_MUTATION_PROJECT_CONFLICT/);
+    expect(countOrders()).toBe(countBefore);
+
+    // 3. 顶层真实 ID + action 另一个不一致真实 ID（普通非中大型 pm 开单）：冲突拒绝且零写入
+    expect(() =>
+      facade.v2Mutate({
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: projectB,
+          values: {
+            orderType: 'pm',
+            serviceOrderNo: 'CONFLICT-MISMATCH',
+          },
+        },
+      }),
+    ).toThrow(/项目 ID 冲突|V2_MUTATION_PROJECT_CONFLICT/);
+    expect(countOrders()).toBe(countBefore);
+
+    // 4. 顶层与 action 一致：合法项目内开单保持成功（不改变合法原路径）
+    facade.v2Mutate({
+      op: 'submit_action',
+      projectId: projectA,
+      action: {
+        type: 'order',
+        projectId: projectA,
+        values: { orderType: 'pm', serviceOrderNo: 'CONSISTENT-OK' },
+      },
+    });
+    const consistent = db
+      .prepare('SELECT project_id FROM service_orders WHERE service_order_no = ?')
+      .get('CONSISTENT-OK') as { project_id: string };
+    expect(consistent.project_id).toBe(projectA);
+
+    // 5. 顶层真实 ID + action 未提供（undefined）：仍按既有路径补齐并成功关联
+    facade.v2Mutate({
+      op: 'submit_action',
+      projectId: projectA,
+      action: {
+        type: 'order',
+        values: { orderType: 'pm', serviceOrderNo: 'TOPLEVEL-MERGE-OK' },
+      },
+    });
+    const merged = db
+      .prepare('SELECT project_id FROM service_orders WHERE service_order_no = ?')
+      .get('TOPLEVEL-MERGE-OK') as { project_id: string };
+    expect(merged.project_id).toBe(projectA);
+
+    // 6. 顶层与 action 均缺省：无 ID 独立中大型开单保持成功
+    facade.v2Mutate({
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'certification',
+          serviceOrderNo: 'INDEPENDENT-STILL-OK',
+          customerName: '独立客户',
+        },
+      },
+    });
+    const independent = db
+      .prepare('SELECT project_id, work_scope FROM service_orders WHERE service_order_no = ?')
+      .get('INDEPENDENT-STILL-OK') as { project_id: string | null; work_scope: string };
+    expect(independent.project_id).toBeNull();
+    expect(independent.work_scope).toBe('medium_large');
+  });
 });

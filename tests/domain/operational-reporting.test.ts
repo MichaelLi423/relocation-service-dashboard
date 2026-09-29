@@ -1371,3 +1371,60 @@ describe('项目分类标签筛选（add-project-tags reporting lane）', () => 
     expect(filtered.serialAddressUpdates).toEqual([]);
   });
 });
+
+describe('项目维度约束：区域/标签筛选排除无项目独立工作量（add-independent-large-project-orders）', () => {
+  it('三类工作量指标定义声明支持 region 与 tagIds 筛选', () => {
+    for (const key of ['ship_to_request_workload', 'qr_request_workload', 'serial_address_update_count'] as const) {
+      const def = REPORT_METRIC_DEFINITIONS.find((d) => d.key === key);
+      expect(def, `指标 ${key} 缺口径定义`).toBeDefined();
+      expect(def!.filters).toContain('region');
+      expect(def!.filters).toContain('tagIds');
+    }
+  });
+
+  it('无 region/tag 时三类工作量正常；region only / tag only / region+tag 均从指标与下钻排除', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject({ id: 'p1', region: 'East' })];
+    facts.shipToRequests = [makeShipToRequest({ status: 'processing', submittedAt: '2026-07-05' })];
+    facts.qrRequests = [makeQrRequest({ types: ['A', 'B'] })];
+    facts.serialAddressUpdates = [makeSerialUpdate({ id: 'u1' })];
+
+    // 无项目维度约束：三类工作量正常计算、状态不变。
+    const baseline = service.buildReport(JULY);
+    expect(baseline.filters.region).toBeNull();
+    expect(baseline.shipToWorkload.reduce((s, r) => s + r.count, 0)).toBe(1);
+    expect(baseline.qrWorkload.reduce((s, r) => s + r.count, 0)).toBe(2);
+    expect(baseline.serialAddressUpdates.reduce((s, r) => s + r.count, 0)).toBe(1);
+    expect(service.getMetricDetails('ship_to_request_workload', JULY)).toHaveLength(1);
+    expect(service.getMetricDetails('qr_request_workload', JULY)).toHaveLength(2);
+    expect(service.getMetricDetails('serial_address_update_count', JULY)).toHaveLength(1);
+
+    // region only：独立事实无项目区域，全部排除。
+    const regionOnly = service.buildReport({ ...JULY, region: 'East' });
+    expect(regionOnly.shipToWorkload).toEqual([]);
+    expect(regionOnly.qrWorkload).toEqual([]);
+    expect(regionOnly.serialAddressUpdates).toEqual([]);
+    expect(service.getMetricDetails('ship_to_request_workload', { ...JULY, region: 'East' })).toEqual([]);
+    expect(service.getMetricDetails('qr_request_workload', { ...JULY, region: 'East' })).toEqual([]);
+    expect(service.getMetricDetails('serial_address_update_count', { ...JULY, region: 'East' })).toEqual([]);
+
+    // tag only：独立事实无项目标签，全部排除。
+    Object.assign(facts, {
+      listProjectTagAssignments: () => [{ projectId: 'p1', tagId: 'tag-a' }],
+      listProjectTagIds: () => ['tag-a'],
+    });
+    const tagOnly = service.buildReport({ ...JULY, tagIds: ['tag-a'] });
+    expect(tagOnly.shipToWorkload).toEqual([]);
+    expect(tagOnly.qrWorkload).toEqual([]);
+    expect(tagOnly.serialAddressUpdates).toEqual([]);
+    expect(service.getMetricDetails('ship_to_request_workload', { ...JULY, tagIds: ['tag-a'] })).toEqual([]);
+    expect(service.getMetricDetails('qr_request_workload', { ...JULY, tagIds: ['tag-a'] })).toEqual([]);
+    expect(service.getMetricDetails('serial_address_update_count', { ...JULY, tagIds: ['tag-a'] })).toEqual([]);
+
+    // region + tag：同样排除，且不因标签命中项目而误纳独立事实。
+    const combined = service.buildReport({ ...JULY, region: 'East', tagIds: ['tag-a'] });
+    expect(combined.shipToWorkload).toEqual([]);
+    expect(combined.qrWorkload).toEqual([]);
+    expect(combined.serialAddressUpdates).toEqual([]);
+  });
+});

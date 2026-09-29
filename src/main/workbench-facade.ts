@@ -307,10 +307,7 @@ export class WorkbenchFacade {
       }
       case 'submit_action': {
         const action = request.action!;
-        // 请求顶层 projectId 未写入 action 时补齐（writeSubmitAction 以 payload.projectId 为归属）。
-        if (action.projectId === undefined && request.projectId) {
-          action.projectId = request.projectId;
-        }
+        this.normalizeSubmitActionProjectId(request.projectId, action);
         const ref = this.writeSubmitAction(action);
         changed = { projectId: ref.projectId };
         switch (action.type) {
@@ -1109,6 +1106,37 @@ export class WorkbenchFacade {
       throw new ValidationError('V2_MUTATION_FIELDS_FORBIDDEN', `记录编辑不允许字段: ${extra.join('、')}`);
     }
     return payload as Record<string, unknown>;
+  }
+
+  /**
+   * submit_action 顶层 projectId 与 action.projectId 的一致性归并/冲突拒绝。
+   * - 顶层提供非空真实 ID 而 action 未提供：补齐（writeSubmitAction 以 payload.projectId
+   *   为归属），保持既有合法调用（项目上下文表单）兼容；
+   * - 顶层提供非空真实 ID 而 action 提供空串/null/其他不一致值：明确拒绝且零写入，
+   *   避免 action 空串遮蔽顶层关联（如中大型开单绕过领域拒绝被当作独立开单保存）；
+   * - 顶层未提供：保持 action 原路径不变（独立开单与仅 action.projectId 的调用）。
+   */
+  private normalizeSubmitActionProjectId(
+    topLevelProjectId: string | undefined,
+    action: WorkbenchActionPayload,
+  ): void {
+    const topLevel = typeof topLevelProjectId === 'string' ? topLevelProjectId.trim() : '';
+    if (topLevel === '') {
+      return;
+    }
+    const rawActionProjectId = (action as { projectId?: unknown }).projectId;
+    if (rawActionProjectId === undefined) {
+      action.projectId = topLevel;
+      return;
+    }
+    const actionProjectId = rawActionProjectId === null ? '' : String(rawActionProjectId).trim();
+    if (actionProjectId !== topLevel) {
+      throw new ValidationError(
+        'V2_MUTATION_PROJECT_CONFLICT',
+        '提交动作的项目 ID 冲突：顶层 projectId 与 action.projectId 不一致',
+      );
+    }
+    action.projectId = topLevel;
   }
 
   private writeSubmitAction(payload: WorkbenchActionPayload): { projectId?: string } {

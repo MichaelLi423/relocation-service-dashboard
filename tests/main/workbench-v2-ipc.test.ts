@@ -919,4 +919,134 @@ describe('IPC：中大型项目开单独立提交与非法关联（task 2.2）',
     ).rejects.toMatchObject({ code: 'ILLEGAL_WORK_SCOPE' });
     expect((ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n).toBe(countBefore);
   });
+
+  it('submit_action 经 IPC：顶层与 action 项目 ID 冲突（空串/null/不一致）拒绝且零写入；一致/无 ID 独立开单保持兼容', async () => {
+    const ctx = await loggedIn();
+    const bus = ctx.bus;
+
+    const createdA = (await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'create_project',
+      payload: {
+        intent: 'formal',
+        customerName: '冲突项目甲IPC',
+        ecc: 'ECC-IPC-CONFLICT-A',
+        region: 'East',
+        instrumentCount: 1,
+        contractAmount: '1000',
+      },
+    } as WorkbenchV2MutationRequest)) as { changed: { projectId: string } };
+    const projectA = createdA.changed.projectId;
+    const createdB = (await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'create_project',
+      payload: {
+        intent: 'formal',
+        customerName: '冲突项目乙IPC',
+        ecc: 'ECC-IPC-CONFLICT-B',
+        region: 'East',
+        instrumentCount: 1,
+        contractAmount: '1000',
+      },
+    } as WorkbenchV2MutationRequest)) as { changed: { projectId: string } };
+    const projectB = createdB.changed.projectId;
+
+    const countBefore = (ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+    const countOrders = (): number =>
+      (ctx.db().prepare('SELECT COUNT(*) AS n FROM service_orders').get() as { n: number }).n;
+
+    // 1. 顶层真实 ID + action 空串（medium_large）：冲突拒绝且零写入（请求转换层保留两边 ID 才会触发）
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: '',
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'IPC-CONFLICT-EMPTY',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'V2_MUTATION_PROJECT_CONFLICT' });
+    expect(countOrders()).toBe(countBefore);
+
+    // 2. 顶层真实 ID + action null（medium_large）：冲突拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: null,
+          values: {
+            workScope: 'medium_large',
+            orderType: 'relocation',
+            serviceOrderNo: 'IPC-CONFLICT-NULL',
+            customerName: '某客户',
+            orderedAt: '2026-08-11',
+          },
+        },
+      } as unknown as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'V2_MUTATION_PROJECT_CONFLICT' });
+    expect(countOrders()).toBe(countBefore);
+
+    // 3. 顶层真实 ID + action 另一个不一致真实 ID（普通非中大型 pm 开单）：冲突拒绝且零写入
+    await expect(
+      bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+        op: 'submit_action',
+        projectId: projectA,
+        action: {
+          type: 'order',
+          projectId: projectB,
+          values: { orderType: 'pm', serviceOrderNo: 'IPC-CONFLICT-MISMATCH' },
+        },
+      } as WorkbenchV2MutationRequest),
+    ).rejects.toMatchObject({ code: 'V2_MUTATION_PROJECT_CONFLICT' });
+    expect(countOrders()).toBe(countBefore);
+
+    // 4. 顶层与 action 一致：合法项目内开单保持成功
+    await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'submit_action',
+      projectId: projectA,
+      action: {
+        type: 'order',
+        projectId: projectA,
+        values: { orderType: 'pm', serviceOrderNo: 'IPC-CONSISTENT-OK' },
+      },
+    } as WorkbenchV2MutationRequest);
+    const consistent = ctx.db().prepare('SELECT project_id FROM service_orders WHERE service_order_no = ?').get('IPC-CONSISTENT-OK') as { project_id: string };
+    expect(consistent.project_id).toBe(projectA);
+
+    // 5. 顶层真实 ID + action 未提供（undefined）：仍按既有路径补齐并成功关联
+    await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'submit_action',
+      projectId: projectA,
+      action: {
+        type: 'order',
+        values: { orderType: 'pm', serviceOrderNo: 'IPC-TOPLEVEL-MERGE-OK' },
+      },
+    } as WorkbenchV2MutationRequest);
+    const merged = ctx.db().prepare('SELECT project_id FROM service_orders WHERE service_order_no = ?').get('IPC-TOPLEVEL-MERGE-OK') as { project_id: string };
+    expect(merged.project_id).toBe(projectA);
+
+    // 6. 顶层与 action 均缺省：无 ID 独立中大型开单保持成功
+    await bus.invoke(IPC_CHANNELS.workbenchV2Mutate, 100, {
+      op: 'submit_action',
+      action: {
+        type: 'order',
+        values: {
+          workScope: 'medium_large',
+          orderType: 'certification',
+          serviceOrderNo: 'IPC-INDEPENDENT-STILL-OK',
+          customerName: '独立客户',
+        },
+      },
+    } as WorkbenchV2MutationRequest);
+    const independent = ctx.db().prepare('SELECT project_id, work_scope FROM service_orders WHERE service_order_no = ?').get('IPC-INDEPENDENT-STILL-OK') as { project_id: string | null; work_scope: string };
+    expect(independent.project_id).toBeNull();
+    expect(independent.work_scope).toBe('medium_large');
+  });
 });

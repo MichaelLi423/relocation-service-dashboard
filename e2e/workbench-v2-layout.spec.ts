@@ -323,16 +323,19 @@ test('中大型项目开单端到端验收：四类独立保存、preload 历史
       expect(row!.workScope, '中大型开单 workScope 必须为 medium_large').toBe('medium_large');
     }
 
-    // 5. 验证报表界面中大型筛选与下钻明细一致性
+    // 5. 验证报表界面中大型筛选与下钻明细一致性（已选月份后切换工作范围自动重新计算开单指标，无需额外点击计算）
     await nav.getByRole('button', { name: '运营报表', exact: true }).click();
     const reportDialog = page.getByRole('dialog', { name: '运营报表' });
     await expect(reportDialog).toBeVisible();
     await reportDialog.getByLabel(/起始月份/).fill(currentMonth);
     await reportDialog.getByLabel(/截止月份/).fill(currentMonth);
-    await reportDialog.getByLabel(/工作范围/).selectOption('medium_large');
+    // 初次计算报表
     await reportDialog.getByRole('button', { name: '实时计算报表' }).click();
-
     const orderSection = reportDialog.locator('.report-section').filter({ hasText: '月度开单' });
+    await expect(orderSection).toBeVisible();
+
+    // 切换到“中大型”工作范围筛选：指标自动更新，无需额外点击“实时计算报表”
+    await reportDialog.getByLabel(/工作范围/).selectOption('medium_large');
     await expect(orderSection).toBeVisible();
     await orderSection.getByRole('button', { name: '查看明细' }).click();
 
@@ -340,6 +343,7 @@ test('中大型项目开单端到端验收：四类独立保存、preload 历史
     await expect(detailsSection).toBeVisible();
     await expect(detailsSection.getByText(orders[0].customer)).toBeVisible();
     await expect(detailsSection.getByText('工作范围')).toBeVisible();
+    await expect(detailsSection.getByText('客户单位')).toBeVisible();
     await expect(detailsSection.getByText('中大型').first()).toBeVisible();
 
     await reportDialog.getByRole('button', { name: '关闭' }).click();
