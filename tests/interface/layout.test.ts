@@ -6,6 +6,11 @@ describe('workbench-interface 桌面布局静态约束', () => {
   const css = readFileSync(join(process.cwd(), 'src/renderer/styles.css'), 'utf8');
   const renderer = readFileSync(join(process.cwd(), 'src/renderer/components/workbench-v2.tsx'), 'utf8');
 
+  it('开单记录表将开单类型代码显示为中文名称', () => {
+    expect(renderer).toContain('formatCell(column, sectionCellValue(row, column))');
+    expect(renderer).toMatch(/if \(column === "orderType"\)[\s\S]*?relocation: "搬迁", certification: "认证", parts_by_mail: "单寄备件", pm: "PM"/);
+  });
+
   it('正文、数据和控件使用统一的系统字体与 4px 间距基线', () => {
     expect(css).toContain('font-size:14px');
     expect(css).toContain('font-size:12px');

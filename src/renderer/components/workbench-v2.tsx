@@ -2551,6 +2551,8 @@ function formatCell(column: string, value: unknown): ReactNode {
       : <span className="record-state qr-unmarked">未申请</span>;
   if (column === "engineer" && (value === null || value === "")) return "待补";
   if (value === null || value === "") return "—";
+  if (column === "orderType")
+    return ({ relocation: "搬迁", certification: "认证", parts_by_mail: "单寄备件", pm: "PM" } as Record<string, string>)[String(value)] ?? String(value);
   if (typeof value === "boolean") return value ? "是" : "否";
   if (column === "amount") return money(String(value));
   if (column === "lastModifiedAt") return isoDateTime(String(value));
