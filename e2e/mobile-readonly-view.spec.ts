@@ -94,9 +94,8 @@ async function expectProjectCard(page: Page, customer: string): Promise<void> {
   await expect(projectCardByName(page, customer).locator('.mr-project-name')).toContainText(customer);
 }
 
-/** 当前可见记录类型；服务端仍兼容含上门活动的历史快照。 */
+/** 当前可见记录类型（从 5 类变 4 类，批次与上门活动均已下线，服务端快照仍兼容底层数据）。 */
 const RECORD_KINDS = [
-  ['batches', '批次'],
   ['instruments', '仪器'],
   ['orders', '开单'],
   ['invoices', '掉票'],
@@ -105,6 +104,7 @@ const RECORD_KINDS = [
 
 async function verifySixRecordKindsSecondPage(page: Page): Promise<void> {
   const recordTypes = page.getByRole('group', { name: '记录类型' });
+  await expect(recordTypes.getByRole('button', { name: '批次' })).toHaveCount(0);
   await expect(recordTypes.getByRole('button', { name: '上门活动' })).toHaveCount(0);
   for (const [kind, label] of RECORD_KINDS) {
     await recordTypes.getByRole('button', { name: label }).click();
@@ -288,7 +288,7 @@ test('完整刷新且服务不可达时浏览器页面不可用（no-store 无�
 });
 
 for (const width of [360, 390]) {
-  test(`手机只读专项 ${width}px：打开合成客户-00核验上门活动入口下线、5类记录展示与第二页分页正常及含activities快照兼容（本次迭代）`, async ({ browser }) => {
+  test(`手机只读专项 ${width}px：打开合成客户-00核验批次与上门活动入口下线、4类记录展示与第二页分页正常及历史快照兼容（本次迭代）`, async ({ browser }) => {
     test.setTimeout(60_000);
     const service = await startPublishedViewService();
     try {
@@ -309,11 +309,19 @@ for (const width of [360, 390]) {
         await expect(baseInfo).toContainText('synthetic-project-00');
         await expect(baseInfo).toContainText('合成客户-00');
 
-        // 验证记录类型中无「上门活动」按钮
+        // 验证刚打开详情时默认记录 heading 为「仪器」，且没有批次记录/上门活动记录
+        const recordHeading = page.locator('.mr-record-heading');
+        await expect(recordHeading).toHaveText('仪器');
+        const recordsSection = page.getByRole('region', { name: '关联记录' });
+        await expect(recordsSection).not.toContainText('p0-batches');
+        await expect(recordsSection).not.toContainText('p0-activities');
+
+        // 验证记录类型中无「批次」与「上门活动」按钮
         const recordTypes = page.getByRole('group', { name: '记录类型' });
+        await expect(recordTypes.getByRole('button', { name: '批次' })).toHaveCount(0);
         await expect(recordTypes.getByRole('button', { name: '上门活动' })).toHaveCount(0);
 
-        // 验证其余 5 类记录的展示与第 2 页翻页能力，且全程无横向溢出
+        // 验证其余 4 类记录的展示与第 2 页翻页能力，且全程无横向溢出
         for (const [kind, label] of RECORD_KINDS) {
           const tabBtn = recordTypes.getByRole('button', { name: label });
           await expect(tabBtn).toBeVisible();
@@ -327,7 +335,7 @@ for (const width of [360, 390]) {
           await expectNoHorizontalOverflow(page);
         }
 
-        // 验证包含 activities 的历史快照在存在底层数据时页面稳定正常，返回列表亦无异常
+        // 验证包含 activities 和 batches 的历史快照在存在底层数据时页面稳定正常，返回列表亦无异常
         await page.getByRole('button', { name: '← 返回项目列表' }).click();
         await expect(page.getByRole('heading', { name: '项目工作台' })).toBeVisible();
         await expectNoHorizontalOverflow(page);

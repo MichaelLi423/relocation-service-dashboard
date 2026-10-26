@@ -1,3 +1,4 @@
+import { seedHistoricalBatch } from '../helpers/historical-batch';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { SqliteAccountRepository } from '../../src/domain/capabilities/local-data-persistence/repositories';
@@ -101,11 +102,7 @@ describe('关键路径跨模块演练（tasks 10.2）', () => {
     expect(detail.formallyEntered).toBe(false);
 
     // 优先上门：批次开始运输 → 主状态保持待进单（未进单先执行标签约束）
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-05', transportCompany: '紧急运输', appliedAt: '2026-08-04', budgetPrice: '1000', dealPrice: '1000' } },
-    });
+    seedHistoricalBatch(ctx.db, projectId, { planTransportDate: '2026-08-05', transportCompany: '紧急运输', appliedAt: '2026-08-04', budgetPrice: '1000', dealPrice: '1000' });
     // 单条登记仪器（新建项目只记录 instrumentCount，不生成虚拟仪器）
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'instrument', projectId, values: { name: '搬迁仪器', ups: false, qrRequested: false } } });
     const instrumentId = String(facade.v2SectionPage({ projectId, kind: 'instruments' }).rows[0].id);
@@ -476,7 +473,7 @@ describe('关键路径跨模块演练（tasks 10.2）', () => {
     });
     const projectId = projectIdOf(created);
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-11', amount: '40000' } } });
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '报表运输', appliedAt: '2026-08-09', budgetPrice: '10000', dealPrice: '9000' } } });
+    seedHistoricalBatch(ctx.db, projectId, { planTransportDate: '2026-08-10', transportCompany: '报表运输', appliedAt: '2026-08-09', budgetPrice: '10000', dealPrice: '9000' });
 
     // 手工月份区间
     const report = facade.reportDto({ monthFrom: '2026-08', monthTo: '2026-08' });

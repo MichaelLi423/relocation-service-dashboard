@@ -13,7 +13,7 @@ import type { MobileReadonlyOverviewData, MobileReadonlyProjectListData, MobileR
 import { startMobileReadonlyService, type RunningMobileReadonlyService } from '../../src/server/mobile-readonly/service';
 import { MOBILE_READONLY_DEFAULT_CONFIG } from '../../src/server/mobile-readonly/config';
 import { generateCredentialsFile } from '../../src/server/mobile-readonly/credentials';
-import { makeBatchRecordFixture, makeProjectFixture, makeSampleProjectRecordsFixture, makeSnapshotFixture } from '../helpers/mobile-readonly-fixtures';
+import { makeBatchRecordFixture, makeInstrumentRecordFixture, makeProjectFixture, makeSampleProjectRecordsFixture, makeSnapshotFixture } from '../helpers/mobile-readonly-fixtures';
 
 // jsdom and undici use different AbortSignal realms. Forward cancellation, not the foreign signal.
 function bridgeAbortSignal(source?: AbortSignal | null) {
@@ -78,7 +78,9 @@ it('真实只读服务：概览包络、空查询参数、详情记录及自动�
       const records = makeSampleProjectRecordsFixture();
       const snapshot = makeSnapshotFixture({ businessRevision: version,
         projects: [makeProjectFixture({ customerName: `真实服务合成客户V${version}`, records: {
-          ...records, batches: [makeBatchRecordFixture(0, { transportCompany: `真实服务承运商V${version}` })],
+          ...records,
+          instruments: [makeInstrumentRecordFixture(0, { name: `真实服务仪器V${version}` })],
+          batches: [makeBatchRecordFixture(0, { transportCompany: `真实服务承运商V${version}` })],
         } })],
       });
       const response = await nodeFetch(`${baseUrl}/api/publish`, {
@@ -180,9 +182,9 @@ it('真实只读服务：概览包络、空查询参数、详情记录及自动�
     expect(projectQuery.searchParams.get('limit')).toBe('20');
     fireEvent.click(screen.getByText('真实服务合成客户V1'));
     await act(async () => { await waitForView('详情记录 V1', (state) => state.view?.metadata.currentVersion === 1 && state.view.navigation.page === 'detail' && Boolean(state.view.records)); });
-    expect(screen.getByText('真实服务承运商V1')).toBeTruthy();
+    expect(screen.getByText('真实服务仪器V1')).toBeTruthy();
     expect(requests.some((url) => url.pathname === '/api/project' && url.searchParams.get('id') === 'fixture-project-1')).toBe(true);
-    expect(requests.some((url) => url.pathname === '/api/records' && url.searchParams.get('kind') === 'batches' && url.searchParams.get('cursor') === '')).toBe(true);
+    expect(requests.some((url) => url.pathname === '/api/records' && url.searchParams.get('kind') === 'instruments' && url.searchParams.get('cursor') === '')).toBe(true);
     await publish(2);
     // Advance the injected timer queue, not check()/refresh or a lifecycle event.
     act(() => {
@@ -192,10 +194,10 @@ it('真实只读服务：概览包络、空查询参数、详情记录及自动�
       }
     });
     await act(async () => { await waitForView('定时更新 V2', (state) => state.view?.metadata.currentVersion === 2 && state.view.navigation.page === 'detail' && Boolean(state.view.records)); });
-    expect(screen.getByText('真实服务承运商V2')).toBeTruthy();
+    expect(screen.getByText('真实服务仪器V2')).toBeTruthy();
     expect(screen.getByText('真实服务合成客户V2')).toBeTruthy();
     expect(screen.queryByText('真实服务合成客户V1')).toBeNull();
-    expect(screen.queryByText('真实服务承运商V1')).toBeNull();
+    expect(screen.queryByText('真实服务仪器V1')).toBeNull();
     expect(controller.getSnapshot().view?.metadata.currentVersion).toBe(2);
     expect(triggers.map((entry) => entry.reason)).toEqual(['open', 'periodic']);
     expect(triggers[1].at - triggers[0].at).toBeLessThanOrEqual(60_000);

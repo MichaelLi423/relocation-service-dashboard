@@ -4,7 +4,7 @@ import { Money, formatCents } from '../domain/core/money';
 import { ValidationError } from '../domain/core/errors';
 import { SystemClock, assertValidBusinessDate } from '../domain/core/time';
 import { CustomerService, ProjectService, isFormallyEntered, isTerminal, type ProjectStatusOrCancelled } from '../domain/capabilities/relocation-project-lifecycle';
-import { ExecutionService, type BatchQuoteInput, type LogisticsFeeInput } from '../domain/capabilities/relocation-execution';
+import { ExecutionService } from '../domain/capabilities/relocation-execution';
 import { ServiceOrderService, type ServiceOrderWorkScope } from '../domain/capabilities/service-order-recording';
 import { ReminderService } from '../domain/capabilities/workbench-todos';
 import { ShipToService } from '../domain/capabilities/ship-to-management';
@@ -31,7 +31,7 @@ import { readBusinessRevision } from '../domain/capabilities/local-data-persiste
 import { WorkbenchDeletePolicies } from './workbench-delete';
 import { DELETE_REJECTION_CODES, WIZARD_REJECTION_CODES } from '../shared/ipc';
 import type {
-  AccountSessionInfo, BatchEditPayload, DataCleanConfirmRequestDto, DataCleanConfirmResultDto,
+  AccountSessionInfo, DataCleanConfirmRequestDto, DataCleanConfirmResultDto,
   DataCleanPrepareDto, InstrumentBulkImportPayload, ProjectSupplementPayload,
   ProjectUpdatePayload, ProjectWizardPayload, ReportDto, ReportFilterDto, ShipToRequestDto,
   ShipToRequestInputDto, ShipToRequestResultDto, ShipToRequestStatus, WorkbenchActionPayload,
@@ -364,10 +364,7 @@ export class WorkbenchFacade {
         break;
       }
       case 'batch_edit': {
-        const edit = request.payload as BatchEditPayload;
-        const ref = this.writeEditBatch(edit);
-        changed = { projectId: ref.projectId, batchId: ref.batchId };
-        break;
+        throw new ValidationError('LOGISTICS_DISABLED', '物流费用与运输批次登记已下线，历史数据保留');
       }
       case 'instrument_bulk_import': {
         const bulk = request.payload as InstrumentBulkImportPayload;
@@ -1155,54 +1152,7 @@ export class WorkbenchFacade {
     }
     this.transaction(() => {
       switch (payload.type) {
-        case 'batch': {
-          // 快速记录搬迁批次（全部字段可选）：同一事务原子创建批次；任一费用字段
-          // 有值（非空串）时创建该批次唯一一笔（可部分）物流费用，全空时仅建批次。
-          // 仅两个价格口径——budgetPrice=合同预算价 → batch.originalPriceCents + fee.budgetPriceCents；
-          // dealPrice=物流成交价 → batch.discountedPriceCents + fee.dealPriceCents +
-          // fee.logisticsCostCents（物流成交价即最终实际费用）。
-          // 空金额不得转 0、空日期不得默认当天（undefined/null/空串 = 未填写）。
-          const execution = this.executionService();
-          const batch = execution.createBatch(projectId, actor);
-          const quote: BatchQuoteInput = {};
-          const feeInput: LogisticsFeeInput = {};
-          const planTransportDate = businessDate(v.planTransportDate, '计划运输日期');
-          if (planTransportDate !== undefined) {
-            quote.planTransportDate = planTransportDate;
-          }
-          if (optional(v.transportCompany) !== undefined) {
-            quote.transportCompany = optional(v.transportCompany) ?? null;
-          }
-          const budgetPriceRaw = optional(v.budgetPrice);
-          if (budgetPriceRaw !== undefined) {
-            const budgetPriceCents = parseAmountInput(budgetPriceRaw);
-            if (budgetPriceCents <= 0n) {
-              throw new ValidationError('LOGISTICS_BUDGET_PRICE_REQUIRED', '快速记录搬迁批次：合同预算价有值时必须大于 0');
-            }
-            quote.originalPriceCents = budgetPriceCents;
-            feeInput.budgetPriceCents = budgetPriceCents;
-          }
-          const dealPriceRaw = optional(v.dealPrice);
-          if (dealPriceRaw !== undefined) {
-            const dealPriceCents = parseAmountInput(dealPriceRaw);
-            if (dealPriceCents < 0n) {
-              throw new ValidationError('LOGISTICS_DEAL_PRICE_REQUIRED', '快速记录搬迁批次：物流成交价有值时不得为负数');
-            }
-            quote.discountedPriceCents = dealPriceCents;
-            // 人工录入始终 deal_price 与 logistics_cost 同步（物流成交价即最终实际费用）。
-            feeInput.dealPriceCents = dealPriceCents;
-            feeInput.logisticsCostCents = dealPriceCents;
-          }
-          const appliedAt = businessDate(v.appliedAt, '物流费用申请（登记）日期');
-          if (appliedAt !== undefined) {
-            feeInput.appliedAt = appliedAt;
-          }
-          if (Object.values(feeInput).some((value) => value !== undefined && value !== null)) {
-            execution.recordLogisticsFee(batch.id, feeInput, actor);
-          }
-          execution.updateBatchQuote(batch.id, quote, actor);
-          break;
-        }
+        case 'batch': throw new ValidationError('LOGISTICS_DISABLED', '物流费用与运输批次登记已下线，历史数据保留');
         case 'instrument': this.executionService().registerInstrument(projectId,{name:text(v.name),manufacturer:optional(v.manufacturer),model:optional(v.model),serviceLevel:optional(v.serviceLevel),serialNo:optional(v.serialNo),batchId:optional(v.batchId),ups:requiredBoolean(v.ups, 'UPS'),qrRequested:requiredBoolean(v.qrRequested, '二维码申请')},actor); break;
         case 'visit': throw new ValidationError('VISIT_DISABLED', '到访登记已下线，历史执行事实保留');
         case 'order': {
@@ -1257,37 +1207,7 @@ export class WorkbenchFacade {
           }, actor);
           break;
         }
-        case 'logistics': {
-          // 记录物流费用（部分费用语义）：全部字段可选；空金额不得转 0、空日期不得
-          // 默认当天；dealPrice 有值时与 logisticsCost 同步（物流成交价即最终实际费用）。
-          const feeInput: LogisticsFeeInput = {};
-          const appliedAt = businessDate(v.appliedAt, '物流费用申请（登记）日期');
-          if (appliedAt !== undefined) {
-            feeInput.appliedAt = appliedAt;
-          }
-          const budgetPriceRaw = optional(v.budgetPrice);
-          if (budgetPriceRaw !== undefined) {
-            const budgetPriceCents = parseAmountInput(budgetPriceRaw);
-            if (budgetPriceCents <= 0n) {
-              throw new ValidationError('LOGISTICS_BUDGET_PRICE_REQUIRED', '记录物流费用：合同预算价有值时必须大于 0');
-            }
-            feeInput.budgetPriceCents = budgetPriceCents;
-          }
-          const dealPriceRaw = optional(v.dealPrice);
-          if (dealPriceRaw !== undefined) {
-            const dealPriceCents = parseAmountInput(dealPriceRaw);
-            if (dealPriceCents < 0n) {
-              throw new ValidationError('LOGISTICS_DEAL_PRICE_REQUIRED', '记录物流费用：物流成交价有值时不得为负数');
-            }
-            feeInput.dealPriceCents = dealPriceCents;
-            feeInput.logisticsCostCents = dealPriceCents;
-          }
-          if (!Object.values(feeInput).some((value) => value !== undefined && value !== null)) {
-            throw new ValidationError('LOGISTICS_FEE_EMPTY', '记录物流费用：至少需要填写一项费用信息');
-          }
-          this.executionService().recordLogisticsFee(text(v.batchId), feeInput, actor);
-          break;
-        }
+        case 'logistics': throw new ValidationError('LOGISTICS_DISABLED', '物流费用与运输批次登记已下线，历史数据保留');
         case 'acceptance': this.projectService().markAcceptance(projectId,text(v.reportDate)); break;
         case 'invoice': this.financialService().recordInvoice(projectId,{invoicedAt:businessDate(v.invoicedAt,'掉票日期') ?? '',amountCents:parseAmountInput(v.amount)},actor); break;
         case 'ship_to': {
@@ -1373,76 +1293,6 @@ export class WorkbenchFacade {
       request = this.shipToService().complete(requestId, accountId, this.actor());
     });
     return request!;
-  }
-
-  /**
-   * 编辑搬迁批次（v2 batch_edit，同一事务内原子落库）：
-   * - 计划运输日期/运输公司写批次（undefined=保持；null/空串=清空）；
-   * - 合同预算价 → batch.originalPriceCents + fee.budgetPriceCents（undefined=保持；null=清空）；
-   * - 物流成交价 → batch.discountedPriceCents + fee.dealPriceCents + fee.logisticsCostCents
-   *   （物流成交价即最终实际费用；undefined=保持；null=清空）；
-   * - appliedAt（费用登记日期）可补、改、清空（修改影响报表归属月份）；
-   * - 费用 upsert seam：缺 fee 时按需创建部分费用（仅提交 null/undefined 时不虚构记录），
-   *   已有 fee 时部分更新（undefined 字段保持现值）。
-   */
-  private writeEditBatch(edit: BatchEditPayload): { projectId: string; batchId: string } {
-    let projectId = '';
-    this.transaction(() => {
-      const execution = this.executionService();
-      const actor = this.actor();
-      const batch = this.batches.findById(edit.batchId);
-      if (!batch) {
-        throw new ValidationError('BATCH_NOT_FOUND', `搬迁批次不存在: ${edit.batchId}`);
-      }
-      projectId = batch.projectId;
-      const quote: BatchQuoteInput = {};
-      const feeInput: LogisticsFeeInput = {};
-      if (edit.planTransportDate !== undefined) {
-        const raw = text(edit.planTransportDate);
-        quote.planTransportDate = raw === '' ? null : raw;
-      }
-      if (edit.transportCompany !== undefined) {
-        quote.transportCompany = edit.transportCompany === null ? null : text(edit.transportCompany);
-      }
-      if (edit.budgetPrice !== undefined) {
-        // 空串视为缺失报错（不得静默当 0）；null = 清空；有值覆盖（> 0 由领域校验）。
-        if (String(edit.budgetPrice).trim() === '') {
-          throw new ValidationError('LOGISTICS_BUDGET_PRICE_REQUIRED', '编辑搬迁批次：合同预算价有值时必须大于 0');
-        }
-        const budgetPriceCents = edit.budgetPrice === null ? null : parseAmountInput(edit.budgetPrice);
-        quote.originalPriceCents = budgetPriceCents;
-        feeInput.budgetPriceCents = budgetPriceCents;
-      }
-      if (edit.dealPrice !== undefined) {
-        if (String(edit.dealPrice).trim() === '') {
-          throw new ValidationError('DEAL_PRICE_REQUIRED', '编辑搬迁批次：物流成交价有值时必须显式填写（允许为 0）');
-        }
-        const dealPriceCents = edit.dealPrice === null ? null : parseAmountInput(edit.dealPrice);
-        quote.discountedPriceCents = dealPriceCents;
-        // 人工录入始终 deal_price 与 logistics_cost 同步（null/0/具体值）。
-        feeInput.dealPriceCents = dealPriceCents;
-        feeInput.logisticsCostCents = dealPriceCents;
-      }
-      if (edit.appliedAt !== undefined) {
-        const raw = text(edit.appliedAt);
-        feeInput.appliedAt = raw === '' ? null : raw;
-      }
-      const hasFeeFields = edit.appliedAt !== undefined || edit.budgetPrice !== undefined || edit.dealPrice !== undefined;
-      if (hasFeeFields) {
-        const existing = this.fees.findByBatchId(batch.id);
-        const hasFeeValue = Object.values(feeInput).some((value) => value !== undefined && value !== null);
-        if (!existing) {
-          // 缺 fee：仅当至少一个费用字段有实际值时才创建（部分费用），否则不虚构记录。
-          if (hasFeeValue) {
-            execution.recordLogisticsFee(batch.id, feeInput, actor);
-          }
-        } else {
-          execution.updateLogisticsFee(existing.id, feeInput, actor);
-        }
-      }
-      execution.updateBatchQuote(batch.id, quote, actor);
-    });
-    return { projectId, batchId: edit.batchId };
   }
 
   private writeEditInvoice(invoiceId: string, invoicedAt: string, amount: string): { invoiceId: string; projectId: string } {
@@ -1544,5 +1394,5 @@ function serializeShipToRequest(r:ShipToRequestRecord):ShipToRequestDto {
 }
 function serializeReport(report:ReportModel):ReportDto {
   const section=(key:string,label:string,rows:unknown[])=>({key,label,rows:serializeRows(rows)});
-  return {range:report.range,filters:report.filters,generatedAt:report.generatedAt,sections:[section('project_pipeline','项目管道',report.pipeline),section('entry_amount_by_region','各区域新项目进单金额',report.entryAmountByRegion),section('monthly_invoice_amount','月度掉票',report.monthlyInvoices),section('monthly_service_order_count','月度开单量',report.monthlyServiceOrders),section('damage_repair_stats','损坏维修统计',report.damageSummary),section('monthly_logistics','月度物流费用',report.monthlyLogistics),section('ship_to_request_workload','Account ID 申请工作量',report.shipToWorkload),section('qr_request_workload','二维码操作人工作量',report.qrWorkload),section('qr_applicant_workload','二维码申请人统计',report.qrApplicantWorkload),section('qr_applicant_type_workload','二维码申请类型工作量',report.qrApplicantTypeWorkload),section('serial_address_update_count','序列号地址更新记录数',report.serialAddressUpdates)]};
+  return {range:report.range,filters:{region:report.filters.region,orderType:report.filters.orderType,engineer:report.filters.engineer,operator:report.filters.operator,tagIds:report.filters.tagIds,workScope:report.filters.workScope},generatedAt:report.generatedAt,sections:[section('project_pipeline','项目管道',report.pipeline),section('entry_amount_by_region','各区域新项目进单金额',report.entryAmountByRegion),section('monthly_invoice_amount','月度掉票',report.monthlyInvoices),section('monthly_service_order_count','月度开单量',report.monthlyServiceOrders),section('damage_repair_stats','损坏维修统计',report.damageSummary),section('ship_to_request_workload','Account ID 申请工作量',report.shipToWorkload),section('qr_request_workload','二维码操作人工作量',report.qrWorkload),section('qr_applicant_workload','二维码申请人统计',report.qrApplicantWorkload),section('qr_applicant_type_workload','二维码申请类型工作量',report.qrApplicantTypeWorkload),section('serial_address_update_count','序列号地址更新记录数',report.serialAddressUpdates)]};
 }

@@ -1,3 +1,4 @@
+import { seedHistoricalBatch } from '../helpers/historical-batch';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
@@ -978,7 +979,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     const ctx = makeFacade();
     const { db, facade, projectId } = ctx;
     // 加子记录
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-11', amount: '20000' } } });
     seedHistoricalVisit(db, projectId, String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id), ['工程师甲', '工程师乙']);
 
@@ -1039,7 +1040,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     const { db, facade, projectId } = ctx;
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
     // 预置各 tab 记录
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-11', amount: '1234.567' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', values: { orderType: 'relocation', serviceOrderNo: 'ORD-V2-001', orderedAt: '2026-08-11', engineer: '工程师甲', customerName: '集成客户甲', projectId } } });
     seedHistoricalVisit(db, projectId, instrumentId, ['工程师甲', '工程师乙']);
@@ -1618,7 +1619,7 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     const ctx = makeFacade();
     const { db, facade, projectId } = ctx;
     // 为当前项目造子记录（日期跨月）
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输甲', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输甲', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-07-15', amount: '1000' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-20', amount: '2000' } } });
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);

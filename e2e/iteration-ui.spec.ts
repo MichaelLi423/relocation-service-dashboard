@@ -70,20 +70,30 @@ test('完整迭代真实 UI 交互核验与证据截图 (E2E)', async () => {
   await expect(invoiceDialog).toBeHidden();
 
   // -------------------------------------------------------------------------
-  // 2. 核验需求 2：详情关联事实中「上门活动」计数下线，计划上门日期完好保留
+  // 2. 核验需求 2：详情关联事实中「上门活动」与「物流费用」下线，计划上门与运输日期完好保留
   // -------------------------------------------------------------------------
   await page.getByText('完整项目资料').click();
   const factsRegion = page.getByRole('region', { name: '关联登记事实' });
   await expect(factsRegion).not.toContainText('上门活动');
+  await expect(factsRegion).not.toContainText('物流费用登记');
   await expect(factsRegion).toContainText('掉票记录1 条');
   const movePlanRegion = page.getByRole('region', { name: '搬迁安排' });
   await expect(movePlanRegion).toContainText('2026-08-15');
+  await expect(movePlanRegion).toContainText('计划运输日期');
 
-  // 核验历史记录浏览中无「到访记录」入口
+  // 验证详情 Tab 中无「物流费用登记」
+  const detailTabs = page.getByRole('tablist', { name: '项目详情' });
+  await expect(detailTabs).not.toContainText('物流费用登记');
+  await expect(detailTabs).toContainText('搬迁仪器');
+  await expect(detailTabs).toContainText('开单记录');
+  await expect(detailTabs).toContainText('费用与掉票');
+
+  // 核验历史记录浏览中无「到访记录」与「物流费用」入口
   await page.getByRole('button', { name: '浏览全部记录' }).click();
   const historyDialog = page.getByRole('dialog', { name: '浏览往期与全部记录' });
   const kindList = historyDialog.locator('.history-kind-list');
   await expect(kindList).not.toContainText('到访记录');
+  await expect(kindList).not.toContainText('物流费用');
   await expect(kindList).toContainText('掉票记录');
   await historyDialog.getByRole('button', { name: '关闭' }).click();
   await expect(historyDialog).toBeHidden();
@@ -96,13 +106,15 @@ test('完整迭代真实 UI 交互核验与证据截图 (E2E)', async () => {
   // -------------------------------------------------------------------------
   // 3. 核验需求 3：显式快照更正前后，历史月份报表进单金额变更而当前合同金额不变
   // -------------------------------------------------------------------------
-  // 步骤 3.1: 检查更正前的 2026-07 报表各区域新项目进单金额 (原为 100,000.00)
+  // 步骤 3.1: 检查更正前的 2026-07 报表各区域新项目进单金额 (原为 100,000.00)，且报表无「运输公司」与「月度物流费用」
   await page.getByRole('button', { name: '运营报表' }).click();
   const reportDialog = page.getByRole('dialog', { name: '运营报表' });
+  await expect(reportDialog.getByLabel('运输公司')).toHaveCount(0);
   await reportDialog.getByLabel('起始月份').fill('2026-07');
   await reportDialog.getByLabel('截止月份').fill('2026-07');
   await reportDialog.getByRole('button', { name: '实时计算报表' }).click();
   await expect(reportDialog.getByText('计算结果')).toBeVisible();
+  await expect(reportDialog.locator('.report-section').filter({ hasText: '月度物流费用' })).toHaveCount(0);
 
   const entrySectionCard = reportDialog.locator('.report-section').filter({ hasText: '各区域新项目进单金额' });
   await entrySectionCard.getByRole('button', { name: '查看明细' }).click();

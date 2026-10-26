@@ -1,3 +1,4 @@
+import { seedHistoricalBatch } from '../helpers/historical-batch';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { closeDatabase, prepareReadBigInt } from '../../src/domain/capabilities/local-data-persistence/connection';
@@ -7,16 +8,6 @@ import {
   SqliteShipToRepository,
   SqliteShipToRequestRepository,
 } from '../../src/domain/capabilities/local-data-persistence';
-import {
-  SqliteActivityEngineerRepository,
-  SqliteActivityRepository,
-  SqliteBatchChangeHistoryRepository,
-  SqliteBatchRepository,
-  SqliteInstrumentRepository,
-  SqliteLogisticsFeeRepository,
-  SqliteWorkFactRepository,
-} from '../../src/domain/capabilities/local-data-persistence/execution-repositories';
-import { ExecutionService } from '../../src/domain/capabilities/relocation-execution/execution-service';
 import { ShipToService, type ShipToRepository } from '../../src/domain/capabilities/ship-to-management';
 import { QrRequestService, type QrRequestRepository } from '../../src/domain/capabilities/qr-request-tracking';
 import { LocalAccountService } from '../../src/domain/capabilities/workbench-access';
@@ -26,7 +17,6 @@ import type {
   ProjectWizardPayload,
   WorkbenchV2LookupRow,
   WorkbenchV2MutationResult,
-  WorkbenchV2SectionRow,
 } from '../../src/shared/ipc';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
@@ -197,7 +187,7 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
   });
 
   it('真实保存项目、项目提醒、十类动作中的核心记录及独立二维码申请', async () => {
-    const { facade } = await makeFacade();
+    const { facade, db } = await makeFacade();
     const created = facade.v2Mutate({
       op: 'create_project',
       payload: wizard({
@@ -223,11 +213,7 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
     expect(facade.v2SectionPage({ projectId, kind: 'orders' }).rows[0]).toMatchObject({ serviceOrderNo: 'SO-WIZ-001', engineer: '工程师甲、乙', note: '现场提前联系' });
     facade.v2Mutate({ op: 'set_reminder', projectId, reminderAt: '2026-08-09', reminderNote: '确认运输安排' });
     expect(facade.v2ProjectDetail(projectId).project!.reminderNote).toBe('确认运输安排');
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '测试运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } },
-    });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '测试运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     expect(facade.v2SectionPage({ projectId, kind: 'batches' }).total).toBe(1);
     facade.v2Mutate({
       op: 'submit_action',
@@ -649,320 +635,90 @@ describe('工作台 application facade → 领域服务 → SQLite（v2 有界 A
 
   it('快速记录搬迁批次：原子创建批次与唯一物流费用，两个价格口径正确映射', async () => {
     const { facade, db } = await makeFacade();
-    const created = facade.v2Mutate({
-      op: 'create_project',
-      payload: wizard({ intent: 'pre_entry_execution', managerApproved: true, customerName: '批次快速记录客户' }),
-    });
-    const projectId = projectIdOf(created);
-
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: {
-        type: 'batch',
-        projectId,
-        values: {
-          planTransportDate: '2026-08-10',
-          transportCompany: '测试运输',
-          appliedAt: '2026-08-09',
-          budgetPrice: '12000',
-          dealPrice: '11000',
-        },
-      },
-    });
-
-    const batch = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    // 合同预算价 → batch.originalPriceCents；物流成交价 → batch.discountedPriceCents
-    expect(batch).toMatchObject({
-      planTransportDate: '2026-08-10',
-      transportCompany: '测试运输',
-      originalPrice: '12000.00',
-      discountedPrice: '11000.00',
-    });
-
-    // 费用记录同批落库：budgetPrice → fee.budgetPriceCents；dealPrice → dealPriceCents + logisticsCostCents
-    const fee = prepareReadBigInt(
-      db,
-      'SELECT applied_at, budget_price_cents, deal_price_cents, logistics_cost_cents FROM logistics_fees WHERE batch_id = ?',
-    ).get(batch.id) as {
-      applied_at: string;
-      budget_price_cents: bigint;
-      deal_price_cents: bigint;
-      logistics_cost_cents: bigint;
-    };
-    expect(fee.applied_at).toBe('2026-08-09');
-    expect(fee.budget_price_cents).toBe(1200000n); // 12000 元
-    expect(fee.deal_price_cents).toBe(1100000n);
-    expect(fee.logistics_cost_cents).toBe(1100000n); // 物流成交价即最终实际费用
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-CREATE', contractAmount: '1000' }) }));
+    // 旧登记场景现明确验证功能已下线；合法、部分、空及非法参数均不得写入。
+    const revision = facade.v2Overview().businessRevision;
+    for (const values of [{}, { appliedAt: '2026-08-09' }, { budgetPrice: '12000', dealPrice: '0' }, { budgetPrice: '0', dealPrice: '-1' }, { planTransportDate: '2026-8-1' }] as Record<string, string>[]) {
+      expect(() => facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values } })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(db.prepare('SELECT COUNT(*) AS n FROM batches').get()!.n).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM logistics_fees').get()!.n).toBe(0);
   });
 
   it('快速记录搬迁批次：全空仅建批次、单字段建部分费用、非法值全部回滚', async () => {
     const { facade, db } = await makeFacade();
-    const created = facade.v2Mutate({
-      op: 'create_project',
-      payload: wizard({ intent: 'pre_entry_execution', managerApproved: true, customerName: '原子批次客户' }),
-    });
-    const projectId = projectIdOf(created);
-
-    // 全空费用字段：仅建批次、不建物流费用（空金额不得转 0、空日期不得默认当天）
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '', transportCompany: '', appliedAt: '', budgetPrice: '', dealPrice: '' } },
-    });
-    expect(facade.v2SectionPage({ projectId, kind: 'batches' }).total).toBe(1);
-    const emptyBatch = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(emptyBatch.originalPrice).toBeNull();
-    expect(emptyBatch.discountedPrice).toBeNull();
-    expect(emptyBatch.appliedAt).toBeNull();
-    expect(
-      db.prepare('SELECT COUNT(*) AS n FROM logistics_fees WHERE batch_id = ?').get(emptyBatch.id) as { n: number },
-    ).toMatchObject({ n: 0 });
-
-    // 单字段创建部分费用：仅 appliedAt 有值 → 建部分费用，金额全空
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '', transportCompany: '', appliedAt: '2026-08-09', budgetPrice: '', dealPrice: '' } },
-    });
-    // 同毫秒创建的批次 created_at 相同，rows 排序按随机 id 决胜，不能依赖 rows[0]；
-    // 按费用记录定位该批次，再经真实 section 链路读取行 DTO。
-    const feeBatch = db
-      .prepare('SELECT batch_id FROM logistics_fees WHERE applied_at = ? AND batch_id IN (SELECT id FROM batches WHERE project_id = ?)')
-      .get('2026-08-09', projectId) as { batch_id: string } | undefined;
-    expect(feeBatch).toBeTruthy();
-    const partialBatch = facade.v2SectionPage({ projectId, kind: 'batches' }).rows.find(
-      (r) => r.id === feeBatch!.batch_id,
-    ) as Extract<WorkbenchV2SectionRow, { kind: 'batches' }>;
-    expect(partialBatch.appliedAt).toBe('2026-08-09');
-    const partialFee = prepareReadBigInt(
-      db,
-      'SELECT applied_at, budget_price_cents, deal_price_cents, logistics_cost_cents FROM logistics_fees WHERE batch_id = ?',
-    ).get(partialBatch.id) as {
-      applied_at: string | null;
-      budget_price_cents: bigint | null;
-      deal_price_cents: bigint | null;
-      logistics_cost_cents: bigint | null;
-    };
-    expect(partialFee.applied_at).toBe('2026-08-09');
-    expect(partialFee.budget_price_cents).toBeNull();
-    expect(partialFee.deal_price_cents).toBeNull();
-    expect(partialFee.logistics_cost_cents).toBeNull();
-
-    // 非法价格：预算价 0 报错；成交价 -1 报错；均原子回滚不落库
-    expect(() =>
-      facade.v2Mutate({
-        op: 'submit_action',
-        projectId,
-        action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '0', dealPrice: '11000' } },
-      }),
-    ).toThrow(/合同预算价/);
-    expect(() =>
-      facade.v2Mutate({
-        op: 'submit_action',
-        projectId,
-        action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '-1' } },
-      }),
-    ).toThrow(/物流成交价|不得为负数/);
-
-    // 原子性：批次已创建后报价校验失败（日期格式非法）→ 同一事务整体回滚
-    expect(() =>
-      facade.v2Mutate({
-        op: 'submit_action',
-        projectId,
-        action: { type: 'batch', projectId, values: { planTransportDate: '2026-8-1', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } },
-      }),
-    ).toThrow(/计划运输日期 格式非法/);
-
-    // 失败均未产生任何额外批次或费用（仅前面两个合法批次）
-    expect(facade.v2SectionPage({ projectId, kind: 'batches' }).total).toBe(2);
-    expect(
-      db.prepare('SELECT COUNT(*) AS n FROM logistics_fees').get() as { n: number },
-    ).toMatchObject({ n: 1 }); // 仅部分费用那一笔
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-CREATE', contractAmount: '1000' }) }));
+    // 旧登记场景现明确验证功能已下线；合法、部分、空及非法参数均不得写入。
+    const revision = facade.v2Overview().businessRevision;
+    for (const values of [{}, { appliedAt: '2026-08-09' }, { budgetPrice: '12000', dealPrice: '0' }, { budgetPrice: '0', dealPrice: '-1' }, { planTransportDate: '2026-8-1' }] as Record<string, string>[]) {
+      expect(() => facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values } })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(db.prepare('SELECT COUNT(*) AS n FROM batches').get()!.n).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM logistics_fees').get()!.n).toBe(0);
   });
 
   // ---- batch_edit：编辑批次与费用，不允许修改 appliedAt ----
 
   it('batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt', async () => {
     const { facade, db } = await makeFacade();
-    const created = facade.v2Mutate({
-      op: 'create_project',
-      payload: wizard({ intent: 'pre_entry_execution', managerApproved: true, customerName: '批次编辑客户' }),
-    });
-    const projectId = projectIdOf(created);
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '原公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } },
-    });
-    const before = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    const appliedAtBefore = prepareReadBigInt(db, 'SELECT applied_at FROM logistics_fees WHERE batch_id = ?').get(
-      before.id,
-    ) as { applied_at: string };
-
-    const result = facade.v2Mutate({
-      op: 'batch_edit',
-      payload: {
-        batchId: before.id,
-        planTransportDate: '2026-08-12',
-        transportCompany: '新公司',
-        budgetPrice: '13000',
-        dealPrice: '12500',
-      },
-    });
-    expect(result.changed).toMatchObject({ projectId, batchId: before.id });
-    expect(result.invalidated).toEqual(
-      expect.arrayContaining(['overview', 'projects', `project:${projectId}`, `sections:${projectId}`]),
-    );
-
-    const after = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(after).toMatchObject({
-      planTransportDate: '2026-08-12',
-      transportCompany: '新公司',
-      originalPrice: '13000.00',
-      discountedPrice: '12500.00',
-    });
-
-    const fee = prepareReadBigInt(
-      db,
-      'SELECT applied_at, budget_price_cents, deal_price_cents, logistics_cost_cents FROM logistics_fees WHERE batch_id = ?',
-    ).get(before.id) as {
-      applied_at: string;
-      budget_price_cents: bigint;
-      deal_price_cents: bigint;
-      logistics_cost_cents: bigint;
-    };
-    // 未提交 appliedAt → 保持原值；dealPrice 同时覆盖 dealPriceCents 与 logisticsCostCents
-    expect(fee.applied_at).toBe(appliedAtBefore.applied_at);
-    expect(fee.applied_at).toBe('2026-08-09');
-    // dealPrice 同时覆盖 dealPriceCents 与 logisticsCostCents（物流成交价即最终实际费用）
-    expect(fee.budget_price_cents).toBe(1300000n);
-    expect(fee.deal_price_cents).toBe(1250000n);
-    expect(fee.logistics_cost_cents).toBe(1250000n);
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-EDIT', contractAmount: '1000' }) }));
+    const batchId = seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '历史运输', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
+    const before = facade.v2SectionPage({ projectId, kind: 'batches' });
+    const feeBefore = prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId);
+    const revision = facade.v2Overview().businessRevision;
+    for (const payload of [{ batchId, planTransportDate: '2026-08-12', transportCompany: '新公司', budgetPrice: '13000', dealPrice: '0' }, { batchId, appliedAt: null }, { batchId, appliedAt: '2026-09-01' }, { batchId: 'no-such-batch' }]) {
+      expect(() => facade.v2Mutate({ op: 'batch_edit', payload })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(facade.v2SectionPage({ projectId, kind: 'batches' })).toEqual(before);
+    expect(prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId)).toEqual(feeBefore);
   });
 
   it('batch_edit 可修改/清空 appliedAt（影响报表归属月份），行 DTO 实时反映', async () => {
     const { facade, db } = await makeFacade();
-    const created = facade.v2Mutate({
-      op: 'create_project',
-      payload: wizard({ intent: 'pre_entry_execution', managerApproved: true, customerName: '批次日期客户' }),
-    });
-    const projectId = projectIdOf(created);
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } },
-    });
-    const batchRow = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(batchRow.appliedAt).toBe('2026-08-09');
-
-    // 修改 appliedAt：行 DTO 与费用记录同步更新
-    facade.v2Mutate({ op: 'batch_edit', payload: { batchId: batchRow.id, appliedAt: '2026-08-15' } });
-    const modified = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(modified.appliedAt).toBe('2026-08-15');
-    expect(prepareReadBigInt(db, 'SELECT applied_at FROM logistics_fees WHERE batch_id = ?').get(batchRow.id)).toMatchObject({
-      applied_at: '2026-08-15',
-    });
-
-    // 清空 appliedAt：null
-    facade.v2Mutate({ op: 'batch_edit', payload: { batchId: batchRow.id, appliedAt: null } });
-    const cleared = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(cleared.appliedAt).toBeNull();
-    expect(prepareReadBigInt(db, 'SELECT applied_at FROM logistics_fees WHERE batch_id = ?').get(batchRow.id)).toMatchObject({
-      applied_at: null,
-    });
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-EDIT', contractAmount: '1000' }) }));
+    const batchId = seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '历史运输', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
+    const before = facade.v2SectionPage({ projectId, kind: 'batches' });
+    const feeBefore = prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId);
+    const revision = facade.v2Overview().businessRevision;
+    for (const payload of [{ batchId, planTransportDate: '2026-08-12', transportCompany: '新公司', budgetPrice: '13000', dealPrice: '0' }, { batchId, appliedAt: null }, { batchId, appliedAt: '2026-09-01' }, { batchId: 'no-such-batch' }]) {
+      expect(() => facade.v2Mutate({ op: 'batch_edit', payload })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(facade.v2SectionPage({ projectId, kind: 'batches' })).toEqual(before);
+    expect(prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId)).toEqual(feeBefore);
   });
 
   it('batch_edit 历史批次无 fee：编辑价格按需创建部分费用，仅批次字段不虚构费用', async () => {
-    const { facade, db, accountId } = await makeFacade();
-    const created = facade.v2Mutate({
-      op: 'create_project',
-      payload: wizard({ intent: 'pre_entry_execution', managerApproved: true, customerName: '历史批次客户' }),
-    });
-    const projectId = projectIdOf(created);
-
-    // 构造历史批次：仅有批次报价、无物流费用记录（旧数据形态）
-    const actor = { accountId, username: '负责人' };
-    const service = new ExecutionService(
-      new SqliteBatchRepository(db),
-      new SqliteInstrumentRepository(db),
-      new SqliteBatchChangeHistoryRepository(db),
-      new SqliteActivityRepository(db),
-      new SqliteActivityEngineerRepository(db),
-      new SqliteWorkFactRepository(db),
-      new SqliteLogisticsFeeRepository(db),
-      { onExecutionStarted: () => undefined },
-    );
-    const batch = service.createBatch(projectId, actor);
-    service.updateBatchQuote(
-      batch.id,
-      { planTransportDate: '2026-08-10', transportCompany: '历史运输', originalPriceCents: 1200000n, discountedPriceCents: 1100000n },
-      actor,
-    );
-
-    // 编辑价格：缺 fee 按需创建部分费用（含 appliedAt 补录），成交价与实际费用同步
-    facade.v2Mutate({
-      op: 'batch_edit',
-      payload: { batchId: batch.id, appliedAt: '2026-08-09', budgetPrice: '13000', dealPrice: '12500' },
-    });
-    const fee = prepareReadBigInt(
-      db,
-      'SELECT applied_at, budget_price_cents, deal_price_cents, logistics_cost_cents FROM logistics_fees WHERE batch_id = ?',
-    ).get(batch.id) as {
-      applied_at: string | null;
-      budget_price_cents: bigint | null;
-      deal_price_cents: bigint | null;
-      logistics_cost_cents: bigint | null;
-    };
-    expect(fee.applied_at).toBe('2026-08-09');
-    expect(fee.budget_price_cents).toBe(1300000n);
-    expect(fee.deal_price_cents).toBe(1250000n);
-    expect(fee.logistics_cost_cents).toBe(1250000n); // 成交价与实际费用同步
-    const afterCreate = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(afterCreate.originalPrice).toBe('13000.00');
-    expect(afterCreate.discountedPrice).toBe('12500.00');
-    expect(afterCreate.appliedAt).toBe('2026-08-09');
-
-    // 仅批次字段（计划运输日期/运输公司）编辑：不虚构费用记录
-    const feeCountBefore = (db.prepare('SELECT COUNT(*) AS n FROM logistics_fees WHERE batch_id = ?').get(batch.id) as { n: number }).n;
-    facade.v2Mutate({ op: 'batch_edit', payload: { batchId: batch.id, planTransportDate: '2026-08-15', transportCompany: '新运输' } });
-    const edited = facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as Extract<
-      WorkbenchV2SectionRow,
-      { kind: 'batches' }
-    >;
-    expect(edited).toMatchObject({ planTransportDate: '2026-08-15', transportCompany: '新运输', originalPrice: '13000.00' });
-    expect((db.prepare('SELECT COUNT(*) AS n FROM logistics_fees WHERE batch_id = ?').get(batch.id) as { n: number }).n).toBe(feeCountBefore);
+    const { facade, db } = await makeFacade();
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-EDIT', contractAmount: '1000' }) }));
+    const batchId = seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '历史运输' });
+    const before = facade.v2SectionPage({ projectId, kind: 'batches' });
+    const feeBefore = prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId);
+    const revision = facade.v2Overview().businessRevision;
+    for (const payload of [{ batchId, planTransportDate: '2026-08-12', transportCompany: '新公司', budgetPrice: '13000', dealPrice: '0' }, { batchId, appliedAt: null }, { batchId, appliedAt: '2026-09-01' }, { batchId: 'no-such-batch' }]) {
+      expect(() => facade.v2Mutate({ op: 'batch_edit', payload })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(facade.v2SectionPage({ projectId, kind: 'batches' })).toEqual(before);
+    expect(prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId)).toEqual(feeBefore);
   });
 
   it('batch_edit 不存在的批次明确报错', async () => {
-    const { facade } = await makeFacade();
-    expect(() =>
-      facade.v2Mutate({ op: 'batch_edit', payload: { batchId: 'no-such-batch', planTransportDate: '2026-08-12' } }),
-    ).toThrow(/搬迁批次不存在/);
+    const { facade, db } = await makeFacade();
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'RETIRED-EDIT', contractAmount: '1000' }) }));
+    const batchId = seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '历史运输', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
+    const before = facade.v2SectionPage({ projectId, kind: 'batches' });
+    const feeBefore = prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId);
+    const revision = facade.v2Overview().businessRevision;
+    for (const payload of [{ batchId, planTransportDate: '2026-08-12', transportCompany: '新公司', budgetPrice: '13000', dealPrice: '0' }, { batchId, appliedAt: null }, { batchId, appliedAt: '2026-09-01' }, { batchId: 'no-such-batch' }]) {
+      expect(() => facade.v2Mutate({ op: 'batch_edit', payload })).toThrow(/物流费用与运输批次登记已下线/);
+      expect(facade.v2Overview().businessRevision).toBe(revision);
+    }
+    expect(facade.v2SectionPage({ projectId, kind: 'batches' })).toEqual(before);
+    expect(prepareReadBigInt(db, 'SELECT * FROM logistics_fees WHERE batch_id=?').get(batchId)).toEqual(feeBefore);
   });
 
   it('中大型项目独立开单（task 2.2）：独立请求无 projectId 成功保存，省略日期默认当天，显式日期保持，不影响项目队列', async () => {

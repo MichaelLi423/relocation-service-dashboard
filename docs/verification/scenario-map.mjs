@@ -378,6 +378,12 @@ export const scenarioMap = {
 
   // ────────────────────────── relocation-execution ────────────────────────
   'relocation-execution': {
+    '批次费用公共写入口拒绝且零写': {
+      evidence: [['tests/integration/logistics-retirement.sqlite.test.ts', '公共 batch/logistics/batch_edit 全部拒绝且 revision 与历史数据零变化']],
+    },
+    '物流下线保留项目计划运输日期与历史关联': {
+      evidence: [['tests/integration/logistics-retirement.sqlite.test.ts', '项目计划运输日期可修改清空，历史批次费用与仪器关联不受影响']],
+    },
     '到访新增禁用且计划上门日期保留': {
       evidence: [['tests/integration/workbench-facade.sqlite.test.ts', '禁用新增到访操作但不影响计划上门日期资料更正']],
     },
@@ -1137,6 +1143,10 @@ export const scenarioMap = {
 
   // ─────────────────────────── operational-reporting ──────────────────────
   'operational-reporting': {
+    '公共报表和三种导出不含物流统计': {
+      evidence: [['tests/integration/logistics-retirement.sqlite.test.ts', '公共报表指标下钻与 Excel PNG PDF 无物流统计区段及运输公司筛选']],
+      note: '内部历史 ReportModel 仍保留结构；公共字典/下钻/序列化与导出不开放物流统计。既有物流公式场景仅验证历史兼容，不代表用户功能仍开放。',
+    },
     '月度掉票按月份区域统计去重项目数': {
       evidence: [
         ['tests/domain/operational-reporting.test.ts', '掉票按月份区域聚合金额次数与去重项目数，撤销不计且区域修改实时回溯'],
@@ -2153,7 +2163,8 @@ export const scenarioMap = {
         ['e2e/electron-smoke.spec.ts', '未进单先执行 → 实际装机完成自动待验收 → 验收进入待掉票（核心动作补充闭环）'],
       ],
     },
-    '覆盖八类业务动作': {
+    '覆盖七类业务动作': {
+      note: '物流批次入口下线后为七类动作；旧测试标题如保留八类仅作证据定位，不表示当前仍有八类入口。',
       evidence: [
         ['tests/renderer/app.test.tsx', '快速记录合并开单入口，八类动作均提供真实字段'],
       ],
@@ -2206,14 +2217,16 @@ export const scenarioMap = {
       ],
     },
     '修改批次运输信息与两价': {
+      note: '该旧交互场景已由物流功能下线范围取代；当前证据验证编辑入口移除、旧 batch_edit 请求拒绝且历史值不变，不代表仍允许编辑。',
       evidence: [
-        ['tests/renderer/app.test.tsx', '物流费用编辑回显全部五项，未改的 appliedAt 按原值提交并可清空其他字段'],
+        ['tests/renderer/app.test.tsx', '物流费用登记 Tab 与批次编辑已下线，项目详情中不再展示物流费用 Tab'],
         ['tests/integration/workbench-facade.sqlite.test.ts', 'batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt'],
       ],
     },
     '费用登记日期不可修改且归属月份不变': {
+      note: '物流编辑已整体下线；当前证据验证无编辑入口、旧写请求被拒且历史费用日期保持原值。',
       evidence: [
-        ['tests/renderer/app.test.tsx', '物流费用编辑回显全部五项，未改的 appliedAt 按原值提交并可清空其他字段'],
+        ['tests/renderer/app.test.tsx', '物流费用登记 Tab 与批次编辑已下线，项目详情中不再展示物流费用 Tab'],
         ['tests/integration/workbench-facade.sqlite.test.ts', 'batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt'],
       ],
     },

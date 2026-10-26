@@ -262,7 +262,7 @@ export class MobileReadonlyController {
   };
   openProject = (id: string) => {
     if (this.state.navigation.page === 'projects') this.listNavigation = this.state.navigation;
-    this.navigate({ page: 'detail', id, kind: 'batches', cursor: '', previous: [] });
+    this.navigate({ page: 'detail', id, kind: 'instruments', cursor: '', previous: [] });
   };
   backToProjects = () => this.navigate(firstPage(this.listNavigation));
   selectKind = (kind: MobileReadonlyRecordKind) => {

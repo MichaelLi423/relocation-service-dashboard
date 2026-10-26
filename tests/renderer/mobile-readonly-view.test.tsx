@@ -74,8 +74,12 @@ describe('独立手机只读视图', () => {
     const entryDateLabel = within(screen.getByLabelText('项目基础信息')).getByText('进单日期', { selector: 'dt' });
     expect(entryDateLabel.nextElementSibling?.tagName).toBe('DD');
     expect(entryDateLabel.nextElementSibling?.textContent).toBe('2026-08-01');
-    for (const kind of MOBILE_READONLY_RECORD_KINDS) {
-      fireEvent.click(within(screen.getByRole('group', { name: '记录类型' })).getByText(RECORD_LABELS[kind]));
+    const visibleKinds = MOBILE_READONLY_RECORD_KINDS.filter((k) => k !== 'activities' && k !== 'batches');
+    const recordTabs = screen.getByRole('group', { name: '记录类型' });
+    expect(within(recordTabs).queryByText('批次')).toBeNull();
+    expect(within(recordTabs).queryByText('上门活动')).toBeNull();
+    for (const kind of visibleKinds) {
+      fireEvent.click(within(recordTabs).getByText(RECORD_LABELS[kind]));
       await screen.findByText(`${kind}-1`);
       fireEvent.click(within(screen.getByLabelText('记录翻页')).getByText('下一页 →'));
       await screen.findByText(`${kind}-2`);
@@ -87,7 +91,7 @@ describe('独立手机只读视图', () => {
       expect(url.searchParams.get('projectId')).toBe(project.id);
       expect(url.searchParams.get('limit')).toBe('20');
     }
-    expect(new Set(recordCalls.map((url) => url.searchParams.get('kind'))).size).toBe(6);
+    expect(new Set(recordCalls.map((url) => url.searchParams.get('kind'))).size).toBe(visibleKinds.length);
   });
 
   it.each([

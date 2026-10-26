@@ -3,9 +3,6 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { PNG } from 'pngjs';
 import { formatCents } from '../../core/money';
 import type {
-  LogisticsRatioRow,
-  LogisticsSummaryRow,
-  PendingLogisticsRow,
   ReportModel,
 } from './reporting-service';
 
@@ -35,8 +32,6 @@ export interface ExportSection {
 
 const money = (cents: bigint): string => formatCents(cents);
 const num = (n: number): string => String(n);
-const ratio = (hundredths: bigint | null, unavailable: boolean): string =>
-  unavailable ? 'N/A' : `${formatCents(hundredths ?? 0n)}%`;
 /** 责任人展示：优先动作记录持久化的用户名快照，其次账号内部 ID，均无则明确提示。 */
 const operatorName = (accountId: string | null, username: string | null): string =>
   username !== null && username !== '' ? username : accountId ?? '(未记录)';
@@ -125,62 +120,6 @@ export function buildExportSections(report: ReportModel): ExportSection[] {
   });
 
   sections.push({
-    key: 'monthly_logistics',
-    title: '月度物流费用汇总（人民币）',
-    // 业务可见列仅保留两个价格口径：合同预算价 / 物流成交价（物流成交价即最终实际费用）。
-    // 底层 LogisticsSummaryRow 的 costSumCents / budgetCostDiffCents 为历史兼容列
-    // （旧「实际费用」口径，现行业务与物流成交价同值），不在导出中重复展示。
-    header: [
-      '月份',
-      '运输公司',
-      '批次数',
-      '合同预算价合计',
-      '物流成交价合计',
-      '合同预算价-物流成交价差异',
-      '物流成交价>合同预算价批次数',
-      '已取消批次数',
-    ],
-    rows: report.monthlyLogistics.map((r: LogisticsSummaryRow) => [
-      r.month,
-      r.transportCompany === '' ? '(未填运输公司)' : r.transportCompany,
-      num(r.batchCount),
-      money(r.budgetSumCents),
-      money(r.dealSumCents),
-      money(r.budgetDealDiffCents),
-      num(r.dealOverBudgetCount),
-      num(r.cancelledBatchCount),
-    ]),
-  });
-
-  sections.push({
-    key: 'logistics_contract_ratio',
-    title: '物流成交价合同占比（物流成交价RMB÷7.2÷最新合同USD）',
-    header: ['项目', '月份', '物流成交价USD', '合同USD', '占比', '不可计算', '已取消'],
-    rows: report.logisticsContractRatios.map((r: LogisticsRatioRow) => [
-      r.projectTempNo,
-      r.month,
-      money(r.costUsdCents),
-      r.contractAmountCents === null ? '(空/0)' : money(r.contractAmountCents),
-      ratio(r.ratioPercentHundredths, r.ratioUnavailable),
-      r.ratioUnavailable ? '是' : '否',
-      r.cancelled ? '是' : '否',
-    ]),
-  });
-
-  sections.push({
-    key: 'pending_logistics_list',
-    // 历史异常批次：已有物流成交价但无物流费用记录（历史数据形态），仅展示，不提供补录指引。
-    title: '历史异常批次（已有物流成交价但无物流费用记录）',
-    header: ['项目', '运输公司', '计划运输日期', '物流成交价(RMB)'],
-    rows: report.pendingLogistics.map((r: PendingLogisticsRow) => [
-      r.projectTempNo,
-      r.transportCompany ?? '',
-      r.planTransportDate ?? '',
-      r.dealPriceCents === null ? '' : money(r.dealPriceCents),
-    ]),
-  });
-
-  sections.push({
     key: 'ship_to_request_workload',
     title: 'Account ID 申请工作量（首次实际提交）',
     header: ['月份', '责任人', '首次提交数'],
@@ -236,7 +175,7 @@ export function reportSummaryJson(report: ReportModel): string {
   const sections = buildExportSections(report);
   return JSON.stringify({
     range: report.range,
-    filters: report.filters,
+    filters: { region: report.filters.region, orderType: report.filters.orderType, engineer: report.filters.engineer, operator: report.filters.operator, tagIds: report.filters.tagIds, workScope: report.filters.workScope },
     generatedAt: report.generatedAt,
     sections: sections.map((s) => ({ key: s.key, title: s.title, header: s.header, rows: s.rows })),
   });
@@ -249,7 +188,6 @@ function headerLines(report: ReportModel): string[] {
     `Range: ${report.range.from} TO ${report.range.to}`,
     `Region: ${f.region ?? 'ALL'}`,
     `OrderType: ${f.orderType ?? 'ALL'}`,
-    `TransportCompany: ${f.transportCompany ?? 'ALL'}`,
     `Engineer: ${f.engineer ?? 'ALL'}`,
     `Operator: ${f.operator ?? 'ALL'}`,
     `WorkScope: ${f.workScope ?? 'ALL'}`,
@@ -461,7 +399,7 @@ function renderPng(report: ReportModel): Buffer {
   lines.push(`RANGE: ${report.range.from} TO ${report.range.to}`);
   const f = report.filters;
   lines.push(
-    `FILTERS: REGION=${f.region ?? 'ALL'} ORDERTYPE=${f.orderType ?? 'ALL'} TRANSPORT=${f.transportCompany ?? 'ALL'} ENGINEER=${f.engineer ?? 'ALL'} OPERATOR=${f.operator ?? 'ALL'} WORKSCOPE=${f.workScope ?? 'ALL'}`,
+    `FILTERS: REGION=${f.region ?? 'ALL'} ORDERTYPE=${f.orderType ?? 'ALL'} ENGINEER=${f.engineer ?? 'ALL'} OPERATOR=${f.operator ?? 'ALL'} WORKSCOPE=${f.workScope ?? 'ALL'}`,
   );
   lines.push('');
 

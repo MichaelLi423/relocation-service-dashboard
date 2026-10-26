@@ -317,42 +317,64 @@ describe('本次迭代 UI 界面与交互回归', () => {
     });
   });
 
-  describe('需求 2：下线到访记录入口与计数', () => {
-    it('项目详情关联登记事实中不再展示上门活动计数，保留其他各项事实', async () => {
+  describe('需求 2：下线到访记录与物流费用/批次登记入口与计数', () => {
+    it('项目详情关联登记事实与 Tab 中下线物流费用与上门活动，快速菜单与历史入口移除物流费用，保留其他各项事实', async () => {
       render(<App />);
       await screen.findByRole('heading', { name: /项目队列/ });
 
-      // 点击展开完整项目资料
+      // 1. 验证详情 Tab 中无「物流费用登记」
+      const detailTabs = screen.getByRole('tablist', { name: '项目详情' });
+      expect(within(detailTabs).queryByRole('tab', { name: '物流费用登记' })).not.toBeInTheDocument();
+      expect(within(detailTabs).getByRole('tab', { name: '搬迁仪器' })).toBeInTheDocument();
+      expect(within(detailTabs).getByRole('tab', { name: '开单记录' })).toBeInTheDocument();
+      expect(within(detailTabs).getByRole('tab', { name: '费用与掉票' })).toBeInTheDocument();
+
+      // 2. 点击展开完整项目资料，验证关联登记事实中无「物流费用登记」与「上门活动」
       const detailsToggle = screen.getByText('完整项目资料');
       fireEvent.click(detailsToggle);
 
       const facts = screen.getByRole('region', { name: '关联登记事实' });
+      expect(facts).not.toHaveTextContent('物流费用登记');
       expect(facts).not.toHaveTextContent('上门活动');
-      expect(facts).toHaveTextContent('物流费用登记1 条');
       expect(facts).toHaveTextContent('搬迁仪器2 台');
       expect(facts).toHaveTextContent('开单记录4 条');
       expect(facts).toHaveTextContent('掉票记录1 条');
 
-      // 计划上门日期正常显示且未被移除
+      // 计划上门日期与计划运输日期正常显示且未被移除
       expect(screen.getByText('计划上门日期')).toBeInTheDocument();
       expect(screen.getAllByText('2026-08-15').length).toBeGreaterThan(0);
+      expect(screen.getByText('计划运输日期')).toBeInTheDocument();
+
+      // 3. 快速记录菜单中无「物流费用登记」
+      fireEvent.click(screen.getAllByRole('button', { name: '快速记录' })[0]!);
+      const quickDialog = screen.getByRole('dialog', { name: '快速记录' });
+      expect(within(quickDialog).queryByRole('button', { name: /物流费用/ })).not.toBeInTheDocument();
+      expect(within(quickDialog).getByRole('button', { name: /搬迁仪器/ })).toBeInTheDocument();
+      fireEvent.click(within(quickDialog).getByRole('button', { name: '关闭' }));
     });
 
-    it('历史浏览分类列表中已下线到访记录入口，但历史格式化安全兼容', async () => {
+    it('历史浏览分类列表中已下线到访记录与物流费用入口，项目编辑依然可维护计划运输日期', async () => {
       render(<App />);
       await screen.findByRole('heading', { name: /项目队列/ });
 
+      // 1. 验证历史记录列表中无「到访记录」和「物流费用」
       fireEvent.click(screen.getByRole('button', { name: '浏览全部记录' }));
       const dialog = await screen.findByRole('dialog', { name: '浏览往期与全部记录' });
 
-      // 验证历史分类中不再包含「到访记录」
       const kindList = dialog.querySelector('.history-kind-list')!;
       expect(kindList).not.toHaveTextContent('到访记录');
-      expect(kindList).toHaveTextContent('物流费用');
+      expect(kindList).not.toHaveTextContent('物流费用');
       expect(kindList).toHaveTextContent('搬迁仪器');
       expect(kindList).toHaveTextContent('开单记录');
       expect(kindList).toHaveTextContent('掉票记录');
       expect(kindList).toHaveTextContent('损坏维修');
+      fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+
+      // 2. 项目资料编辑中计划运输日期继续可正常编辑
+      fireEvent.click(screen.getByRole('button', { name: '编辑项目资料' }));
+      const editDialog = await screen.findByRole('dialog', { name: '编辑项目资料' });
+      expect(within(editDialog).getByLabelText(/计划运输日期/)).toBeInTheDocument();
+      fireEvent.click(within(editDialog).getByRole('button', { name: '关闭' }));
     });
   });
 
@@ -469,11 +491,17 @@ describe('本次迭代 UI 界面与交互回归', () => {
       fireEvent.click(screen.getByRole('button', { name: '运营报表' }));
       const dialog = await screen.findByRole('dialog', { name: '运营报表' });
 
+      // 验证报表筛选中无「运输公司」输入
+      expect(within(dialog).queryByLabelText('运输公司')).not.toBeInTheDocument();
+
       fireEvent.change(within(dialog).getByLabelText(/起始月份/), { target: { value: '2026-07' } });
       fireEvent.change(within(dialog).getByLabelText(/截止月份/), { target: { value: '2026-08' } });
       fireEvent.click(within(dialog).getByRole('button', { name: '实时计算报表' }));
 
       await within(dialog).findByText('计算结果');
+
+      // 验证指标网格中不展示「月度物流费用」卡片
+      expect(within(dialog).queryByText('月度物流费用')).not.toBeInTheDocument();
       const invoiceCard = within(dialog).getByText('月度掉票').closest<HTMLElement>('.report-section')!;
       fireEvent.click(within(invoiceCard).getByRole('button', { name: '查看明细' }));
 

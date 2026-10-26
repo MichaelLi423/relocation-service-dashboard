@@ -5,7 +5,7 @@ import { MobileReadonlyApp } from '../../src/mobile/App';
 import { browserEnvironment, MobileReadonlyController } from '../../src/mobile/controller';
 import type { CheckReason, MobileEnvironment } from '../../src/mobile/controller';
 import type { MobileReadonlyQueryResponse } from '../../src/shared/mobile-readonly';
-import { makeBatchRecordFixture, makeOverviewFixture, makeProjectSummaryFixture } from '../helpers/mobile-readonly-fixtures';
+import { makeInstrumentRecordFixture, makeOverviewFixture, makeProjectSummaryFixture } from '../helpers/mobile-readonly-fixtures';
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-10T00:00:00Z')); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -66,7 +66,7 @@ describe('版本新鲜度与一致重载', () => {
         return new Response(JSON.stringify({ error: { code: 'STALE_CURSOR' }, metadata }), { status: 409 });
       }
       if (url.pathname === '/api/projects') return s.wrap({ items: [makeProjectSummaryFixture({ customerName: changed ? '新版本项目' : '旧版本项目' })], nextCursor: changed ? null : 'v1-cursor' });
-      if (url.pathname === '/api/records') return s.wrap({ kind: 'batches', items: [makeBatchRecordFixture(0, { transportCompany: changed ? '新版本承运商' : '旧版本承运商' })], nextCursor: changed ? null : 'v1-cursor' });
+      if (url.pathname === '/api/records') return s.wrap({ kind: 'instruments', items: [makeInstrumentRecordFixture(0, { name: changed ? '新版本仪器' : '旧版本仪器' })], nextCursor: changed ? null : 'v1-cursor' });
       return original(input, init);
     });
     render(<MobileReadonlyApp controller={s.controller} />); await settle();
@@ -76,11 +76,11 @@ describe('版本新鲜度与一致重载', () => {
     fireEvent.click(screen.getByRole('button', { name: '下一页 →' })); await settle();
     expect(staleResponses).toBe(1);
     expect(s.controller.getSnapshot().lastCheckedAt).toBe(lastChecked);
-    expect(screen.queryByText(page === 'projects' ? '旧版本项目' : '旧版本承运商')).toBeNull();
+    expect(screen.queryByText(page === 'projects' ? '旧版本项目' : '旧版本仪器')).toBeNull();
     expect(screen.getByText(/已丢弃旧结果/)).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
     act(() => releaseOverview()); await settle();
-    expect(screen.getByText(page === 'projects' ? '新版本项目' : '新版本承运商')).toBeTruthy();
+    expect(screen.getByText(page === 'projects' ? '新版本项目' : '新版本仪器')).toBeTruthy();
     expect(screen.getByText('第 1 页')).toBeTruthy();
     expect(s.controller.getSnapshot().view?.metadata.currentVersion).toBe(2);
     expect(s.controller.getSnapshot().lastCheckedAt).not.toBe(lastChecked);
@@ -88,7 +88,7 @@ describe('版本新鲜度与一致重载', () => {
     expect(reloaded.searchParams.get('cursor')).toBe('');
     if (page === 'records') {
       expect(reloaded.searchParams.get('projectId')).toBe('fixture-project-1');
-      expect(reloaded.searchParams.get('kind')).toBe('batches');
+      expect(reloaded.searchParams.get('kind')).toBe('instruments');
       expect(screen.getByText('合成版本2')).toBeTruthy();
     }
   });
@@ -170,10 +170,10 @@ describe('版本新鲜度与一致重载', () => {
       if (String(input).startsWith('/api/records?')) s.setVersion(2);
       return original(input, init);
     });
-    fireEvent.click(screen.getByRole('button', { name: '仪器' })); await settle();
+    fireEvent.click(screen.getByRole('button', { name: '开单' })); await settle();
     expect(screen.getByText('合成版本2')).toBeTruthy();
     expect(screen.queryByText('合成版本1')).toBeNull();
-    expect(screen.getByRole('button', { name: '仪器' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '开单' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText(/旧结果已丢弃/)).toBeTruthy();
   });
   it('版本持续竞争仅有界重试，不形成请求风暴', async () => {

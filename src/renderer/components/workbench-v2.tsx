@@ -118,7 +118,6 @@ function focusWorkbenchSection(id: "reminders" | "project-queue"): void {
 
 const TABS = [
   "搬迁仪器",
-  "物流费用登记",
   "开单记录",
   "费用与掉票",
   "申请与维修",
@@ -131,7 +130,6 @@ type DeleteInput = WorkbenchV2DeleteRequest extends infer Request
   : never;
 const TAB_SECTION: Partial<Record<DetailTab, WorkbenchV2SectionKind>> = {
   搬迁仪器: "instruments",
-  物流费用登记: "batches",
   开单记录: "orders",
   费用与掉票: "invoices",
   申请与维修: "damage_items",
@@ -141,11 +139,6 @@ const ACTIONS: Array<{
   label: string;
   help: string;
 }> = [
-  {
-    type: "batch",
-    label: "物流费用登记",
-    help: "可先保存现有信息，运输安排、费用日期和价格后续均可补充修改",
-  },
   {
     type: "instrument",
     label: "搬迁仪器",
@@ -291,10 +284,6 @@ type LayerState =
       invoice: Extract<WorkbenchV2SectionRow, { kind: "invoices" }>;
     }
   | {
-      kind: "batch-edit";
-      batch: Extract<WorkbenchV2SectionRow, { kind: "batches" }>;
-    }
-  | {
       kind: "damage-update";
       damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>;
     }
@@ -309,21 +298,6 @@ type VisitSort = "asc" | "desc" | null;
 
 function updateProjectRequest(payload: ProjectUpdatePayload): WorkbenchV2MutationRequest {
   return { op: "update_project", payload };
-}
-
-type BatchEditValues = {
-  planTransportDate: string | null;
-  transportCompany: string | null;
-  appliedAt: string | null;
-  budgetPrice: string | null;
-  dealPrice: string | null;
-};
-
-function batchEditRequest(
-  batchId: string,
-  batchEdit: BatchEditValues,
-): WorkbenchV2MutationRequest {
-  return { op: "batch_edit", payload: { batchId, ...batchEdit } } as WorkbenchV2MutationRequest;
 }
 
 function instrumentBulkImportRequest(
@@ -1247,7 +1221,6 @@ export function WorkbenchV2({
             }}
             onInvoiceEdit={(invoice) => setLayer({ kind: "invoice-edit", invoice })}
             onInvoiceRevoke={(invoice) => setLayer({ kind: "invoice-revoke", invoice })}
-            onBatchEdit={(batch) => setLayer({ kind: "batch-edit", batch })}
             onDamageUpdate={(damage) => setLayer({ kind: "damage-update", damage })}
             onInstrumentSave={(instrument, values) =>
               mutateRecord(
@@ -1696,16 +1669,6 @@ export function WorkbenchV2({
               invoice={layer.invoice}
               onSave={(values) => deleteRecord({ kind: "invoice", id: layer.invoice.id, revokedAt: values.time, revokeReason: values.reason }, "掉票已撤销")}
             />
-          ) : layer.kind === "batch-edit" ? (
-            <BatchEditForm
-              batch={layer.batch}
-              onSave={(batchEdit) =>
-                mutate(
-                  batchEditRequest(layer.batch.id, batchEdit),
-                  "物流费用记录已更新",
-                )
-              }
-            />
           ) : layer.kind === "damage-update" ? (
             <DamageUpdateForm
               damage={layer.damage}
@@ -2032,7 +1995,6 @@ function ProjectDetails({
   onPrevious,
   onInvoiceEdit,
   onInvoiceRevoke,
-  onBatchEdit,
   onDamageUpdate,
   onInstrumentSave,
   onOrderNoteEdit,
@@ -2061,9 +2023,6 @@ function ProjectDetails({
   onInvoiceRevoke: (
     invoice: Extract<WorkbenchV2SectionRow, { kind: "invoices" }>,
   ) => void;
-  onBatchEdit: (
-    batch: Extract<WorkbenchV2SectionRow, { kind: "batches" }>,
-  ) => void;
   onDamageUpdate: (
     damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>,
   ) => void;
@@ -2077,7 +2036,6 @@ function ProjectDetails({
   onDelete: (kind: "service_order" | "activity" | "damage_repair_item" | "batch" | "instrument", id: string) => void;
 }): JSX.Element {
   const recordFacts: Array<[string, string]> = project ? [
-    ["物流费用登记", `${project.counts.batches} 条`],
     ["搬迁仪器", `${project.counts.instruments} 台`],
     ["开单记录", `${project.counts.orders} 条`],
     ["损坏/维修事项", `${project.counts.repairs} 条`],
@@ -2086,7 +2044,6 @@ function ProjectDetails({
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const action: Partial<Record<DetailTab, WorkbenchActionType>> = {
     搬迁仪器: "instrument",
-    物流费用登记: "batch",
     开单记录: "order",
     费用与掉票: "invoice",
     申请与维修: "damage",
@@ -2250,7 +2207,6 @@ function ProjectDetails({
               page={section}
               onInvoiceEdit={onInvoiceEdit}
               onInvoiceRevoke={onInvoiceRevoke}
-              onBatchEdit={onBatchEdit}
               onDamageUpdate={onDamageUpdate}
               onInstrumentSave={onInstrumentSave}
               onOrderNoteEdit={onOrderNoteEdit}
@@ -2262,7 +2218,6 @@ function ProjectDetails({
             page={section}
             onInvoiceEdit={onInvoiceEdit}
             onInvoiceRevoke={onInvoiceRevoke}
-            onBatchEdit={onBatchEdit}
             onDamageUpdate={onDamageUpdate}
             onInstrumentSave={onInstrumentSave}
             onOrderNoteEdit={onOrderNoteEdit}
@@ -2301,7 +2256,6 @@ function SectionTable({
   page,
   onInvoiceEdit,
   onInvoiceRevoke,
-  onBatchEdit,
   onDamageUpdate,
   onInstrumentSave,
   onOrderNoteEdit,
@@ -2313,9 +2267,6 @@ function SectionTable({
   ) => void;
   onInvoiceRevoke: (
     invoice: Extract<WorkbenchV2SectionRow, { kind: "invoices" }>,
-  ) => void;
-  onBatchEdit: (
-    batch: Extract<WorkbenchV2SectionRow, { kind: "batches" }>,
   ) => void;
   onDamageUpdate: (
     damage: Extract<WorkbenchV2SectionRow, { kind: "damage_items" }>,
@@ -2424,11 +2375,6 @@ function SectionTable({
                   ) : (
                     <span className="terminal-note">终态 · 更正请新增</span>
                   )}
-                </td>
-              )}
-              {row.kind === "batches" && (
-                <td>
-                  <div className="row-actions compact"><button className="button small" onClick={() => onBatchEdit(row)}>编辑</button><button className="button danger small" onClick={() => onDelete("batch", row.id)}>删除</button></div>
                 </td>
               )}
               {row.kind === "damage_items" && (
@@ -2806,7 +2752,6 @@ function ActionFormV2({
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [warning, setWarning] = useState("");
   const [damageStatus, setDamageStatus] = useState("untreated");
   const submitLock = useRef(false);
   const optionKind: WorkbenchV2SectionKind | null =
@@ -2846,7 +2791,6 @@ function ActionFormV2({
       values.instrumentId = optionId;
       values.instrumentIds = [optionId];
     }
-    if (optionKind === "batches" && optionId) values.batchId = optionId;
     if (type === "core" && data.get("siteConfirmed") === "on") values.siteConfirmed = true;
     try {
       if (type === "ship_to" && shipTo)
@@ -2888,17 +2832,6 @@ function ActionFormV2({
     <form
       id="action-record-form"
       onSubmit={(event) => void submit(event)}
-      onChange={(event) => {
-        if (type !== "batch") return;
-        const data = new FormData(event.currentTarget);
-        try {
-          const budget = String(data.get("budgetPrice") || "");
-          const deal = String(data.get("dealPrice") || "");
-          setWarning(budget && deal && centsOf(deal) > centsOf(budget) ? "物流成交价高于合同预算价，可以保存，请确认差额。" : "");
-        } catch {
-          setWarning("");
-        }
-      }}
     >
       <LayerHeaderAction><button form="action-record-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : "保存记录"}</button></LayerHeaderAction>
       <p className="notice">
@@ -2925,7 +2858,6 @@ function ActionFormV2({
           {error}
         </div>
       )}
-      {warning && <div className="inline-warning" role="status">{warning}</div>}
       <div className="form-footer">
         <span>保存后仅刷新受影响的项目和当前详情</span>
       </div>
@@ -3073,111 +3005,6 @@ function LargeProjectOrderForm({
   );
 }
 
-function BatchEditForm({
-  batch,
-  onSave,
-}: {
-  batch: Extract<WorkbenchV2SectionRow, { kind: "batches" }>;
-  onSave: (values: BatchEditValues) => Promise<void>;
-}): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const submitLock = useRef(false);
-  const values = batch as unknown as Record<string, unknown>;
-  const budgetPrice = String(values.budgetPrice ?? values.originalPrice ?? "");
-  const dealPrice = String(values.dealPrice ?? values.discountedPrice ?? "");
-  const appliedAt = String(values.appliedAt ?? "");
-
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (submitLock.current) return;
-    submitLock.current = true;
-    setBusy(true);
-    setError("");
-    const data = new FormData(event.currentTarget);
-    try {
-      await onSave({
-        planTransportDate: String(data.get("planTransportDate") ?? "").trim() || null,
-        transportCompany: String(data.get("transportCompany") ?? "").trim() || null,
-        appliedAt: String(data.get("appliedAt") ?? "").trim() || null,
-        budgetPrice: String(data.get("budgetPrice") ?? "").trim() || null,
-        dealPrice: String(data.get("dealPrice") ?? "").trim() || null,
-      });
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      submitLock.current = false;
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form id="batch-edit-form" className="project-edit-form" onSubmit={(event) => void submit(event)}>
-      <LayerHeaderAction><button form="batch-edit-form" className="button primary" disabled={busy}>{busy ? "正在保存…" : "保存批次修改"}</button></LayerHeaderAction>
-      <p className="notice">
-        可补充、修改或清空本条物流费用信息。修改费用登记日期会影响报表归属月份。
-      </p>
-      <div className="edit-form-sections">
-        <fieldset className="edit-form-section">
-          <legend>运输安排</legend>
-          <div className="form-grid">
-            <Field
-              name="planTransportDate"
-              label="运输日期"
-              type="date"
-              defaultValue={batch.planTransportDate ?? ""}
-              optional
-              help="可留空；填写时请选择有效日期。"
-              autoFocus
-            />
-            <Field
-              name="transportCompany"
-              label="运输公司"
-              defaultValue={batch.transportCompany ?? ""}
-              optional
-            />
-            <Field
-              name="appliedAt"
-              label="费用登记日期"
-              type="date"
-              defaultValue={appliedAt}
-              optional
-              help="可留空；填写时请选择有效日期。修改后会影响报表归属月份。"
-            />
-          </div>
-        </fieldset>
-        <fieldset className="edit-form-section">
-          <legend>价格</legend>
-          <div className="form-grid">
-            <Field
-              name="budgetPrice"
-              label="合同预算价"
-              type="number"
-              step="0.01"
-              defaultValue={budgetPrice}
-              optional
-              help="可留空；填写时请输入大于 0 的金额。"
-            />
-            <Field
-              name="dealPrice"
-              label="物流成交价"
-              type="number"
-              step="0.01"
-              defaultValue={dealPrice}
-              optional
-              help="可留空；填写时请输入不小于 0 的金额。"
-            />
-          </div>
-        </fieldset>
-      </div>
-      {error && <div className="inline-error" role="alert">{error}</div>}
-      <div className="form-footer">
-        <span>保存后刷新当前项目的物流费用记录。</span>
-      </div>
-    </form>
-  );
-}
-
 function DamageUpdateForm({
   damage,
   onSave,
@@ -3228,43 +3055,6 @@ function actionFields(
   damageStatus: string,
   onDamageStatus: (status: string) => void,
 ): ReactNode {
-  if (type === "batch")
-    return (
-      <>
-        <Field
-          name="planTransportDate"
-          label="运输日期"
-          type="date"
-          optional
-          help="可留空；填写时请选择有效日期。"
-          autoFocus
-        />
-        <Field name="transportCompany" label="运输公司" optional />
-        <Field
-          name="appliedAt"
-          label="费用登记日期"
-          type="date"
-          optional
-          help="可留空；填写时请选择有效日期。填写后用于报表归属月份，后续修改会改变归属月份。"
-        />
-        <Field
-          name="budgetPrice"
-          label="合同预算价"
-          type="number"
-          step="0.01"
-          optional
-          help="可留空；填写时请输入大于 0 的金额。"
-        />
-        <Field
-          name="dealPrice"
-          label="物流成交价"
-          type="number"
-          step="0.01"
-          optional
-          help="可留空；填写时请输入不小于 0 的金额。高于合同预算价时会提示确认，但仍允许记录。"
-        />
-      </>
-    );
   if (type === "order")
     return (
       <>
@@ -5027,7 +4817,7 @@ function InvoiceMutationForm({
 
 type HistoryKind = WorkbenchV2HistoryKind | WorkbenchV2IndependentKind;
 const HISTORY_KINDS: Array<[HistoryKind, string]> = [
-  ["batch", "物流费用"], ["instrument", "搬迁仪器"], ["service_order", "开单记录"],
+  ["instrument", "搬迁仪器"], ["service_order", "开单记录"],
   ["invoice", "掉票记录"], ["damage", "损坏维修"], ["acceptance", "验收报告"], ["ship_to_request", "Account ID 申请"],
   ["serial_address", "序列号地址更新"], ["qr_request", "二维码申请"],
 ];
@@ -5343,7 +5133,6 @@ function reportFiltersMatch(a: WorkbenchReportFilter, b: WorkbenchReportFilter |
   if ((a.region?.trim() || null) !== (b.region?.trim() || null)) return false;
   if ((a.orderType || null) !== (b.orderType || null)) return false;
   if ((a.workScope || null) !== (b.workScope || null)) return false;
-  if ((a.transportCompany?.trim() || null) !== (b.transportCompany?.trim() || null)) return false;
   if ((a.engineer?.trim() || null) !== (b.engineer?.trim() || null)) return false;
   const aTags = [...(a.tagIds ?? [])].sort();
   const bTags = [...(b.tagIds ?? [])].sort();
@@ -5360,7 +5149,6 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
     monthTo: "",
     region: null,
     orderType: null,
-    transportCompany: null,
     engineer: null,
     workScope: null,
   });
@@ -5385,10 +5173,6 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
     return {
       ...rest,
       region: filter.region && filter.region.trim() !== "" ? filter.region.trim() : null,
-      transportCompany:
-        filter.transportCompany && filter.transportCompany.trim() !== ""
-          ? filter.transportCompany.trim()
-          : null,
       engineer: filter.engineer && filter.engineer.trim() !== "" ? filter.engineer.trim() : null,
       ...(workScope ? { workScope } : {}),
       ...(filter.tagIds ? { tagIds: [...filter.tagIds] } : {}),
@@ -5537,8 +5321,6 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
             handleWorkScopeChange(((event.target.value as "other" | "medium_large") || null))
           }
         />
-        <Field name="reportTransportCompany" label="运输公司" placeholder="全部运输公司" help="留空表示全部运输公司" value={draftFilter.transportCompany ?? ""}
-          onChange={(event) => setDraftFilter((old) => ({ ...old, transportCompany: event.target.value || null }))} />
         <Field name="reportEngineer" label="工程师" placeholder="全部工程师" help="留空表示全部工程师" value={draftFilter.engineer ?? ""}
           onChange={(event) => setDraftFilter((old) => ({ ...old, engineer: event.target.value || null }))} />
         {(Boolean(draftFilter.region?.trim()) || Boolean(draftFilter.tagIds?.length)) && (
@@ -5797,7 +5579,6 @@ function layerRequiresDirtyProtection(layer: LayerState): boolean {
     "independent",
     "invoice-edit",
     "invoice-revoke",
-    "batch-edit",
     "damage-update",
     "order-note-edit",
     "tags",
@@ -6129,7 +5910,6 @@ function layerTitle(layer: LayerState): string {
     return layer.module === "serial_address" ? "序列号地址更新" : "二维码申请";
   if (layer.kind === "invoice-edit") return "编辑掉票";
   if (layer.kind === "invoice-revoke") return "撤销掉票";
-  if (layer.kind === "batch-edit") return "编辑物流费用记录";
   if (layer.kind === "damage-update") return "更新维修状态";
   if (layer.kind === "order-note-edit") return "维护开单备注";
   if (layer.kind === "action")

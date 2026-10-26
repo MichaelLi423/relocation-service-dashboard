@@ -506,7 +506,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       expect(pngText).toBeDefined();
       const meta = JSON.parse(pngText);
       expect(meta.range).toEqual({ from: '2026-07', to: '2026-07' });
-      expect(meta.filters).toEqual({ region: 'East', orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null });
+      expect(meta.filters).toEqual({ region: 'East', orderType: null, engineer: null, operator: null, tagIds: [], workScope: null });
       const invoiceSection = meta.sections.find((s: { key: string }) => s.key === 'monthly_invoice');
       expect(invoiceSection.rows).toContainEqual(['2026-07', 'East', '5000.00', '1', '1']);
 
@@ -535,20 +535,10 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       const png = ctx.exporter.exportPng(report);
       const meta = JSON.parse(extractPngTextChunk(png, 'Report'));
       const logisticsSection = meta.sections.find((s: { key: string }) => s.key === 'monthly_logistics');
-      // 导出仅保留两个价格口径：合同预算价与物流成交价（物流成交价即最终实际费用），
-      // 不含旧「实际费用」列（costSumCents/budgetCostDiffCents 仅为底层历史兼容列）。
-      expect(logisticsSection.header).toEqual([
-        '月份',
-        '运输公司',
-        '批次数',
-        '合同预算价合计',
-        '物流成交价合计',
-        '合同预算价-物流成交价差异',
-        '物流成交价>合同预算价批次数',
-        '已取消批次数',
-      ]);
-      expect(logisticsSection.header.join('').includes('实际费用')).toBe(false);
-      expect(logisticsSection.rows).toContainEqual(['2026-07', '物流公司甲', '1', '100.00', '120.00', '-20.00', '1', '0']);
+      // 标题保留供旧证据匹配；当前整个物流统计区段下线，而非仅删除某价格列。
+      expect(logisticsSection).toBeUndefined();
+      expect(meta.sections.map((s: { key: string }) => s.key)).not.toContain('logistics_contract_ratio');
+      expect(meta.sections.map((s: { key: string }) => s.key)).not.toContain('pending_logistics_list');
 
       closeDatabase(ctx.db);
     } finally {
@@ -677,7 +667,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       const png = ctx.exporter.exportPng(model);
       const pngText = extractPngTextChunk(png, 'Report');
       const meta = JSON.parse(pngText);
-      expect(meta.filters).toEqual({ region: null, orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null });
+      expect(meta.filters).toEqual({ region: null, orderType: null, engineer: null, operator: null, tagIds: [], workScope: null });
       const shipToSection = meta.sections.find((s: { key: string }) => s.key === 'ship_to_request_workload');
       expect(shipToSection.header).toEqual(['月份', '责任人', '首次提交数']);
       expect(shipToSection.rows).toContainEqual(['2026-07', '负责人甲', '1']);
@@ -1008,7 +998,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
 
         // PNG 与 PDF 直读同一 reportSummaryJson（filters + sections），验证数值一致
         const pngMeta = JSON.parse(extractPngTextChunk(ctx.exporter.exportPng(report), 'Report'));
-        expect(pngMeta.filters).toEqual(report.filters);
+        expect(pngMeta.filters).toEqual(Object.fromEntries(Object.entries(report.filters).filter(([key]) => key !== 'transportCompany')));
         for (const key of ['ship_to_request_workload', 'qr_request_workload', 'serial_address_update_count']) {
           expect(pngMeta.sections.find((s: { key: string }) => s.key === key).rows, `PNG ${key}`).toEqual([]);
         }

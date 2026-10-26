@@ -18,9 +18,6 @@ export const REPORT_METRIC_KEYS = [
   'monthly_invoice_count', // 月度掉票次数
   'monthly_service_order_count', // 月度开单量（唯一服务单号）
   'damage_repair_stats', // 损坏维修统计（仅已使用备件）
-  'monthly_logistics', // 月度物流费用汇总（人民币）
-  'logistics_contract_ratio', // 物流成交价合同占比
-  'pending_logistics_list', // 历史异常批次（已有物流成交价但无费用记录，仅展示）
   'ship_to_request_workload', // Ship-to 申请工作量（首次实际提交）
   'qr_request_workload', // 二维码申请工作量（去重类型）
   'serial_address_update_count', // 序列号地址更新记录数
@@ -33,7 +30,6 @@ export const REPORT_FILTER_FIELDS = [
   'monthTo', // 月份区间截止（yyyy-mm，必填，无默认季度）
   'region', // 区域（去除首尾空白后精确匹配）
   'orderType', // 开单业务类型（搬迁/认证/单寄备件/PM）
-  'transportCompany', // 运输公司
   'engineer', // 参与工程师（开单量可选筛选）
   'operator', // 责任人（按动作记录持久化的用户名快照筛选，工作量指标可选筛选）
   'tagIds', // 项目分类标签（多选 OR；启用时仅匹配关联项目事实）
@@ -53,7 +49,7 @@ export interface ReportFilter {
   region?: string | null;
   /** 开单业务类型（null = 全部类型）。 */
   orderType?: OrderType | null;
-  /** 运输公司（null = 全部运输公司）。 */
+  /** @deprecated 仅供内部历史模型兼容，不属于公共筛选。 */
   transportCompany?: string | null;
   /** 参与工程师（null = 全部工程师；仅开单量筛选）。 */
   engineer?: string | null;
@@ -129,30 +125,6 @@ export const REPORT_METRIC_DEFINITIONS: readonly ReportMetricDefinition[] = [
     factSource: 'damage_repair_items（记录数量；仅已使用备件折算 USD 金额；最新合同 USD 含税金额占比；按登记时持久化的账号内部 ID 与用户名快照归属责任人）',
     filters: ['monthFrom', 'monthTo', 'region', 'operator', 'tagIds'],
     hasDrillDown: true,
-  },
-  {
-    key: 'monthly_logistics',
-    label: '月度物流费用汇总',
-    timeAttribution: '实际物流费用申请（登记）时间（applied_at）所属月份',
-    factSource: 'logistics_fees（合同预算价/物流成交价；实际费用旧列与物流成交价同值，仅历史兼容）按 batches.transport_company 分组',
-    filters: ['monthFrom', 'monthTo', 'region', 'transportCompany', 'tagIds'],
-    hasDrillDown: true,
-  },
-  {
-    key: 'logistics_contract_ratio',
-    label: '物流成交价合同占比',
-    timeAttribution: '实际物流费用申请（登记）时间所属月份',
-    factSource: 'logistics_fees 物流成交价（即最终实际费用）÷ 固定汇率 7.2 折算 USD ÷ 最新合同 USD 含税金额',
-    filters: ['monthFrom', 'monthTo', 'region', 'tagIds'],
-    hasDrillDown: true,
-  },
-  {
-    key: 'pending_logistics_list',
-    label: '历史异常批次',
-    timeAttribution: '不按月归属（当前清单）；已取消项目排除',
-    factSource: 'batches（已有物流成交价 discounted_price_cents 且无 logistics_fees 记录；历史数据形态，仅展示不提供补录指引）',
-    filters: ['region', 'transportCompany', 'tagIds'],
-    hasDrillDown: false,
   },
   {
     key: 'ship_to_request_workload',

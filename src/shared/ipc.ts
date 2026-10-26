@@ -1820,7 +1820,8 @@ export interface ProjectSupplementPayload {
  * - 价格字段：null = 清空；有值 = 覆盖（合同预算价必须 > 0；物流成交价允许显式 0）；
  *   空串视为缺失报错、不得静默当 0，由主进程/领域校验。
  * `appliedAt`（物流费用申请/登记时间）可补、改、清空（修改会影响报表归属月份）。
- * 历史批次无 fee 时按需创建部分费用记录；仅提交 null/undefined 时不虚构费用记录。
+ * 历史批次无 fee 时曾按需创建部分费用记录；仅提交 null/undefined 时不虚构费用记录。
+ * @deprecated 仅保留旧调用方契约；公共 batch_edit 操作返回 LOGISTICS_DISABLED。
  */
 export interface BatchEditPayload {
   /** 目标批次 id。 */
@@ -1837,6 +1838,7 @@ export interface BatchEditPayload {
   appliedAt?: string | null;
 }
 
+/** batch/logistics 仅供旧调用方兼容，公共提交返回 LOGISTICS_DISABLED；visit 同理已下线。 */
 export type WorkbenchActionType =
   | 'batch' | 'instrument' | 'visit' | 'order' | 'logistics'
   | 'acceptance' | 'invoice' | 'ship_to' | 'damage' | 'core'
@@ -1852,9 +1854,9 @@ export interface WorkbenchActionPayload {
    * 业务日期字段（planTransportDate/visitAt/orderedAt/appliedAt/invoicedAt/requestedAt/
    * registeredAt/partRequestedAt/entryAt/updatedAt/reportDate 等）一律为 yyyy-mm-dd，
    * 由主进程校验后透传，绝不转换为 ISO；审计/技术时间不在此提交。
-   * 快速记录搬迁批次（type='batch'）提交 planTransportDate/transportCompany/appliedAt/
-   * budgetPrice/dealPrice（全部可选，空串=未填写），主进程在同一事务内原子创建批次；
-   * 任一费用字段有值时创建该批次唯一一笔（可部分）物流费用，全空时仅建批次。
+   * type='batch' / 'logistics' 登记已下线，返回 LOGISTICS_DISABLED；其他动作不受影响。
+   * 历史快速记录搬迁批次曾提交 planTransportDate/transportCompany/appliedAt/
+   * budgetPrice/dealPrice（全部可选，空串=未填写）；以下仅记录旧字段映射，不再执行登记。
    * 仅两个价格口径：budgetPrice=合同预算价 → batch.originalPriceCents +
    * fee.budgetPriceCents；dealPrice=物流成交价 → batch.discountedPriceCents +
    * fee.dealPriceCents + fee.logisticsCostCents（物流成交价即最终实际费用）。
@@ -1867,6 +1869,7 @@ export interface ReportFilterDto {
   monthTo: string;
   region?: string | null;
   orderType?: 'relocation' | 'certification' | 'parts_by_mail' | 'pm' | null;
+  /** @deprecated 物流统计已下线；仅兼容旧输入，不展示为公共筛选。 */
   transportCompany?: string | null;
   engineer?: string | null;
   /** 开单工作范围（other = 其他/既有，medium_large = 中大型；null = 全部；仅开单量指标生效）。 */

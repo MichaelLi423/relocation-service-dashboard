@@ -9,8 +9,8 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 18 |
-| ADDED Requirements 场景总数 | 735 |
-| 有有效测试证据（✅） | 616 |
+| ADDED Requirements 场景总数 | 738 |
+| 有有效测试证据（✅） | 619 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
 | 缺证据 / 证据无效（❌） | 119 |
 
@@ -315,6 +315,7 @@
 
 | Requirement | Scenario | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- | --- |
+| 物流费用统计及导出下线 | 公共报表和三种导出不含物流统计 | ✅ | `tests/integration/logistics-retirement.sqlite.test.ts`「公共报表指标下钻与 Excel PNG PDF 无物流统计区段及运输公司筛选」 | 内部历史 ReportModel 仍保留结构；公共字典/下钻/序列化与导出不开放物流统计。既有物流公式场景仅验证历史兼容，不代表用户功能仍开放。 |
 | 各区域新项目进单金额 | 按进单月份与区域汇总进单金额 | ✅ | `tests/domain/operational-reporting.test.ts`「按进单月份与区域汇总进单金额，每个项目只计一次，不因合同变更改变」 |  |
 | 各区域新项目进单金额 | 按已记录进单日期归属 | ✅ | `tests/domain/operational-reporting.test.ts`「按已记录进单时间归属；补录或修正进单时间后归属实时变化」 |  |
 | 月度掉票金额与掉票次数 | 月度掉票按月份区域统计去重项目数 | ✅ | `tests/domain/operational-reporting.test.ts`「掉票按月份区域聚合金额次数与去重项目数，撤销不计且区域修改实时回溯」<br>`tests/integration/operational-reporting.sqlite.test.ts`「多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致」 |  |
@@ -437,6 +438,8 @@
 
 | Requirement | Scenario | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- | --- |
+| 物流费用与运输批次登记下线 | 批次费用公共写入口拒绝且零写 | ✅ | `tests/integration/logistics-retirement.sqlite.test.ts`「公共 batch/logistics/batch_edit 全部拒绝且 revision 与历史数据零变化」 |  |
+| 物流费用与运输批次登记下线 | 物流下线保留项目计划运输日期与历史关联 | ✅ | `tests/integration/logistics-retirement.sqlite.test.ts`「项目计划运输日期可修改清空，历史批次费用与仪器关联不受影响」 |  |
 | 暂定数量登记 | 只记暂定数量不建仪器 | ✅ | `tests/domain/relocation-execution.test.ts`「只记暂定数量不建仪器：保存数量信息且不创建任何仪器记录」 |  |
 | 暂定数量登记 | 仪器数量允许建档后补充 | ✅ | `tests/domain/relocation-execution.test.ts`「编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）」 |  |
 | 暂定数量登记 | 补齐进单核心资料查看并留空暂定数量 | ✅ | `tests/domain/relocation-execution.test.ts`「编辑项目资料维护暂定仪器数量（6.5：查看/留空/补录/调整）」 |  |
@@ -720,7 +723,7 @@
 | 单页分组录入创建搬迁项目 | 可后补字段不无提示丢失且不自动生成提醒 | ✅ | `tests/renderer/app.test.tsx`「保存意图分组实时展示摘要，并在正式进单合同金额为零时提示」 |  |
 | 项目主状态人工选择与校验反馈 | 人工选择主状态并就地反馈 | ✅ | `tests/integration/workbench-facade.sqlite.test.ts`「人工主状态必须经过 lifecycle 校验并将拒绝原因返回界面层」<br>`e2e/electron-smoke.spec.ts`「未进单先执行 → 实际装机完成自动待验收 → 验收进入待掉票（核心动作补充闭环）」 |  |
 | 项目主状态人工选择与校验反馈 | 自动触发结果如实反映 | ✅ | `e2e/electron-smoke.spec.ts`「未进单先执行 → 实际装机完成自动待验收 → 验收进入待掉票（核心动作补充闭环）」 |  |
-| 快速记录入口与动作表单 | 覆盖八类业务动作 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」 |  |
+| 快速记录入口与动作表单 | 覆盖七类业务动作 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」 | 物流批次入口下线后为七类动作；旧测试标题如保留八类仅作证据定位，不表示当前仍有八类入口。 |
 | 快速记录入口与动作表单 | 备件申请并入损坏/维修事项 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」 |  |
 | 快速记录入口与动作表单 | 二维码申请不在项目快速记录 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」 |  |
 | 快速记录入口与动作表单 | 批次表单字段 | ✅ | `tests/renderer/app.test.tsx`「开单、合并批次、仪器与损坏维修表单给出对应字段约束和就地反馈」 |  |
@@ -730,8 +733,8 @@
 | 快速记录入口与动作表单 | 损坏/维修表单合同金额 0 就地反馈 | ✅ | `tests/renderer/app.test.tsx`「开单、合并批次、仪器与损坏维修表单给出对应字段约束和就地反馈」 |  |
 | 快速记录入口与动作表单 | 序列号地址更新与二维码申请独立模块入口 | ✅ | `tests/renderer/app.test.tsx`「独立导航打开序列号地址更新与二维码申请，二维码支持九类多选并实时预览去重计数」 |  |
 | 快速记录入口与动作表单 | 不用通用空表单 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」 |  |
-| 搬迁批次编辑 | 修改批次运输信息与两价 | ✅ | `tests/renderer/app.test.tsx`「物流费用编辑回显全部五项，未改的 appliedAt 按原值提交并可清空其他字段」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt」 |  |
-| 搬迁批次编辑 | 费用登记日期不可修改且归属月份不变 | ✅ | `tests/renderer/app.test.tsx`「物流费用编辑回显全部五项，未改的 appliedAt 按原值提交并可清空其他字段」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt」 |  |
+| 搬迁批次编辑 | 修改批次运输信息与两价 | ✅ | `tests/renderer/app.test.tsx`「物流费用登记 Tab 与批次编辑已下线，项目详情中不再展示物流费用 Tab」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt」 | 该旧交互场景已由物流功能下线范围取代；当前证据验证编辑入口移除、旧 batch_edit 请求拒绝且历史值不变，不代表仍允许编辑。 |
+| 搬迁批次编辑 | 费用登记日期不可修改且归属月份不变 | ✅ | `tests/renderer/app.test.tsx`「物流费用登记 Tab 与批次编辑已下线，项目详情中不再展示物流费用 Tab」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 修改计划运输日期/运输公司/合同预算价/物流成交价，不改变 appliedAt」 | 物流编辑已整体下线；当前证据验证无编辑入口、旧写请求被拒且历史费用日期保持原值。 |
 | 搬迁批次编辑 | 不提供独立物流费用补录入口 | ✅ | `tests/renderer/app.test.tsx`「快速记录合并开单入口，八类动作均提供真实字段」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 历史批次无 fee：编辑价格按需创建部分费用，仅批次字段不虚构费用」 | 快速记录菜单不出现独立「实际物流费用」动作；费用仅通过批次创建/批次编辑中的合同预算价、物流成交价维护（见「物流费用记录可预填编辑」测试） |
 | 就近录入与提醒直达 | 项目队列行内记录入口 | ✅ | `tests/renderer/app.test.tsx`「队列行、上下文和详情 Tab 都提供绑定当前项目的就近录入入口」 |  |
 | 就近录入与提醒直达 | 当前上下文就近入口 | ✅ | `tests/renderer/app.test.tsx`「队列行、上下文和详情 Tab 都提供绑定当前项目的就近录入入口」 |  |

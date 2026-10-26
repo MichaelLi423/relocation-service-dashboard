@@ -1,3 +1,4 @@
+import { seedHistoricalBatch } from '../helpers/historical-batch';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
@@ -400,7 +401,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
 
     // ---- 预置各类型记录 ----
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     const batchId = String(db.prepare('SELECT id FROM batches WHERE project_id = ?').get(projectId)!.id);
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', projectId, values: { orderType: 'relocation', serviceOrderNo: 'SO-56', orderedAt: '2026-08-11', engineer: '工程师甲' } } });
     const orderId = String(db.prepare('SELECT id FROM service_orders WHERE service_order_no = ?').get('SO-56')!.id);
@@ -530,7 +531,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const { facade, db, projectId } = ctx;
 
     // 空批次（未开始、无仪器、无历史，但带唯一物流费用）→ 删除成功（费用随批次删除）
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     const batchId = String(db.prepare('SELECT id FROM batches WHERE project_id = ?').get(projectId)!.id);
     const feeId = String(db.prepare('SELECT id FROM logistics_fees WHERE batch_id = ?').get(batchId)!.id);
     const result = facade.v2Delete({ kind: 'batch', id: batchId, expectedRevision: readBusinessRevision(db) });
@@ -540,7 +541,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     expect(db.prepare('SELECT COUNT(*) AS n FROM logistics_fees WHERE id = ?').get(feeId)!.n).toBe(0);
 
     // 已绑定仪器 → 拒绝
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-11', transportCompany: 'T', appliedAt: '2026-08-09', budgetPrice: '1000', dealPrice: '1000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-11', transportCompany: 'T', appliedAt: '2026-08-09', budgetPrice: '1000', dealPrice: '1000' });
     const batch2 = String(db.prepare('SELECT id FROM batches WHERE project_id = ? AND id <> ?').get(projectId, batchId)!.id);
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
     db.prepare('UPDATE instruments SET batch_id = ? WHERE id = ?').run(batch2, instrumentId);
@@ -586,7 +587,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const ctx2 = await makeCtx();
     const { db: db2, projectId: p2 } = ctx2;
     const i2 = String(db2.prepare('SELECT id FROM instruments WHERE project_id = ?').get(p2)!.id);
-    ctx2.facade.v2Mutate({ op: 'submit_action', projectId: p2, action: { type: 'batch', projectId: p2, values: { planTransportDate: '2026-08-10', transportCompany: 'T', appliedAt: '2026-08-09', budgetPrice: '1000', dealPrice: '1000' } } });
+    seedHistoricalBatch(ctx2.db, p2, { planTransportDate: '2026-08-10', transportCompany: 'T', appliedAt: '2026-08-09', budgetPrice: '1000', dealPrice: '1000' });
     const b2 = String(db2.prepare('SELECT id FROM batches WHERE project_id = ?').get(p2)!.id);
     db2.prepare('UPDATE instruments SET batch_id = ? WHERE id = ?').run(b2, i2);
     db2.prepare('UPDATE batches SET started_at = ? WHERE id = ?').run('2026-08-12', b2);
@@ -854,7 +855,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const { facade, db, projectId } = ctx;
 
     // 批次 + 唯一物流费用均挂 import_record_audit → 删除时来源审计保留并标记（不物理擦除）
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' });
     const batchId = String(db.prepare('SELECT id FROM batches WHERE project_id = ?').get(projectId)!.id);
     const feeId = String(db.prepare('SELECT id FROM logistics_fees WHERE batch_id = ?').get(batchId)!.id);
     db.prepare(

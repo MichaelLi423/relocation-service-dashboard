@@ -1,3 +1,4 @@
+import { seedHistoricalBatch } from '../helpers/historical-batch';
 import { afterEach, describe, expect, it } from 'vitest';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
 import { SqliteAccountRepository } from '../../src/domain/capabilities/local-data-persistence/repositories';
@@ -24,7 +25,7 @@ describe('记录编辑 SQLite 集成', () => {
   it('仪器编辑原子更新字段和批次，同批次不新增改批历史，失败全回滚', async () => {
     const { db, facade } = await setup();
     const projectId = facade.v2Mutate({ op: 'create_project', payload: { intent: 'draft', customerName: '仪器编辑客户', region: 'East' } }).changed!.projectId!;
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '10', dealPrice: '0' } } });
+    seedHistoricalBatch(db, projectId, { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '10', dealPrice: '0' });
     const batchId = (facade.v2SectionPage({ projectId, kind: 'batches' }).rows[0] as { id: string }).id;
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'instrument', projectId, values: { name: '名称不可改', serialNo: 'SN-1', ups: false, qrRequested: false } } });
     const instrumentId = (facade.v2SectionPage({ projectId, kind: 'instruments' }).rows[0] as { id: string }).id;
@@ -45,7 +46,7 @@ describe('记录编辑 SQLite 集成', () => {
     const full = (batch: string | null, model = '不应保存') => ({ op: 'instrument_update' as const, payload: { instrumentId, manufacturer: '不应保存', model, serviceLevel: '不应保存', serialNo: 'SN-3', ups: true, qrRequested: true, batchId: batch } });
     expect(() => facade.v2Mutate(full('missing-batch'))).toThrow(/批次不存在/);
     const otherProjectId = facade.v2Mutate({ op: 'create_project', payload: { intent: 'draft', customerName: '跨项目客户', region: 'East' } }).changed!.projectId!;
-    facade.v2Mutate({ op: 'submit_action', projectId: otherProjectId, action: { type: 'batch', projectId: otherProjectId, values: { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '10', dealPrice: '0' } } });
+    seedHistoricalBatch(db, otherProjectId, { planTransportDate: '2026-08-10', appliedAt: '2026-08-09', budgetPrice: '10', dealPrice: '0' });
     const foreignBatchId = (facade.v2SectionPage({ projectId: otherProjectId, kind: 'batches' }).rows[0] as { id: string }).id;
     expect(() => facade.v2Mutate(full(foreignBatchId))).toThrow(/不属于该搬迁项目/);
     db.prepare('UPDATE batches SET started_at=? WHERE id=?').run('2026-08-10', batchId);

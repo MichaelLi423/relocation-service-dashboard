@@ -370,7 +370,6 @@ describe('Oracle #10 bounded workbench renderer', () => {
 
   describe('八类登记记录逐类提供删除入口并调用对应 v2Delete kind', () => {
   const detailDeleteCases = [
-    ['batch', '物流费用登记', 'batch-1'],
     ['instrument', '搬迁仪器', 'i-0'],
     ['service_order', '开单记录', 'order-1'],
     ['damage_repair_item', '申请与维修', 'damage-1'],
@@ -543,7 +542,9 @@ describe('Oracle #10 bounded workbench renderer', () => {
     for (const group of ['基础资料', '搬迁安排', '设备与合同']) expect(within(profile).getByRole('region', { name: group })).toBeInTheDocument();
     expect(within(profile).getByRole('region', { name: '基础资料' })).toHaveTextContent('客户名称客户 1'); expect(within(profile).getByRole('region', { name: '搬迁安排' })).toHaveTextContent('旧址地址待补'); expect(within(profile).getByRole('region', { name: '设备与合同' })).toHaveTextContent('合同开始日期待补');
     const facts = within(profile).getByRole('region', { name: '关联登记事实' });
-    for (const label of ['物流费用登记1 条', '搬迁仪器1 台', '上门活动1 条', '开单记录1 条', '损坏/维修事项0 条', '掉票记录1 条']) expect(facts).toHaveTextContent(label);
+    expect(facts).not.toHaveTextContent('物流费用登记');
+    expect(facts).not.toHaveTextContent('上门活动');
+    for (const label of ['搬迁仪器1 台', '开单记录1 条', '损坏/维修事项0 条', '掉票记录1 条']) expect(facts).toHaveTextContent(label);
     expect(screen.queryByText(/序列号地址更新与二维码申请在独立模块按需加载/)).not.toBeInTheDocument();
     expect(screen.queryByText(/选择项目后，上方工作区会显示对应资料与记录/)).not.toBeInTheDocument();
   });
@@ -885,11 +886,12 @@ describe('Oracle #10 bounded workbench renderer', () => {
 
   it('快速记录合并开单入口，八类动作均提供真实字段', async () => {
     render(<App />); await screen.findByRole('row', { name: /^客户 1 / });
-    const labels = ['物流费用登记', '搬迁仪器', '开单记录', '验收报告', '掉票', 'Account ID 申请', '损坏/维修事项', '补齐进单核心资料'];
+    const labels = ['搬迁仪器', '开单记录', '验收报告', '掉票', 'Account ID 申请', '损坏/维修事项', '补齐进单核心资料'];
     for (const label of labels) {
       fireEvent.click(screen.getAllByRole('button', { name: '快速记录' })[0]!);
       const menu = screen.getByRole('dialog');
-      expect(within(menu).getAllByRole('button')).toHaveLength(9);
+      expect(within(menu).getAllByRole('button')).toHaveLength(8);
+      expect(within(menu).queryByText('物流费用登记')).not.toBeInTheDocument();
       expect(menu).toHaveTextContent('这里保存的记录均关联当前项目');
       expect(menu).toHaveTextContent('四类开单都会显示在项目开单记录中');
       expect(menu).toHaveTextContent('认证、单寄备件和 PM 仅作项目归档，不影响搬迁进度');
@@ -906,21 +908,10 @@ describe('Oracle #10 bounded workbench renderer', () => {
 
   it('物流费用登记五项均可留空保存，空金额按空值提交而不是 0', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
-    const dialog = await openQuickAction('物流费用登记');
-    expect(dialog).toHaveTextContent('可先保存现有信息');
-    for (const label of ['运输日期', '运输公司', '费用登记日期', '合同预算价', '物流成交价']) {
-      const field = within(dialog).getByLabelText(new RegExp(label));
-      expect(field).not.toBeRequired();
-      expect(field).not.toHaveAttribute('min');
-    }
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({
-      op: 'submit_action', action: {
-        type: 'batch', projectId: 'p-1', values: { planTransportDate: '', transportCompany: '', appliedAt: '', budgetPrice: '', dealPrice: '' },
-      },
-    })));
-    const values = (vi.mocked(api.v2Mutate!).mock.calls.at(-1)![0] as unknown as { action?: { values: Record<string, unknown> } }).action?.values;
-    expect(values?.budgetPrice).not.toBe(0); expect(values?.dealPrice).not.toBe(0);
+    await screen.findByRole('row', { name: /^客户 1 / });
+    fireEvent.click(screen.getAllByRole('button', { name: '快速记录' })[0]!);
+    const menu = screen.getByRole('dialog');
+    expect(within(menu).queryByText('物流费用登记')).not.toBeInTheDocument();
   });
 
   it('开单、合并批次、仪器与损坏维修表单给出对应字段约束和就地反馈', async () => {
@@ -934,23 +925,6 @@ describe('Oracle #10 bounded workbench renderer', () => {
     expect(within(dialog).queryByLabelText(/客户名称|客户单位/)).not.toBeInTheDocument();
     fireEvent.change(orderNo, { target: { value: 'SO-100' } }); fireEvent.change(engineer, { target: { value: '工程师甲' } }); fireEvent.change(within(dialog).getByLabelText(/开单日期/), { target: { value: '2026-08-08' } }); fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
     await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({ op: 'submit_action', action: expect.objectContaining({ type: 'order', values: expect.objectContaining({ serviceOrderNo: 'SO-100', engineer: '工程师甲' }) }) })));
-    dialog = await openQuickAction('物流费用登记');
-    const planDate = within(dialog).getByLabelText(/运输日期.*可后补/);
-    const company = within(dialog).getByLabelText(/运输公司.*可后补/);
-    const appliedAt = within(dialog).getByLabelText(/费用登记日期.*可后补/);
-    const budget = within(dialog).getByRole('spinbutton', { name: /合同预算价.*可后补/ });
-    const deal = within(dialog).getByRole('spinbutton', { name: /物流成交价.*可后补/ });
-    expect(planDate).not.toBeRequired(); expect(company).not.toBeRequired(); expect(appliedAt).not.toBeRequired();
-    expect(budget).not.toBeRequired(); expect(deal).not.toBeRequired(); expect(budget).not.toHaveAttribute('min'); expect(deal).not.toHaveAttribute('min');
-    expect(budget).toHaveAccessibleDescription(/大于 0/); expect(deal).toHaveAccessibleDescription(/不小于 0/);
-    fireEvent.change(company, { target: { value: '华东运输' } }); fireEvent.change(budget, { target: { value: '100' } }); fireEvent.change(deal, { target: { value: '120' } });
-    expect(within(dialog).getByRole('status')).toHaveTextContent('物流成交价高于合同预算价');
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存记录' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith(expect.objectContaining({
-      op: 'submit_action', action: {
-        type: 'batch', projectId: 'p-1', values: { planTransportDate: '', transportCompany: '华东运输', appliedAt: '', budgetPrice: '100', dealPrice: '120' },
-      },
-    })));
     dialog = await openQuickAction('搬迁仪器');
     expect(within(dialog).queryByLabelText(/二维码是否申请/)).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText(/仪器名称.*必填/), { target: { value: '质谱仪' } });
@@ -1058,13 +1032,11 @@ describe('Oracle #10 bounded workbench renderer', () => {
     let resolveMutation!: (value: Awaited<ReturnType<NonNullable<WorkbenchApi['v2Mutate']>>>) => void;
     const api = mockApi({ v2Mutate: vi.fn().mockImplementation(() => new Promise((resolve) => { resolveMutation = resolve; })) });
     Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
-    const dialog = await openQuickAction('物流费用登记'); const save = within(dialog).getByRole('button', { name: '保存记录' }); const form = document.getElementById(save.getAttribute('form')!) as HTMLFormElement;
+    const dialog = await openQuickAction('开单记录'); const save = within(dialog).getByRole('button', { name: '保存记录' }); const form = document.getElementById(save.getAttribute('form')!) as HTMLFormElement;
     expect(save.closest('.layer-head')).not.toBeNull();
     expect(form).toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText(/运输日期/), { target: { value: '2026-08-18' } });
-    fireEvent.change(within(dialog).getByLabelText(/费用登记日期/), { target: { value: '2026-08-09' } });
-    fireEvent.change(within(dialog).getByLabelText(/合同预算价/), { target: { value: '100' } });
-    fireEvent.change(within(dialog).getByLabelText(/物流成交价/), { target: { value: '90' } });
+    fireEvent.change(within(dialog).getByLabelText(/服务单号/), { target: { value: 'SO-101' } });
+    fireEvent.change(within(dialog).getByLabelText(/开单日期/), { target: { value: '2026-08-08' } });
     fireEvent.submit(form); fireEvent.submit(form);
     expect(api.v2Mutate).toHaveBeenCalledTimes(1); expect(save).toBeDisabled();
     const before = vi.mocked(api.v2Overview!).mock.calls.length;
@@ -1073,49 +1045,27 @@ describe('Oracle #10 bounded workbench renderer', () => {
     await waitFor(() => expect(vi.mocked(api.v2Overview!).mock.calls.length).toBeGreaterThan(before));
   });
 
-  it('物流费用编辑回显全部五项，未改的 appliedAt 按原值提交并可清空其他字段', async () => {
+  it('物流费用登记 Tab 与批次编辑已下线，项目详情中不再展示物流费用 Tab', async () => {
     const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
     await screen.findByRole('row', { name: /^客户 1 / });
-    fireEvent.click(screen.getByRole('tab', { name: '物流费用登记' }));
-    const budgetHeading = await screen.findByRole('columnheader', { name: '合同预算价' });
-    const table = budgetHeading.closest('table')!;
-    expect(table).toHaveTextContent('合同预算价'); expect(table).toHaveTextContent('物流成交价');
-    fireEvent.click(within(table).getByRole('button', { name: '编辑' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑物流费用记录' });
-    expect(dialog).not.toHaveTextContent('费用登记日期保持首次登记月份');
-    expect(dialog).toHaveTextContent('修改费用登记日期会影响报表归属月份');
-    expect(within(dialog).getByLabelText(/运输日期/)).toHaveValue('2026-08-18');
-    expect(within(dialog).getByLabelText(/运输公司/)).toHaveValue('华东运输');
-    expect(within(dialog).getByLabelText(/费用登记日期/)).toHaveValue('2026-08-09');
-    expect(within(dialog).getByLabelText(/合同预算价/)).toHaveValue(1000);
-    expect(within(dialog).getByLabelText(/物流成交价/)).toHaveValue(900);
-    fireEvent.change(within(dialog).getByLabelText(/运输日期/), { target: { value: '' } });
-    fireEvent.change(within(dialog).getByLabelText(/运输公司/), { target: { value: '' } });
-    fireEvent.change(within(dialog).getByLabelText(/合同预算价/), { target: { value: '' } });
-    fireEvent.change(within(dialog).getByLabelText(/物流成交价/), { target: { value: '' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存批次修改' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith({
-      op: 'batch_edit', payload: { batchId: 'batch-1', planTransportDate: null, transportCompany: null, appliedAt: '2026-08-09', budgetPrice: null, dealPrice: null },
-    }));
+    const tabList = screen.getByRole('tablist', { name: '项目详情' });
+    expect(within(tabList).queryByRole('tab', { name: '物流费用登记' })).not.toBeInTheDocument();
   });
 
-  it('物流费用编辑兼容 null 回显并可补录全部五项', async () => {
-    const nullableBatchPage = { ...section('batches'), rows: [{ kind: 'batches', id: 'batch-1', projectId: 'p-1', planTransportDate: null, transportCompany: null, appliedAt: null, originalPrice: null, discountedPrice: null, startedAt: null, createdAt: '2026-08-08T00:00:00Z' }] } as unknown as WorkbenchV2SectionPageDto;
-    const api = mockApi({ v2SectionPage: vi.fn().mockImplementation((request: { kind: WorkbenchV2SectionPageDto['kind']; projectId: string }) => Promise.resolve(request.kind === 'batches' ? nullableBatchPage : section(request.kind, request.projectId))) });
-    Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('row', { name: /^客户 1 / }); fireEvent.click(screen.getByRole('tab', { name: '物流费用登记' }));
-    const table = (await screen.findByRole('columnheader', { name: '合同预算价' })).closest('table')!; fireEvent.click(within(table).getByRole('button', { name: '编辑' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑物流费用记录' });
-    for (const label of ['运输日期', '运输公司', '费用登记日期', '合同预算价', '物流成交价']) expect(within(dialog).getByLabelText(new RegExp(label))).toHaveValue(label.includes('价') ? null : '');
-    fireEvent.change(within(dialog).getByLabelText(/运输日期/), { target: { value: '2026-08-20' } }); fireEvent.change(within(dialog).getByLabelText(/运输公司/), { target: { value: '华南运输' } }); fireEvent.change(within(dialog).getByLabelText(/费用登记日期/), { target: { value: '2026-09-01' } }); fireEvent.change(within(dialog).getByLabelText(/合同预算价/), { target: { value: '1100' } }); fireEvent.change(within(dialog).getByLabelText(/物流成交价/), { target: { value: '950' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存批次修改' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith({ op: 'batch_edit', payload: { batchId: 'batch-1', planTransportDate: '2026-08-20', transportCompany: '华南运输', appliedAt: '2026-09-01', budgetPrice: '1100', dealPrice: '950' } }));
+  it('项目计划运输日期在项目资料编辑中依然可正常维护', async () => {
+    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+    await screen.findByRole('row', { name: /^客户 1 / });
+    fireEvent.click(screen.getByRole('button', { name: '编辑项目资料' }));
+    const dialog = screen.getByRole('dialog', { name: '编辑项目资料' });
+    expect(within(dialog).getByLabelText(/计划运输日期/)).toBeInTheDocument();
   });
 
-  it('物流费用编辑可显式清空费用登记日期', async () => {
-    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('row', { name: /^客户 1 / }); fireEvent.click(screen.getByRole('tab', { name: '物流费用登记' }));
-    const table = (await screen.findByRole('columnheader', { name: '合同预算价' })).closest('table')!; fireEvent.click(within(table).getByRole('button', { name: '编辑' }));
-    const dialog = screen.getByRole('dialog', { name: '编辑物流费用记录' }); fireEvent.change(within(dialog).getByLabelText(/费用登记日期/), { target: { value: '' } }); fireEvent.click(within(dialog).getByRole('button', { name: '保存批次修改' }));
-    await waitFor(() => expect(api.v2Mutate).toHaveBeenCalledWith({ op: 'batch_edit', payload: { batchId: 'batch-1', planTransportDate: '2026-08-18', transportCompany: '华东运输', appliedAt: null, budgetPrice: '1000.00', dealPrice: '900.00' } }));
+  it('项目事实摘要中已下线物流费用计数展示', async () => {
+    const api = mockApi(); Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />);
+    await screen.findByRole('row', { name: /^客户 1 / });
+    fireEvent.click(screen.getByText('完整项目资料'));
+    const facts = screen.getByRole('region', { name: '关联登记事实' });
+    expect(facts).not.toHaveTextContent('物流费用登记');
   });
 
   it('报表提供 Excel、PNG、PDF 导出，并将导出失败留在当前抽屉提示', async () => {
@@ -1154,12 +1104,11 @@ describe('Oracle #10 bounded workbench renderer', () => {
     fireEvent.change(within(dialog).getByLabelText(/截止月份/), { target: { value: '2026-08' } });
     fireEvent.change(within(dialog).getByLabelText('区域'), { target: { value: '华东' } });
     fireEvent.change(within(dialog).getByLabelText('开单类型'), { target: { value: 'parts_by_mail' } });
-    fireEvent.change(within(dialog).getByLabelText('运输公司'), { target: { value: '华东运输' } });
     fireEvent.change(within(dialog).getByLabelText('工程师'), { target: { value: '工程师甲' } });
     fireEvent.click(within(dialog).getByRole('button', { name: '实时计算报表' }));
     const expectedFilter = {
       monthFrom: '2026-07', monthTo: '2026-08', region: '华东', orderType: 'parts_by_mail',
-      transportCompany: '华东运输', engineer: '工程师甲',
+      engineer: '工程师甲',
     };
     await waitFor(() => expect(api.buildReport).toHaveBeenCalledWith(expectedFilter));
     fireEvent.change(within(dialog).getByLabelText('区域'), { target: { value: '华北' } });
@@ -1187,7 +1136,7 @@ describe('Oracle #10 bounded workbench renderer', () => {
     const api = mockApi({ buildReport: vi.fn().mockResolvedValue({ range: { from: '2026-07', to: '2026-08' }, filters: {}, generatedAt: '', sections: [{ key: 'monthly_invoice', label: '月度掉票', rows: [] }] }) });
     Object.defineProperty(window, 'workbench', { value: api, configurable: true }); render(<App />); await screen.findByRole('heading', { name: /项目队列/ }); fireEvent.click(screen.getByRole('button', { name: '运营报表' }));
     const dialog = screen.getByRole('dialog', { name: '运营报表' }); fireEvent.change(within(dialog).getByLabelText(/起始月份/), { target: { value: '2026-07' } }); fireEvent.change(within(dialog).getByLabelText(/截止月份/), { target: { value: '2026-08' } }); fireEvent.click(within(dialog).getByRole('checkbox', { name: '搬迁' })); fireEvent.click(within(dialog).getByRole('checkbox', { name: 'ICPMS' })); fireEvent.click(within(dialog).getByRole('button', { name: '实时计算报表' }));
-    const selectedFilter = { monthFrom: '2026-07', monthTo: '2026-08', region: null, orderType: null, transportCompany: null, engineer: null, tagIds: ['tag-move', 'tag-icpms'] };
+    const selectedFilter = { monthFrom: '2026-07', monthTo: '2026-08', region: null, orderType: null, engineer: null, tagIds: ['tag-move', 'tag-icpms'] };
     await waitFor(() => expect(api.buildReport).toHaveBeenCalledWith(selectedFilter));
     fireEvent.click(await within(dialog).findByRole('button', { name: '查看明细' })); await waitFor(() => expect(api.drillDown).toHaveBeenCalledWith('monthly_invoice', selectedFilter));
     fireEvent.click(within(dialog).getByRole('button', { name: '导出 PDF' })); await waitFor(() => expect(api.exportReport).toHaveBeenCalledWith('pdf', selectedFilter));
@@ -1657,7 +1606,8 @@ describe('Oracle #10 bounded workbench renderer', () => {
     await screen.findByRole('heading', { name: /项目队列/ });
     fireEvent.click(screen.getByRole('button', { name: '浏览全部记录' }));
     const dialog = screen.getByRole('dialog', { name: '浏览往期与全部记录' });
-    for (const label of ['物流费用', '搬迁仪器', '开单记录', '验收报告', 'Account ID 申请', '损坏维修', '序列号地址更新', '二维码申请']) {
+    expect(within(dialog).queryByRole('tab', { name: '物流费用' })).not.toBeInTheDocument();
+    for (const label of ['搬迁仪器', '开单记录', '验收报告', 'Account ID 申请', '损坏维修', '序列号地址更新', '二维码申请']) {
       expect(within(dialog).getByRole('tab', { name: label })).toBeInTheDocument();
     }
     await waitFor(() => expect(api.v2HistoryPage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'service_order' })));

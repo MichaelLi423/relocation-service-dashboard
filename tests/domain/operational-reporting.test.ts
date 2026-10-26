@@ -286,8 +286,13 @@ describe('客户迭代统计口径', () => {
 
 describe('指标口径字典与来源映射（7.1）', () => {
   it('字典覆盖全部指标键，并给出时间归属、事实来源与筛选、下钻能力', () => {
-    expect(REPORT_METRIC_KEYS.length).toBe(12);
-    expect(REPORT_METRIC_DEFINITIONS).toHaveLength(12);
+    expect(REPORT_METRIC_KEYS.length).toBe(9);
+    expect(REPORT_METRIC_DEFINITIONS).toHaveLength(9);
+    expect(REPORT_FILTER_FIELDS).not.toContain('transportCompany');
+    for (const key of ['monthly_logistics', 'logistics_contract_ratio', 'pending_logistics_list']) {
+      expect(REPORT_METRIC_KEYS).not.toContain(key);
+      expect(() => setup().service.getMetricDetails(key, JULY)).toThrow(/物流费用统计已下线/);
+    }
     for (const key of REPORT_METRIC_KEYS) {
       const def = REPORT_METRIC_DEFINITIONS.find((d) => d.key === key);
       expect(def, `指标 ${key} 缺口径定义`).toBeDefined();
@@ -910,9 +915,8 @@ describe('月度物流费用汇总、合同占比与历史异常批次（7.6）'
     });
     // 部分费用不进入合同占比（f3 无归属月份）
     expect(report.logisticsContractRatios).toHaveLength(1);
-    // 完整费用下钻明细含全部字段；部分费用不出现
-    const details = service.getMetricDetails('monthly_logistics', JULY) as Array<{ feeId: string }>;
-    expect(details.map((d) => d.feeId)).toEqual(['f1']);
+    // 内部历史模型保留 null-safe 聚合，公共物流下钻已下线。
+    expect(() => service.getMetricDetails('monthly_logistics', JULY)).toThrow(/物流费用统计已下线/);
     // 有 fee 记录（含部分）的批次不再出现在待补清单
     expect(report.pendingLogistics.map((r) => r.batchId).sort()).toEqual([]);
   });

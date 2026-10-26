@@ -15,7 +15,7 @@ import type { ProjectStatusOrCancelled } from '../relocation-project-lifecycle';
 import type { OrderType } from '../service-order-recording';
 import type { PartCurrency, PartStatus } from '../damage-repair-tracking';
 import type { QrRequestTypeCode } from '../qr-request-tracking';
-import type { ReportFilter, ReportMetricKey, ServiceOrderWorkScope } from './metrics';
+import type { ReportFilter, ServiceOrderWorkScope } from './metrics';
 import type { ReportingFactReader } from './reporting-facts';
 
 /**
@@ -206,7 +206,7 @@ export interface SerialAddressUpdateRow {
   count: number;
 }
 
-/** 报表模型：与导出内容一致（导出必须与同次实时 report model 一致）。 */
+/** 内部报表模型：公共区段与导出同次计算；已下线的物流字段仅供历史兼容，禁止公开序列化。 */
 export interface ReportModel {
   /** 月份区间（手工选择，无默认季度）。 */
   range: { from: string; to: string };
@@ -228,8 +228,11 @@ export interface ReportModel {
   monthlyServiceOrders: ServiceOrderCountRow[];
   damageSummary: DamageSummaryRow[];
   damageDetails: DamageDetailRow[];
+  /** @deprecated 仅内部历史兼容，不开放为用户指标或导出。 */
   monthlyLogistics: LogisticsSummaryRow[];
+  /** @deprecated 仅内部历史兼容，不开放为用户指标或导出。 */
   logisticsContractRatios: LogisticsRatioRow[];
+  /** @deprecated 仅内部历史兼容，不开放为用户清单或导出。 */
   pendingLogistics: PendingLogisticsRow[];
   shipToWorkload: ShipToWorkloadRow[];
   qrWorkload: QrWorkloadRow[];
@@ -317,7 +320,7 @@ export class ReportingService {
   }
 
   /** 下钻明细：与指标计算口径一致（同一谓词、同一事实源、实时读取）。 */
-  getMetricDetails(metricKey: ReportMetricKey, filter: ReportFilter): MetricDetailRow[] {
+  getMetricDetails(metricKey: string, filter: ReportFilter): MetricDetailRow[] {
     this.assertFilter(filter);
     const all = this.facts;
     const f = this.scopedFilter(all, filter);
@@ -334,17 +337,17 @@ export class ReportingService {
       case 'damage_repair_stats':
         return this.filterDamageDetails(all, f);
       case 'monthly_logistics':
-        return this.logisticsDetailRows(all, f);
       case 'logistics_contract_ratio':
-        return this.logisticsRatios(all, f);
       case 'pending_logistics_list':
-        return this.pendingLogistics(all, f);
+        throw new ValidationError('LOGISTICS_DISABLED', '物流费用统计已下线，历史数据保留');
       case 'ship_to_request_workload':
         return this.shipToDetailRows(all, f);
       case 'qr_request_workload':
         return this.qrDetailRows(all, f);
       case 'serial_address_update_count':
         return this.serialDetailRows(all, f);
+      default:
+        throw new ValidationError('UNKNOWN_REPORT_METRIC', `未知报表指标: ${metricKey}`);
     }
   }
 
@@ -555,10 +558,6 @@ export class ReportingService {
         dealOverBudget: x.fee.dealPriceCents > x.fee.budgetPriceCents,
         cancelled: x.project.status === 'cancelled',
       }));
-  }
-
-  private logisticsDetailRows(all: ReportingFactReader, f: NormalizedFilter): MetricDetailRow[] {
-    return this.filterLogisticsDetails(all, f);
   }
 
   /** 物流费用合同占比：实际费用（RMB ÷ 7.2 → USD）÷ 最新合同 USD 含税金额。 */
