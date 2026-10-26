@@ -101,8 +101,8 @@ export function buildExportSections(report: ReportModel): ExportSection[] {
   sections.push({
     key: 'monthly_invoice',
     title: '月度掉票金额与次数（已撤销不计）',
-    header: ['月份', '掉票金额(USD)', '掉票次数'],
-    rows: report.monthlyInvoices.map((r) => [r.month, money(r.amountCents), num(r.count)]),
+    header: ['月份', '区域', '掉票金额(USD)', '掉票次数', '项目数'],
+    rows: report.monthlyInvoices.map((r) => [r.month, r.region || '(未填区域)', money(r.amountCents), num(r.count), num(r.projectCount)]),
   });
 
   sections.push({
@@ -201,6 +201,19 @@ export function buildExportSections(report: ReportModel): ExportSection[] {
       operatorName(r.operatorAccountId, r.operatorUsername),
       num(r.count),
     ]),
+  });
+
+  sections.push({
+    key: 'qr_applicant_workload',
+    title: '二维码申请人统计',
+    header: ['申请月份', '申请人', '申请条数', '工作量'],
+    rows: report.qrApplicantWorkload.map((r) => [r.month, r.applicant, num(r.requestCount), num(r.workload)]),
+  });
+  sections.push({
+    key: 'qr_applicant_type_workload',
+    title: '二维码申请类型工作量',
+    header: ['申请月份', '申请人', '申请类型', '工作量'],
+    rows: report.qrApplicantTypeWorkload.map((r) => [r.month, r.applicant, r.typeCode, num(r.count)]),
   });
 
   sections.push({
@@ -454,7 +467,7 @@ function renderPng(report: ReportModel): Buffer {
 
   // 条形图：月度掉票金额（主指标；无数据时用进单金额，仍为空则跳过）。
   // 金额全程保持 bigint（分）：比例与标签经 BigInt 定点计算，禁止先把金额 BigInt 转 Number。
-  const barData = report.monthlyInvoices.map((r) => ({ label: r.month, cents: r.amountCents }));
+  const barData = report.monthlyInvoices.map((r) => ({ label: `${r.month} ${r.region || '(未填区域)'}`, cents: r.amountCents }));
   const barSource = barData.length > 0 ? 'MONTHLY_INVOICE_AMOUNT' : 'ENTRY_AMOUNT_BY_REGION';
   const fallbackBarData =
     barData.length > 0

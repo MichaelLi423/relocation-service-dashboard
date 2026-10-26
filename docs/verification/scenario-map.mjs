@@ -378,6 +378,17 @@ export const scenarioMap = {
 
   // ────────────────────────── relocation-execution ────────────────────────
   'relocation-execution': {
+    '到访新增禁用且计划上门日期保留': {
+      evidence: [['tests/integration/workbench-facade.sqlite.test.ts', '禁用新增到访操作但不影响计划上门日期资料更正']],
+    },
+    '到访下线后历史事实继续兼容读取': {
+      evidence: [
+        ['tests/integration/workbench-read-v2.sqlite.test.ts', 'detail：金额字符串、计数、非阻塞；不存在返回 null'],
+        ['tests/integration/workbench-read-v2.sqlite.test.ts', 'section：六类 tab 子记录分页，total + keyset + 金额字符串'],
+        ['tests/integration/workbench-read-v2.sqlite.test.ts', 'batch/invoice/activity/damage/service_order：返回项目上下文 + 日期筛选 + keyset 翻页'],
+      ],
+      note: '直接播种历史活动、工程师与工作事实验证兼容读取，不调用已禁用的新增 visit 命令；维修依赖规则仍由既有场景覆盖。',
+    },
     '搬迁范围记录暂存地址': { evidence: [['tests/domain/relocation-fields.test.ts', '暂存地址/是否暂存为手工维护执行事实：修改不影响主状态']] },
     '执行准备记录是否暂存': { evidence: [['tests/domain/relocation-fields.test.ts', '暂存地址/是否暂存为手工维护执行事实：修改不影响主状态']] },
     '暂存信息不触发状态流转': { evidence: [['tests/domain/relocation-fields.test.ts', '暂存地址/是否暂存为手工维护执行事实：修改不影响主状态']] },
@@ -977,6 +988,9 @@ export const scenarioMap = {
 
   // ─────────────────────────── qr-request-tracking ────────────────────────
   'qr-request-tracking': {
+    '二维码统计随筛选且不受分页影响': {
+      evidence: [['tests/integration/workbench-facade.sqlite.test.ts', '二维码统计跟随关键词和日期，跨分页保持全量统计，空结果为零']],
+    },
     '确认删除后不再保留': { evidence: [['tests/domain/qr-request-tracking.test.ts', '确认后删除：从申请历史与工作量统计中消失']] },
     '确认后删除且不再出现在详情与统计': { evidence: [['tests/integration/workbench-delete.sqlite.test.ts', '5.6 汇总：批次/仪器/开单/验收/Ship-to/损坏/序列号/二维码成功删除后从可观察读取表面消失，tombstone 保留']] },
     '未确认不删除': { evidence: [['tests/domain/qr-request-tracking.test.ts', '未确认（不存在）不删除：记录不存在时拒绝且无副作用']] },
@@ -1123,6 +1137,18 @@ export const scenarioMap = {
 
   // ─────────────────────────── operational-reporting ──────────────────────
   'operational-reporting': {
+    '月度掉票按月份区域统计去重项目数': {
+      evidence: [
+        ['tests/domain/operational-reporting.test.ts', '掉票按月份区域聚合金额次数与去重项目数，撤销不计且区域修改实时回溯'],
+        ['tests/integration/operational-reporting.sqlite.test.ts', '多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致'],
+      ],
+    },
+    '申请人月份类型统计与操作人口径并存': {
+      evidence: [['tests/domain/operational-reporting.test.ts', '申请人独立于操作人，按申请月份统计条数与去重类型工作量，并保留操作人筛选']],
+    },
+    '新统计维度在三种导出保持一致': {
+      evidence: [['tests/integration/operational-reporting.sqlite.test.ts', '多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致']],
+    },
     '存量非标准区域不被静默转换': { evidence: [['tests/domain/operational-reporting.test.ts', '存量非标准区域原值保留并归入「待调整」独立分组（不猜测、不置空、不丢弃）']] },
     '按进单月份与区域汇总进单金额': {
       evidence: [
@@ -1349,6 +1375,19 @@ export const scenarioMap = {
 
   // ────────────────────────── project-financial-closure ───────────────────
   'project-financial-closure': {
+    '显式更正进单金额快照且与普通合同修改隔离': {
+      evidence: [
+        ['tests/domain/financial-closure.test.ts', '仅更正快照并保留分整数精度、合同与最终金额和状态不变；后续普通合同修改不影响快照'],
+        ['tests/integration/workbench-facade.sqlite.test.ts', '显式快照更正回溯进单报表，不改合同；普通合同修改不改快照；非法输入整体回滚'],
+      ],
+    },
+    '快照更正非法输入不部分落库': {
+      evidence: [['tests/integration/workbench-facade.sqlite.test.ts', '显式快照更正回溯进单报表，不改合同；普通合同修改不改快照；非法输入整体回滚']],
+    },
+    '未正式进单或终态项目拒绝快照更正': {
+      evidence: [['tests/domain/financial-closure.test.ts', '未正式进单或终态项目不得更正']],
+      note: '此用例覆盖待进单与取消；转单冻结沿用既有终态校验及回归场景，不将标题匹配当作完整行为验证。',
+    },
     '无任何项目时待掉票金额为 0': { evidence: [['tests/integration/financial-closure.sqlite.test.ts', '零项目为 0：仅孤立/脏财务事实（无任何项目）时 pendingAmount 必为 0']] },
     '孤立财务事实不污染指标': { evidence: [['tests/integration/financial-closure.sqlite.test.ts', '孤立排除：引用不存在项目的掉票/合同事实不计入指标']] },
     '仍存在项目的有效财务事实计入指标': { evidence: [['tests/integration/financial-closure.sqlite.test.ts', '已完成余额纳入：已完成项目仍有有效待掉票余额时按 final − 有效掉票计入'], ['tests/integration/workbench-read-v2.sqlite.test.ts', '任务4.1：totalProjects 与待掉票金额在同一修订一致快照内读取（单一聚合查询）']] },

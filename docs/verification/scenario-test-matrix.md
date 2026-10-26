@@ -9,10 +9,10 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 18 |
-| ADDED Requirements 场景总数 | 704 |
-| 有有效测试证据（✅） | 607 |
+| ADDED Requirements 场景总数 | 735 |
+| 有有效测试证据（✅） | 616 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
-| 缺证据 / 证据无效（❌） | 97 |
+| 缺证据 / 证据无效（❌） | 119 |
 
 ### 待验证与阻塞项（诚实边界）
 
@@ -317,10 +317,13 @@
 | --- | --- | --- | --- | --- |
 | 各区域新项目进单金额 | 按进单月份与区域汇总进单金额 | ✅ | `tests/domain/operational-reporting.test.ts`「按进单月份与区域汇总进单金额，每个项目只计一次，不因合同变更改变」 |  |
 | 各区域新项目进单金额 | 按已记录进单日期归属 | ✅ | `tests/domain/operational-reporting.test.ts`「按已记录进单时间归属；补录或修正进单时间后归属实时变化」 |  |
+| 月度掉票金额与掉票次数 | 月度掉票按月份区域统计去重项目数 | ✅ | `tests/domain/operational-reporting.test.ts`「掉票按月份区域聚合金额次数与去重项目数，撤销不计且区域修改实时回溯」<br>`tests/integration/operational-reporting.sqlite.test.ts`「多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致」 |  |
 | 月度掉票金额与掉票次数 | 同一项目跨月分次掉票分别归属 | ✅ | `tests/domain/operational-reporting.test.ts`「同一项目跨月分次掉票分别归属，金额与次数分开统计」 |  |
 | 月度开单量 | 同一服务单号只计一次 | ✅ | `tests/domain/operational-reporting.test.ts`「同一服务单号关联多名工程师仍只计一次」 |  |
 | 月度开单量 | PM 作为开单业务类型分组 | ✅ | `tests/domain/operational-reporting.test.ts`「按唯一服务单号计一次并按四类业务分组，PM 为并列类型」 |  |
 | 月度开单量 | 按参与工程师筛选开单量（可选） | ✅ | `tests/domain/operational-reporting.test.ts`「按参与工程师筛选开单量（可选），不选择时汇总全部」 |  |
+| 月度开单量 | 月度开单总量包含中大型开单且类型分组保持四类 | ❌ | — |  |
+| 月度开单量 | 按工作范围筛选开单量 | ❌ | — |  |
 | 损坏维修统计 | 按事项记录数量与单条金额统计 | ✅ | `tests/domain/operational-reporting.test.ts`「记录数量按事项计数，仅已使用备件金额计入维修费用」 |  |
 | 损坏维修统计 | RMB 按固定汇率折算参与统计 | ✅ | `tests/domain/operational-reporting.test.ts`「RMB 按固定汇率折算参与统计，原币金额与币种保留用于展示」 |  |
 | 损坏维修统计 | 计算单条事项合同占比 | ✅ | `tests/domain/operational-reporting.test.ts`「计算单条事项合同占比；合同金额为空或 0 时不可计算并明确提示」 |  |
@@ -332,6 +335,7 @@
 | 月度物流费用汇总与物流费用合同占比 | 历史批次缺费用视为异常数据 | ✅ | `tests/domain/operational-reporting.test.ts`「历史异常批次（已有物流成交价无费用记录）进入清单；底层筛选保留历史兼容（补录后纳入报表）」<br>`tests/integration/workbench-facade.sqlite.test.ts`「batch_edit 历史批次无 fee：编辑价格按需创建部分费用，仅批次字段不虚构费用」 |  |
 | Ship-to 申请工作量 | 首次提交与后续状态更新不重复计数 | ✅ | `tests/domain/operational-reporting.test.ts`「Ship-to 首次提交计一次，后续状态更新不重复计数，待提交草稿不计」 |  |
 | Ship-to 申请工作量 | 按首次提交月份归属并取责任人 | ✅ | `tests/domain/operational-reporting.test.ts`「Ship-to 首次提交计一次，后续状态更新不重复计数，待提交草稿不计」 |  |
+| 二维码申请工作量 | 申请人月份类型统计与操作人口径并存 | ✅ | `tests/domain/operational-reporting.test.ts`「申请人独立于操作人，按申请月份统计条数与去重类型工作量，并保留操作人筛选」 |  |
 | 二维码申请工作量 | 每条记录每个去重选中类型各计一次 | ✅ | `tests/domain/operational-reporting.test.ts`「二维码申请按去重类型计数，不同申请中的同类型分别计数」 |  |
 | 二维码申请工作量 | 不同申请中的同类型分别计数 | ✅ | `tests/domain/operational-reporting.test.ts`「二维码申请按去重类型计数，不同申请中的同类型分别计数」 |  |
 | 二维码申请工作量 | 按申请日期归属并取申请人 | ✅ | `tests/domain/operational-reporting.test.ts`「二维码申请按去重类型计数，不同申请中的同类型分别计数」 |  |
@@ -352,12 +356,17 @@
 | 报表筛选与手工月份区间 | 多选项目分类标签按 OR 匹配 | ✅ | `tests/domain/operational-reporting.test.ts`「多选标签按 OR 匹配、去重且不重复放大项目派生金额、次数或下钻」<br>`tests/integration/operational-reporting.sqlite.test.ts`「标签筛选从唯一项目关联集合读取，OR 匹配且拒绝未知标签」 |  |
 | 报表筛选与手工月份区间 | 未选择项目分类标签不限制结果 | ✅ | `tests/domain/operational-reporting.test.ts`「未选标签不限制；标签筛选启用时排除无项目的独立工作量与 projectId 为 null 的服务单」 |  |
 | 报表筛选与手工月份区间 | 标签筛选排除不关联项目的独立记录 | ✅ | `tests/domain/operational-reporting.test.ts`「未选标签不限制；标签筛选启用时排除无项目的独立工作量与 projectId 为 null 的服务单」 |  |
+| 报表筛选与手工月份区间 | 区域筛选排除不关联项目的独立记录 | ❌ | — |  |
+| 报表筛选与手工月份区间 | 组合工作范围与工程师筛选开单量 | ❌ | — |  |
 | 报表下钻 | 从掉票金额下钻到掉票记录 | ✅ | `tests/domain/operational-reporting.test.ts`「从掉票金额下钻到逐条掉票记录，明细口径与指标口径一致」 |  |
+| 实时计算与三种导出 | 新统计维度在三种导出保持一致 | ✅ | `tests/integration/operational-reporting.sqlite.test.ts`「多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致」 |  |
 | 实时计算与三种导出 | 掉票编辑后报表实时更新 | ✅ | `tests/domain/operational-reporting.test.ts`「掉票编辑后报表实时更新（7.10）」<br>`tests/integration/operational-reporting.sqlite.test.ts`「事后掉票编辑与撤销实时反映到报表；关闭重开后仍一致」<br>`tests/integration/cross-module-consistency.sqlite.test.ts`「掉票编辑/撤销后：主状态、项目提醒与报表实时一致」 |  |
 | 实时计算与三种导出 | 导出 Excel（.xlsx） | ✅ | `tests/integration/operational-reporting.sqlite.test.ts`「导出三种格式：magic header、内容与同次实时 report model 一致、PNG 含指标与筛选值」<br>`tests/integration/critical-paths.sqlite.test.ts`「12. 报表手工月份区间与三种导出」 |  |
 | 实时计算与三种导出 | 导出图片（PNG） | ✅ | `tests/integration/operational-reporting.sqlite.test.ts`「导出三种格式：magic header、内容与同次实时 report model 一致、PNG 含指标与筛选值」 |  |
 | 实时计算与三种导出 | 导出 PDF | ✅ | `tests/integration/operational-reporting.sqlite.test.ts`「导出三种格式：magic header、内容与同次实时 report model 一致、PNG 含指标与筛选值」 |  |
 | 实时计算与三种导出 | 下钻与导出沿用标签筛选 | ✅ | `tests/renderer/app.test.tsx`「报表标签多选将 tagIds 保留到构建、下钻和导出，清空后等价不限制」<br>`tests/domain/operational-reporting.test.ts`「多选标签按 OR 匹配、去重且不重复放大项目派生金额、次数或下钻」 |  |
+| 开单报表明细下钻与导出一致性 | 下钻明细展示工作范围标识 | ❌ | — |  |
+| 开单报表明细下钻与导出一致性 | 导出文件反映工作范围筛选与独立记录排除 | ❌ | — |  |
 
 ### project-financial-closure
 
@@ -367,6 +376,9 @@
 | 合同 USD 含税金额手工录入与直接覆盖 | 金额与净值税率计算结果不一致时仅警告 | ✅ | `tests/domain/financial-closure.test.ts`「金额与净值税率计算结果不一致时仅警告，仍允许保存且不自动覆盖」 |  |
 | 合同 USD 含税金额手工录入与直接覆盖 | 合同金额直接覆盖修改 | ✅ | `tests/domain/financial-closure.test.ts`「合同金额直接覆盖修改：保存新值，不保存正式合同变更对象/历史、不要求原因」 |  |
 | 合同 USD 含税金额手工录入与直接覆盖 | 合同金额允许为 0 | ✅ | `tests/domain/financial-closure.test.ts`「合同金额允许为 0；除合同金额外的其他录入金额不允许为 0」 |  |
+| 进单金额快照锁定 | 显式更正进单金额快照且与普通合同修改隔离 | ✅ | `tests/domain/financial-closure.test.ts`「仅更正快照并保留分整数精度、合同与最终金额和状态不变；后续普通合同修改不影响快照」<br>`tests/integration/workbench-facade.sqlite.test.ts`「显式快照更正回溯进单报表，不改合同；普通合同修改不改快照；非法输入整体回滚」 |  |
+| 进单金额快照锁定 | 快照更正非法输入不部分落库 | ✅ | `tests/integration/workbench-facade.sqlite.test.ts`「显式快照更正回溯进单报表，不改合同；普通合同修改不改快照；非法输入整体回滚」 |  |
+| 进单金额快照锁定 | 未正式进单或终态项目拒绝快照更正 | ✅ | `tests/domain/financial-closure.test.ts`「未正式进单或终态项目不得更正」 | 此用例覆盖待进单与取消；转单冻结沿用既有终态校验及回归场景，不将标题匹配当作完整行为验证。 |
 | 进单金额快照锁定 | 进单时保存金额快照 | ✅ | `tests/domain/financial-closure.test.ts`「正式进单保存金额快照，合同金额覆盖不改写快照」<br>`tests/domain/relocation-entry.test.ts`「正式进单锁定进单金额快照（后续合同金额覆盖不改写快照，见 5.2）」 |  |
 | 进单金额快照锁定 | 合同金额覆盖不改写历史进单金额 | ✅ | `tests/domain/financial-closure.test.ts`「正式进单保存金额快照，合同金额覆盖不改写快照」 |  |
 | 进单金额快照锁定 | 合同金额覆盖后进单金额不变且占比按新值重算 | ✅ | `tests/domain/financial-closure.test.ts`「正式进单保存金额快照，合同金额覆盖不改写快照」<br>`tests/integration/financial-closure.sqlite.test.ts`「合同金额覆盖不改写进单金额快照（2.1 快照锁定联动），最新金额用于占比重算」 |  |
@@ -412,6 +424,7 @@
 | 申请类型固定代码与多选 | 类型仅作分类代码 | ✅ | `tests/domain/qr-request-tracking.test.ts`「类型仅作分类代码：不关联任何搬迁仪器或搬迁项目」 |  |
 | 申请工作量按去重类型计数 | 每条记录每个去重选中类型各计一次 | ✅ | `tests/domain/qr-request-tracking.test.ts`「每条记录每个去重选中类型各计一次，同条内相同类型只计一次」 |  |
 | 申请工作量按去重类型计数 | 不同申请分别计数 | ✅ | `tests/domain/qr-request-tracking.test.ts`「不同申请分别计数：相同类型不因分属不同申请而合并」 |  |
+| 申请统计与列表筛选一致 | 二维码统计随筛选且不受分页影响 | ✅ | `tests/integration/workbench-facade.sqlite.test.ts`「二维码统计跟随关键词和日期，跨分页保持全量统计，空结果为零」 |  |
 | 重复申请保留历史 | 重复申请保留历史 | ✅ | `tests/domain/qr-request-tracking.test.ts`「新旧申请均保留在申请历史中，各自独立保存并计数」 |  |
 | 重复申请保留历史 | 确认删除后不再保留 | ✅ | `tests/domain/qr-request-tracking.test.ts`「确认后删除：从申请历史与工作量统计中消失」 |  |
 | 仪器"二维码是否申请"手工字段 | 手工标记是/否 | ✅ | `tests/domain/qr-request-tracking.test.ts`「手工标记是/否：不随二维码申请记录的保存而变化」 |  |
@@ -445,6 +458,8 @@
 | 批次归属与改批 | 运输开始后禁止改批 | ✅ | `tests/domain/relocation-execution.test.ts`「运输开始后禁止直接改批」 |  |
 | 批次归属与改批 | 空批次不能开始运输 | ✅ | `tests/domain/relocation-execution.test.ts`「空批次不能开始运输：至少需要一台归属仪器」 |  |
 | 批次归属与改批 | 运输仪器均归属该批次 | ✅ | `tests/domain/relocation-execution.test.ts`「运输仪器均归属该批次：开始运输确认运输集合与批次归属一致」 |  |
+| 上门活动与工作事实 | 到访新增禁用且计划上门日期保留 | ✅ | `tests/integration/workbench-facade.sqlite.test.ts`「禁用新增到访操作但不影响计划上门日期资料更正」 |  |
+| 上门活动与工作事实 | 到访下线后历史事实继续兼容读取 | ✅ | `tests/integration/workbench-read-v2.sqlite.test.ts`「detail：金额字符串、计数、非阻塞；不存在返回 null」<br>`tests/integration/workbench-read-v2.sqlite.test.ts`「section：六类 tab 子记录分页，total + keyset + 金额字符串」<br>`tests/integration/workbench-read-v2.sqlite.test.ts`「batch/invoice/activity/damage/service_order：返回项目上下文 + 日期筛选 + keyset 翻页」 | 直接播种历史活动、工程师与工作事实验证兼容读取，不调用已禁用的新增 visit 命令；维修依赖规则仍由既有场景覆盖。 |
 | 上门活动与工作事实 | 一次活动多类型多仪器同页记录 | ✅ | `tests/domain/relocation-execution.test.ts`「一次活动多类型多仪器同页记录」<br>`e2e/electron-smoke.spec.ts`「空数据库启动直接进入工作台」 |  |
 | 上门活动与工作事实 | 拆机事实记录拆机状态及开始/完成日期 | ✅ | `tests/domain/relocation-execution.test.ts`「拆机事实记录拆机状态及开始/完成日期」 |  |
 | 上门活动与工作事实 | 其他工作类型记录各自状态与日期 | ✅ | `tests/domain/relocation-execution.test.ts`「其他工作类型记录各自状态与日期（装机/维修/其他）」 |  |
@@ -575,6 +590,14 @@
 | 四类开单与项目关联 | 认证开单独立保存 | ✅ | `tests/domain/service-order-recording.test.ts`「认证开单独立保存、不进入搬迁项目生命周期」 |  |
 | 四类开单与项目关联 | 单寄备件开单独立保存 | ✅ | `tests/domain/service-order-recording.test.ts`「单寄备件开单独立保存」 |  |
 | 四类开单与项目关联 | PM 开单独立保存 | ✅ | `tests/domain/service-order-recording.test.ts`「PM 开单独立保存」 |  |
+| 四类开单与项目关联 | 中大型工作范围搬迁开单无项目独立保存 | ❌ | — |  |
+| 四类开单与项目关联 | 中大型工作范围四类开单均保持无项目关联 | ❌ | — |  |
+| 四类开单与项目关联 | 非中大型搬迁开单无项目关联被拒 | ❌ | — |  |
+| 四类开单与项目关联 | 中大型开单带项目关联被拒 | ❌ | — |  |
+| 开单工作范围分类与既有数据保持 | 中大型工作范围为正交维度而非新开单类型 | ❌ | — |  |
+| 开单工作范围分类与既有数据保持 | 中大型开单必须填写客户单位 | ❌ | — |  |
+| 开单工作范围分类与既有数据保持 | 既有无项目开单不自动追认为中大型 | ❌ | — |  |
+| 开单工作范围分类与既有数据保持 | 中大型开单不创建虚拟项目与项目状态 | ❌ | — |  |
 | 服务单号全局唯一 | 重复服务单号被拒 | ✅ | `tests/domain/service-order-recording.test.ts`「重复服务单号被拒」<br>`tests/integration/service-order-recording.sqlite.test.ts`「服务单号全局唯一：领域校验 + SQLite 部分唯一索引兜底」 |  |
 | 服务单号全局唯一 | 不同业务类型共用唯一空间 | ✅ | `tests/domain/service-order-recording.test.ts`「不同业务类型共用唯一空间：搬迁单号被认证开单占用拒绝」 |  |
 | 四类开单最小字段（工程师可空保存并可后续补录） | 开单仅维护备注与工程师 | ✅ | `tests/domain/service-order-recording.test.ts`「开单仅维护备注与工程师」 |  |
@@ -786,6 +809,14 @@
 | 移动只读发布控制与状态入口 | 发布入口不含业务写入表单 | ❌ | — |  |
 | 移动只读发布控制与状态入口 | 一次性配置入口只写不回显 | ❌ | — |  |
 | 手机只读视图不进入桌面任务指挥台结构 | 手机只读入口与桌面结构互不干扰 | ❌ | — |  |
+| 中大型项目开单独立入口与表单 | 顶部二维码申请之后呈现独立开单入口 | ❌ | — |  |
+| 中大型项目开单独立入口与表单 | 中大型开单表单展示专属字段与必填校验 | ❌ | — |  |
+| 中大型项目开单独立入口与表单 | 中大型开单四类类型均不关联项目且成功保存 | ❌ | — |  |
+| 中大型项目开单独立入口与表单 | 弹层键盘可达性与 Escape 关闭 | ❌ | — |  |
+| 跨项目历史开单工作范围辨识 | 跨项目历史清晰辨识中大型开单 | ❌ | — |  |
+| 跨项目历史开单工作范围辨识 | 既有历史无项目开单不显示为中大型 | ❌ | — |  |
+| 报表界面工作范围筛选与无项目记录筛选反馈 | 开单量报表切换工作范围筛选 | ❌ | — |  |
+| 报表界面工作范围筛选与无项目记录筛选反馈 | 项目区域或标签筛选时提供排除独立记录反馈提示 | ❌ | — |  |
 
 ### workbench-todos
 
@@ -901,11 +932,25 @@
 | mobile-readonly-workbench | 完整刷新且断网无法加载 | 未登记 |
 | mobile-readonly-workbench | 电脑断网仅影响新发布 | 未登记 |
 | mobile-readonly-workbench | 尚未发布与已发布空快照如实区分 | 未登记 |
+| operational-reporting | 月度开单总量包含中大型开单且类型分组保持四类 | 未登记 |
+| operational-reporting | 按工作范围筛选开单量 | 未登记 |
+| operational-reporting | 区域筛选排除不关联项目的独立记录 | 未登记 |
+| operational-reporting | 组合工作范围与工程师筛选开单量 | 未登记 |
+| operational-reporting | 下钻明细展示工作范围标识 | 未登记 |
+| operational-reporting | 导出文件反映工作范围筛选与独立记录排除 | 未登记 |
 | relocation-execution | 运行时拒绝越权字段 | 未登记 |
 | relocation-execution | 仅更新允许字段 | 未登记 |
 | relocation-execution | 全量无变化保存零写 | 未登记 |
 | relocation-execution | 运输限制导致跨批保存全回滚 | 未登记 |
 | relocation-execution | 跨项目批次导致保存全回滚 | 未登记 |
+| service-order-recording | 中大型工作范围搬迁开单无项目独立保存 | 未登记 |
+| service-order-recording | 中大型工作范围四类开单均保持无项目关联 | 未登记 |
+| service-order-recording | 非中大型搬迁开单无项目关联被拒 | 未登记 |
+| service-order-recording | 中大型开单带项目关联被拒 | 未登记 |
+| service-order-recording | 中大型工作范围为正交维度而非新开单类型 | 未登记 |
+| service-order-recording | 中大型开单必须填写客户单位 | 未登记 |
+| service-order-recording | 既有无项目开单不自动追认为中大型 | 未登记 |
+| service-order-recording | 中大型开单不创建虚拟项目与项目状态 | 未登记 |
 | workbench-access | 远程只读认证不改变本地直接进入 | 未登记 |
 | workbench-access | 显式启用后仅向自有只读服务发布白名单快照 | 未登记 |
 | workbench-interface | 标签重命名后粗粒度刷新 | 未登记 |
@@ -917,3 +962,11 @@
 | workbench-interface | 发布入口不含业务写入表单 | 未登记 |
 | workbench-interface | 一次性配置入口只写不回显 | 未登记 |
 | workbench-interface | 手机只读入口与桌面结构互不干扰 | 未登记 |
+| workbench-interface | 顶部二维码申请之后呈现独立开单入口 | 未登记 |
+| workbench-interface | 中大型开单表单展示专属字段与必填校验 | 未登记 |
+| workbench-interface | 中大型开单四类类型均不关联项目且成功保存 | 未登记 |
+| workbench-interface | 弹层键盘可达性与 Escape 关闭 | 未登记 |
+| workbench-interface | 跨项目历史清晰辨识中大型开单 | 未登记 |
+| workbench-interface | 既有历史无项目开单不显示为中大型 | 未登记 |
+| workbench-interface | 开单量报表切换工作范围筛选 | 未登记 |
+| workbench-interface | 项目区域或标签筛选时提供排除独立记录反馈提示 | 未登记 |

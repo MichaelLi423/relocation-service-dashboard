@@ -950,6 +950,14 @@ export type WorkbenchV2IndependentRow =
     };
 
 export interface WorkbenchV2IndependentPageDto {
+  /** 二维码全部筛选匹配记录的统计，不受分页游标影响。 */
+  qrStats?: {
+    requestCount: number;
+    workload: number;
+    byApplicant: readonly { applicant: string; requestCount: number; workload: number }[];
+    byMonth: readonly { month: string; requestCount: number; workload: number }[];
+    byType: readonly { typeCode: string; count: number }[];
+  };
   businessRevision: number;
   kind: WorkbenchV2IndependentKind;
   rows: readonly WorkbenchV2IndependentRow[];
@@ -1716,6 +1724,8 @@ export interface ProjectUpdatePayload {
    * 空串/null = 0（合同金额允许 0，由领域校验决定是否接受）。
    */
   contractUsdTaxAmount?: string | null;
+  /** 显式更正进单金额快照（USD 十进制，允许 0、拒绝负数）；不修改当前合同金额。 */
+  entryAmountSnapshot?: string | null;
   /** 已正式进单项目更正：最终可确认金额（十进制字符串，必须 > 0 且不低于累计有效掉票；
    *  空串/null = 0，由领域校验拒绝非法清空）。 */
   finalConfirmableAmount?: string | null;

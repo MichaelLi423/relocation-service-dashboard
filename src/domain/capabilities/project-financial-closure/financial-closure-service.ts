@@ -90,6 +90,21 @@ export class FinancialClosureService {
     return { contract, warning };
   }
 
+  /** 显式更正正式进单金额快照，不联动当前合同金额、最终可确认金额或生命周期。 */
+  correctEntryAmountSnapshot(projectId: string, amountCents: bigint): Contract {
+    const project = this.requireProject(projectId);
+    this.assertNotCancelled(project);
+    if (project.entryAt === null) {
+      throw new ValidationError('UPDATE_REQUIRES_FORMAL_ENTRY', '进单金额快照更正仅允许已正式进单项目');
+    }
+    if (amountCents < 0n) throw new ValidationError('AMOUNT_NEGATIVE', '金额不得为负数');
+    const contract = this.requireContract(projectId);
+    contract.entryAmountSnapshotCents = amountCents;
+    contract.updatedAt = this.now();
+    this.contracts.save(contract);
+    return contract;
+  }
+
   // ---- 5.4 最终可确认金额 ----
 
   /**

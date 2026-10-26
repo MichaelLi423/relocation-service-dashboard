@@ -5,14 +5,16 @@ import { LocalAccountService } from '../../src/domain/capabilities/workbench-acc
 import { WorkbenchFacade } from '../../src/main/workbench-facade';
 import type { ProjectWizardPayload, WorkbenchV2LookupRow, WorkbenchV2MutationResult } from '../../src/shared/ipc';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
+import { seedHistoricalActivity } from '../helpers/historical-activity';
 
 /**
  * 关键路径跨模块演练（tasks 10.2，Oracle #10 迁移为 v2 有界 API）。
  *
  * 通过真实 SQLite + WorkbenchFacade（Electron 主进程同一入口）逐条走关键路径，
  * 不绕过界面层与领域校验；读取一律经 v2 有界 API（overview/detail/section/
- * independent/lookup），写动作一律经 v2Mutate（返回 revision + invalidate tags，
- * 不携带任何 snapshot）：
+ * independent/lookup），当前写动作经 v2Mutate；旧到访事实仅由领域历史夹具构造（仍走 lifecycle），
+ * v2Mutate 返回 revision + invalidate tags，
+ * 不携带任何 snapshot：
  * 1. 未进单先执行全链路：批复 → 优先上门（批次开始运输/工作事实）→ 补齐资料正式进单
  *    → 负责人人工确定主状态（自动触发除外）
  * 2. 计划上门到期自动触发执行中；实际装机完成时间自动触发待验收；运输时间与场地确认不触发
@@ -107,11 +109,8 @@ describe('关键路径跨模块演练（tasks 10.2）', () => {
     // 单条登记仪器（新建项目只记录 instrumentCount，不生成虚拟仪器）
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'instrument', projectId, values: { name: '搬迁仪器', ups: false, qrRequested: false } } });
     const instrumentId = String(facade.v2SectionPage({ projectId, kind: 'instruments' }).rows[0].id);
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'visit', projectId, values: { engineers: '工程师甲', visitAt: '2026-08-06', workTypes: ['teardown'], instrumentId, status: 'done' } },
-    });
+    // 到访新增已下线；构造既有历史活动，保留工作事实与 lifecycle 触发路径。
+    seedHistoricalActivity(ctx.db, projectId, '2026-08-06', ['工程师甲'], { instrumentId, type: 'teardown', status: 'done' });
     // 工作事实开始触发 onExecutionStarted → 但未进单先执行标签保持待进单
     detail = facade.v2ProjectDetail(projectId).project!;
     expect(detail.status).toBe('pending_entry');

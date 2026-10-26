@@ -60,6 +60,60 @@ function wizard(overrides: Partial<ProjectWizardPayload> = {}): ProjectWizardPay
   };
 }
 
+describe('客户迭代 SQLite 回归', () => {
+  it('二维码统计跟随关键词和日期，跨分页保持全量统计，空结果为零', async () => {
+    const { facade, db } = await makeFacade();
+    for (const [applicant, requestedAt, types] of [
+      ['申请甲', '2026-07-01', ['A', 'A', 'B']],
+      ['申请甲', '2026-07-31', ['C']],
+      ['申请甲', '2026-08-01', ['A']],
+      ['申请乙', '2026-07-20', ['D']],
+    ] as const) {
+      facade.v2Mutate({ op: 'submit_action', action: { type: 'qr_request', values: { applicant, requestedAt, types: [...types] } } });
+    }
+    const request = { kind: 'qr_request' as const, query: '申请甲', from: '2026-07-01', to: '2026-07-31', limit: 1 };
+    const first = facade.v2IndependentPage(request);
+    expect(first.rows).toHaveLength(1);
+    expect(first.qrStats).toEqual({
+      requestCount: 2, workload: 3,
+      byApplicant: [{ applicant: '申请甲', requestCount: 2, workload: 3 }],
+      byMonth: [{ month: '2026-07', requestCount: 2, workload: 3 }],
+      byType: [{ typeCode: 'A', count: 1 }, { typeCode: 'B', count: 1 }, { typeCode: 'C', count: 1 }],
+    });
+    expect(facade.v2IndependentPage({ ...request, cursor: first.nextCursor }).qrStats).toEqual(first.qrStats);
+    expect(facade.v2IndependentPage({ ...request, query: '不存在' }).qrStats).toEqual({ requestCount: 0, workload: 0, byApplicant: [], byMonth: [], byType: [] });
+    expect(facade.report({ monthFrom: '2026-07', monthTo: '2026-07' }).qrApplicantWorkload).toContainEqual({ month: '2026-07', applicant: '申请甲', requestCount: 2, workload: 3 });
+    closeDatabase(db);
+  });
+
+  it('显式快照更正回溯进单报表，不改合同；普通合同修改不改快照；非法输入整体回滚', async () => {
+    const { facade, db } = await makeFacade();
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'SNAPSHOT', entryAt: '2026-07-02', contractAmount: '1000' }) }));
+    const july = { monthFrom: '2026-07', monthTo: '2026-07' };
+    facade.v2Mutate({ op: 'update_project', payload: { projectId, contractUsdTaxAmount: '2000' } });
+    expect(facade.report(july).entryAmountByRegion[0].amountCents).toBe(100000n);
+    facade.v2Mutate({ op: 'update_project', payload: { projectId, entryAmountSnapshot: '1234.56' } });
+    expect(facade.report(july).entryAmountByRegion[0].amountCents).toBe(123456n);
+    expect(facade.v2ProjectDetail(projectId).project!.contractAmount).toBe('2000.00');
+    expect(facade.v2ProjectDetail(projectId).project!.entryAmountSnapshot).toBe('1234.56');
+    expect(() => facade.v2Mutate({ op: 'update_project', payload: { projectId, region: 'North', entryAmountSnapshot: '-1' } })).toThrow(/负数/);
+    expect(facade.v2ProjectDetail(projectId).project!.region).toBe('East');
+    expect(facade.report(july).entryAmountByRegion[0].amountCents).toBe(123456n);
+    facade.v2Mutate({ op: 'update_project', payload: { projectId, entryAmountSnapshot: '0' } });
+    expect(facade.report(july).entryAmountByRegion[0].amountCents).toBe(0n);
+    closeDatabase(db);
+  });
+
+  it('禁用新增到访操作但不影响计划上门日期资料更正', async () => {
+    const { facade, db } = await makeFacade();
+    const projectId = projectIdOf(facade.v2Mutate({ op: 'create_project', payload: wizard({ ecc: 'NO-VISIT', contractAmount: '1000' }) }));
+    expect(() => facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-07-01', engineers: '甲', workTypes: ['packing'] } } })).toThrow(/到访登记已下线/);
+    facade.v2Mutate({ op: 'update_project', payload: { projectId, plannedVisitAt: '2099-07-01' } });
+    expect(facade.v2ProjectDetail(projectId).detail!.planVisitAt).toBe('2099-07-01');
+    closeDatabase(db);
+  });
+});
+
 async function makeFacade(): Promise<{ facade: WorkbenchFacade; db: import('node:sqlite').DatabaseSync; accountId: string }> {
   const dir = makeTempDir('workbench-facade-');
   dirs.push(dir);

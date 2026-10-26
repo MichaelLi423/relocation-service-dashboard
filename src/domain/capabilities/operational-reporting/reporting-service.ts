@@ -59,6 +59,9 @@ export interface EntryAmountRow {
 /** 月度掉票金额/次数行（7.3）。 */
 export interface MonthlyInvoiceRow {
   month: string;
+  region: string;
+  /** 本月本区域有效掉票涉及的去重项目数。 */
+  projectCount: number;
   /** 有效掉票金额合计（分整数）。 */
   amountCents: bigint;
   /** 有效掉票次数。 */
@@ -179,6 +182,20 @@ export interface QrWorkloadRow {
   count: number;
 }
 
+export interface QrApplicantWorkloadRow {
+  month: string;
+  applicant: string;
+  requestCount: number;
+  workload: number;
+}
+
+export interface QrApplicantTypeWorkloadRow {
+  month: string;
+  applicant: string;
+  typeCode: QrRequestTypeCode;
+  count: number;
+}
+
 /** 序列号地址更新记录数行（7.7）：按更新月份 × 客户 × 责任人。 */
 export interface SerialAddressUpdateRow {
   month: string;
@@ -216,6 +233,8 @@ export interface ReportModel {
   pendingLogistics: PendingLogisticsRow[];
   shipToWorkload: ShipToWorkloadRow[];
   qrWorkload: QrWorkloadRow[];
+  qrApplicantWorkload: QrApplicantWorkloadRow[];
+  qrApplicantTypeWorkload: QrApplicantTypeWorkloadRow[];
   serialAddressUpdates: SerialAddressUpdateRow[];
 }
 
@@ -292,6 +311,7 @@ export class ReportingService {
       pendingLogistics: pending,
       shipToWorkload: this.shipToWorkloadRows(all, f),
       qrWorkload: this.qrWorkloadRows(all, f),
+      ...this.qrApplicantRows(all, f),
       serialAddressUpdates: this.serialUpdateRows(all, f),
     };
   }
@@ -646,6 +666,33 @@ export class ReportingService {
       }));
   }
 
+  private qrApplicantRows(all: ReportingFactReader, f: NormalizedFilter): Pick<ReportModel, 'qrApplicantWorkload' | 'qrApplicantTypeWorkload'> {
+    const groups = new Map<string, QrApplicantWorkloadRow>();
+    const typeGroups = new Map<string, QrApplicantTypeWorkloadRow>();
+    if (!this.projectDimensionConstrained(f)) {
+      for (const request of all.listQrRequests()) {
+        const month = toMonthKey(request.requestedAt);
+        if (!this.inRange(month, f) || !this.operatorMatch(request.operatorUsername, f)) continue;
+        const key = JSON.stringify([month, request.applicant]);
+        const types = new Set(request.types);
+        const group = groups.get(key) ?? { month, applicant: request.applicant, requestCount: 0, workload: 0 };
+        group.requestCount++;
+        group.workload += types.size;
+        groups.set(key, group);
+        for (const typeCode of types) {
+          const typeKey = JSON.stringify([month, request.applicant, typeCode]);
+          const row = typeGroups.get(typeKey) ?? { month, applicant: request.applicant, typeCode, count: 0 };
+          row.count++;
+          typeGroups.set(typeKey, row);
+        }
+      }
+    }
+    return {
+      qrApplicantWorkload: [...groups.entries()].sort().map(([, row]) => row),
+      qrApplicantTypeWorkload: [...typeGroups.entries()].sort().map(([, row]) => row),
+    };
+  }
+
   private qrWorkloadRows(all: ReportingFactReader, f: NormalizedFilter): QrWorkloadRow[] {
     if (this.projectDimensionConstrained(f)) return [];
     const counts = new Map<string, number>();
@@ -869,16 +916,18 @@ interface InvoiceAggDetail {
 }
 
 function aggregateInvoices(details: InvoiceAggDetail[]): MonthlyInvoiceRow[] {
-  const groups = new Map<string, { amountCents: bigint; count: number }>();
+  const groups = new Map<string, { month: string; region: string; amountCents: bigint; count: number; projects: Set<string> }>();
   for (const d of details) {
-    const g = groups.get(d.month) ?? { amountCents: 0n, count: 0 };
+    const key = JSON.stringify([d.month, d.region]);
+    const g = groups.get(key) ?? { month: d.month, region: d.region, amountCents: 0n, count: 0, projects: new Set<string>() };
     g.amountCents += d.amountCents;
     g.count += 1;
-    groups.set(d.month, g);
+    g.projects.add(d.projectId);
+    groups.set(key, g);
   }
   return [...groups.entries()]
     .sort()
-    .map(([month, g]) => ({ month, amountCents: g.amountCents, count: g.count }));
+    .map(([, g]) => ({ month: g.month, region: g.region, amountCents: g.amountCents, count: g.count, projectCount: g.projects.size }));
 }
 
 interface OrderAggDetail {

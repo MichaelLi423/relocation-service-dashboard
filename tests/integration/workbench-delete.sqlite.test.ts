@@ -28,6 +28,7 @@ import {
   type WorkbenchV2MutationResult,
 } from '../../src/shared/ipc';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
+import { seedHistoricalActivity } from '../helpers/historical-activity';
 
 /**
  * 受保护登记记录删除（v2Delete，design D3 类型分发 + 阶段 A 审计）：
@@ -136,12 +137,8 @@ function makePolicyContext(db: DatabaseSync, projectService: ProjectService): Wo
 describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () => {
   it('执行领域删除入口拥有活动依赖检查及工程师子记录清理，facade 仅协调审计', async () => {
     const ctx = await makeCtx();
-    const { facade, db, projectId } = ctx;
-    facade.v2Mutate({
-      op: 'submit_action',
-      projectId,
-      action: { type: 'visit', projectId, values: { visitAt: '2026-08-13', engineers: '工程师甲、工程师乙' } },
-    });
+    const { db, projectId } = ctx;
+    seedHistoricalActivity(db, projectId, '2026-08-13', ['工程师甲', '工程师乙']);
     const activityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ?').get(projectId)!.id);
     const executionDeletes = new ProtectedExecutionDeletionService(
       db,
@@ -222,7 +219,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
 
     // 有工作事实的活动 → 拒绝
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-12', engineers: '工程师甲', status: 'done', instrumentIds: [instrumentId], workTypes: ['teardown'] } } });
+    seedHistoricalActivity(db, projectId, '2026-08-12', ['工程师甲'], { instrumentId, type: 'teardown', status: 'done' });
     const factActivityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ?').get(projectId)!.id);
     expectRejected(
       () => facade.v2Delete({ kind: 'activity', id: factActivityId, expectedRevision: readBusinessRevision(db) }),
@@ -233,7 +230,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     expect(facade.v2SectionPage({ projectId, kind: 'activities' }).total).toBe(1);
 
     // 空活动（无工作事实、无维修关联）→ 删除成功（参与工程师属活动记录，随活动删除）
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-13', engineers: '工程师甲、工程师乙' } } });
+    seedHistoricalActivity(db, projectId, '2026-08-13', ['工程师甲', '工程师乙']);
     const emptyActivityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ? AND id <> ?').get(projectId, factActivityId)!.id);
     const result = facade.v2Delete({ kind: 'activity', id: emptyActivityId, expectedRevision: readBusinessRevision(db) });
     expect(result.changed?.kind).toBe('activity');
@@ -355,7 +352,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     const { facade, db, projectId } = ctx;
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
     // 空活动（无工作事实）+ 一条指向它的维修关联
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-13', engineers: '工程师甲' } } });
+    seedHistoricalActivity(db, projectId, '2026-08-13', ['工程师甲']);
     const activityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ?').get(projectId)!.id);
     facade.v2Mutate({
       op: 'submit_action',
@@ -384,7 +381,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     facade.v2Mutate({ op: 'adjust_status', projectId, status: 'executing' });
     expect(String(db.prepare('SELECT status FROM projects WHERE id = ?').get(projectId)!.status)).toBe('executing');
     // 空活动（无工作事实/维修关联，仅参与工程师）
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-13', engineers: '工程师甲、工程师乙' } } });
+    seedHistoricalActivity(db, projectId, '2026-08-13', ['工程师甲', '工程师乙']);
     const activityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ?').get(projectId)!.id);
     const auditsBefore = db.prepare('SELECT COUNT(*) AS n FROM project_status_transition_audit').get()!.n;
 
@@ -931,7 +928,7 @@ describe('受保护登记记录删除（v2Delete，ora-1 严格守卫）', () =>
     expect(qrTomb.owned_child_count).toBe(2);
 
     // activity：参与工程师（2 名）随活动原子清理 → owned_child_count=2
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-13', engineers: '工程师甲、工程师乙' } } });
+    seedHistoricalActivity(db, projectId, '2026-08-13', ['工程师甲', '工程师乙']);
     const activityId = String(db.prepare('SELECT id FROM activities WHERE project_id = ?').get(projectId)!.id);
     facade.v2Delete({ kind: 'activity', id: activityId, expectedRevision: readBusinessRevision(db) });
     const activityTomb = db.prepare('SELECT * FROM record_deletion_audit WHERE record_type = ? AND record_id = ?').get('activity', activityId) as {

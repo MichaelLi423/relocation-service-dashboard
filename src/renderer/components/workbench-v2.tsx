@@ -2079,7 +2079,6 @@ function ProjectDetails({
   const recordFacts: Array<[string, string]> = project ? [
     ["物流费用登记", `${project.counts.batches} 条`],
     ["搬迁仪器", `${project.counts.instruments} 台`],
-    ["上门活动", `${project.counts.activities} 条`],
     ["开单记录", `${project.counts.orders} 条`],
     ["损坏/维修事项", `${project.counts.repairs} 条`],
     ["掉票记录", `${project.counts.invoices} 条`],
@@ -2810,12 +2809,8 @@ function ActionFormV2({
   const [warning, setWarning] = useState("");
   const [damageStatus, setDamageStatus] = useState("untreated");
   const submitLock = useRef(false);
-  const optionKind: WorkbenchV2SectionKind | null = [
-    "visit",
-    "damage",
-  ].includes(type)
-    ? "instruments"
-    : null;
+  const optionKind: WorkbenchV2SectionKind | null =
+    type === "damage" ? "instruments" : null;
   const [optionId, setOptionId] = useState("");
   const [shipTo, setShipTo] = useState<Extract<
     WorkbenchV2LookupRow,
@@ -3268,46 +3263,6 @@ function actionFields(
           optional
           help="可留空；填写时请输入不小于 0 的金额。高于合同预算价时会提示确认，但仍允许记录。"
         />
-      </>
-    );
-  if (type === "visit")
-    return (
-      <>
-        <Field
-          name="visitAt"
-          label="到访日期"
-          type="date"
-          autoFocus
-          optional
-        />
-        <Field name="engineers" label="参与工程师" required />
-        <Select
-          name="status"
-          label="工作事实状态"
-          required
-          options={[
-            ["in_progress", "进行中"],
-            ["done", "已完成"],
-          ]}
-        />
-        <div className="field full" role="group" aria-labelledby="v2-work-types-label">
-          <span className="field-label" id="v2-work-types-label">
-            工作类型 <b>必填</b>
-          </span>
-          <div className="choice-grid">
-            {[
-              ["teardown", "拆机"],
-              ["install", "装机"],
-              ["repair", "维修"],
-              ["other", "其他"],
-            ].map(([value, label], index) => (
-              <label key={value}>
-                <input type="checkbox" name="workTypes" value={value} defaultChecked={index === 0} />
-                {label}
-              </label>
-            ))}
-          </div>
-        </div>
       </>
     );
   if (type === "order")
@@ -4080,6 +4035,9 @@ function IndependentModuleV2({
           <label>截止日期<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
           <button className="button">查找</button>
         </form>
+        {kind === "qr_request" && page?.qrStats && (
+          <QrStatsDashboard stats={page.qrStats} />
+        )}
         <DataRows
           kind={kind}
           rows={page?.rows ?? []}
@@ -4115,6 +4073,140 @@ function IndependentModuleV2({
           </button>
         </div>
       </section>
+    </div>
+  );
+}
+
+function QrStatsDashboard({
+  stats,
+}: {
+  stats: NonNullable<WorkbenchV2IndependentPageDto["qrStats"]>;
+}): JSX.Element {
+  const [activeTab, setActiveTab] = useState<"applicant" | "month" | "type">("applicant");
+  return (
+    <div className="qr-stats-dashboard" role="region" aria-label="二维码工作量统计">
+      <div className="qr-stats-summary" aria-label="统计总览">
+        <div>
+          <span>申请总数（当前筛选）</span>
+          <strong>{stats.requestCount} 条</strong>
+        </div>
+        <div>
+          <span>总工作量（当前筛选）</span>
+          <strong>{stats.workload}</strong>
+        </div>
+        <div>
+          <span>申请人数量</span>
+          <strong>{stats.byApplicant.length} 人</strong>
+        </div>
+        <div>
+          <span>有申请的月份</span>
+          <strong>{stats.byMonth.length} 个月</strong>
+        </div>
+      </div>
+      <div className="qr-stats-tabs" role="tablist" aria-label="工作量统计维度">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "applicant"}
+          className={activeTab === "applicant" ? "active" : ""}
+          onClick={() => setActiveTab("applicant")}
+        >
+          按申请人统计 ({stats.byApplicant.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "month"}
+          className={activeTab === "month" ? "active" : ""}
+          onClick={() => setActiveTab("month")}
+        >
+          按申请月份统计 ({stats.byMonth.length})
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "type"}
+          className={activeTab === "type" ? "active" : ""}
+          onClick={() => setActiveTab("type")}
+        >
+          按类型统计 ({stats.byType.length})
+        </button>
+      </div>
+      <div className="qr-stats-table-wrap">
+        {activeTab === "applicant" && (
+          <table className="qr-stats-table" aria-label="申请人工作量统计">
+            <thead>
+              <tr>
+                <th>申请人</th>
+                <th className="numeric">申请条数</th>
+                <th className="numeric">计入工作量</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.byApplicant.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: "center", color: "var(--muted)" }}>暂无申请人数据</td></tr>
+              ) : (
+                stats.byApplicant.map((item) => (
+                  <tr key={item.applicant}>
+                    <td><strong>{item.applicant}</strong></td>
+                    <td className="numeric">{item.requestCount} 条</td>
+                    <td className="numeric qr-workload-cell">{item.workload}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        )}
+        {activeTab === "month" && (
+          <table className="qr-stats-table" aria-label="申请月份工作量统计">
+            <thead>
+              <tr>
+                <th>申请月份</th>
+                <th className="numeric">申请条数</th>
+                <th className="numeric">计入工作量</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.byMonth.length === 0 ? (
+                <tr><td colSpan={3} style={{ textAlign: "center", color: "var(--muted)" }}>暂无月份数据</td></tr>
+              ) : (
+                stats.byMonth.map((item) => (
+                  <tr key={item.month}>
+                    <td>{item.month}</td>
+                    <td className="numeric">{item.requestCount} 条</td>
+                    <td className="numeric qr-workload-cell">{item.workload}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        )}
+        {activeTab === "type" && (
+          <table className="qr-stats-table" aria-label="申请类型工作量统计">
+            <thead>
+              <tr>
+                <th>申请类型</th>
+                <th className="numeric">次数 / 条数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.byType.length === 0 ? (
+                <tr><td colSpan={2} style={{ textAlign: "center", color: "var(--muted)" }}>暂无类型数据</td></tr>
+              ) : (
+                stats.byType.map((item) => (
+                  <tr key={item.typeCode}>
+                    <td>{QR_REQUEST_TYPE_LABEL.get(item.typeCode) ?? item.typeCode}</td>
+                    <td className="numeric qr-workload-cell">{item.count}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <small style={{ color: "var(--muted)", fontSize: "11px" }}>
+        注：统计基于全部匹配记录，不受分页影响。工作量每条按去重类型数计；申请人是业务申请人，非后台操作人。
+      </small>
     </div>
   );
 }
@@ -4431,6 +4523,8 @@ function ProjectEditForm({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [region, setRegion] = useState(project.region ?? "");
+  const [enableSnapshotCorrection, setEnableSnapshotCorrection] = useState(false);
+  const [snapshotAmount, setSnapshotAmount] = useState(project.entryAmountSnapshot ?? "");
   const nullable = (data: FormData, name: string): string | null => {
     const value = String(data.get(name) ?? "").trim();
     return value || null;
@@ -4471,6 +4565,20 @@ function ProjectEditForm({
       addIfChanged("entryAt", nullable(data, "entryAt"), businessDate(project.entryAt) || null);
       addIfChanged("contractUsdTaxAmount", nullable(data, "contractUsdTaxAmount"), project.contractAmount);
       addIfChanged("finalConfirmableAmount", nullable(data, "finalConfirmableAmount"), project.finalAmount);
+      if (enableSnapshotCorrection) {
+        const raw = snapshotAmount.trim();
+        if (raw === "") {
+          setError("更正进单金额快照时，金额不能为空；如需设为 0 请明确输入 0");
+          return;
+        }
+        if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(raw)) {
+          setError("进单金额快照格式不正确，请输入非负金额（允许为 0，最多两位小数）");
+          return;
+        }
+        if (raw !== (project.entryAmountSnapshot ?? "")) {
+          patch.entryAmountSnapshot = raw;
+        }
+      }
     }
     if (Object.keys(patch).length === 1) {
       setNotice("没有需要保存的更改。");
@@ -4505,6 +4613,44 @@ function ProjectEditForm({
             <div className="form-grid">
               <Field name="contractUsdTaxAmount" label="合同 USD 含税金额" type="number" step="0.01" min="0" defaultValue={project.contractAmount ?? ""} optional help="这是当前合同金额；允许为 0，不会覆盖正式进单时保存的进单金额快照。" />
               <Field name="finalConfirmableAmount" label="最终可确认金额（USD）" type="number" step="0.01" min="0.01" defaultValue={project.finalAmount ?? ""} optional help="用于当前掉票金额闭环；清空时由业务校验决定是否允许。" />
+            </div>
+          </fieldset>
+          <fieldset className="edit-form-section snapshot-correction-section">
+            <legend>进单金额快照</legend>
+            <div className="form-grid">
+              <label className="confirm-check full" style={{ marginBottom: "6px" }}>
+                <input
+                  id="v2-enableSnapshotCorrection"
+                  type="checkbox"
+                  name="enableSnapshotCorrection"
+                  aria-label="更正进单金额快照"
+                  checked={enableSnapshotCorrection}
+                  onChange={(e) => setEnableSnapshotCorrection(e.target.checked)}
+                />
+                更正进单金额快照
+              </label>
+              {enableSnapshotCorrection ? (
+                <>
+                  <div className="inline-warning notice full" role="status" style={{ margin: "4px 0 8px" }}>
+                    更正后将重新计算原进单月份的统计，不影响当前合同金额。
+                  </div>
+                  <Field
+                    name="entryAmountSnapshot"
+                    label="更正进单金额快照（USD）"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={snapshotAmount}
+                    onChange={(e) => setSnapshotAmount(e.target.value)}
+                    required
+                    help="进单历史固定快照值；允许为 0，拒绝负数。"
+                  />
+                </>
+              ) : (
+                <p className="notice full" style={{ margin: "2px 0 0" }}>
+                  当前进单金额快照：<strong>{money(project.entryAmountSnapshot)}</strong>。
+                </p>
+              )}
             </div>
           </fieldset>
         </div>
@@ -4881,7 +5027,7 @@ function InvoiceMutationForm({
 
 type HistoryKind = WorkbenchV2HistoryKind | WorkbenchV2IndependentKind;
 const HISTORY_KINDS: Array<[HistoryKind, string]> = [
-  ["batch", "物流费用"], ["instrument", "搬迁仪器"], ["activity", "到访记录"], ["service_order", "开单记录"],
+  ["batch", "物流费用"], ["instrument", "搬迁仪器"], ["service_order", "开单记录"],
   ["invoice", "掉票记录"], ["damage", "损坏维修"], ["acceptance", "验收报告"], ["ship_to_request", "Account ID 申请"],
   ["serial_address", "序列号地址更新"], ["qr_request", "二维码申请"],
 ];
@@ -5222,6 +5368,7 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
   const [report, setReport] = useState<ReportDto | null>(null);
   const [details, setDetails] = useState<Array<Record<string, string | number | boolean | null>>>([]);
   const [detailMetricKey, setDetailMetricKey] = useState<string | null>(null);
+  const [invoiceView, setInvoiceView] = useState<"summary" | "detail">("summary");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"build" | "xlsx" | "png" | "pdf" | "">("");
 
@@ -5314,10 +5461,18 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
       if (!appliedFilter || isStale) return;
+      if (key === "qr_applicant_workload" || key === "qr_applicant_type_workload") {
+        const sec = report?.sections.find((s) => s.key === key);
+        setDetails((sec?.rows as Array<Record<string, string | number | boolean | null>>) ?? []);
+        setDetailMetricKey(key);
+        setInvoiceView("summary");
+        return;
+      }
       const rows = await api.drillDown(key, serializeFilter(appliedFilter));
       if (reqSeq !== drillReqSeq.current || currentReportSeq !== reportReqSeq.current) return;
       setDetails(rows);
       setDetailMetricKey(key);
+      setInvoiceView("summary");
     } catch (cause) {
       if (reqSeq === drillReqSeq.current && currentReportSeq === reportReqSeq.current) {
         setError(messageOf(cause));
@@ -5471,8 +5626,103 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
       )}
       {details.length > 0 && !isStale && (
         <section className="report-details">
-          <div className="report-section-head"><div><p className="overline">核对数据</p><h3>下钻明细</h3></div><span>{details.length} 行</span></div>
-          <div className="table-scroll"><table className="data-table"><thead><tr>{Object.keys(details[0] ?? {}).map((key) => <th key={key}>{reportColumnLabel(key, detailMetricKey)}</th>)}</tr></thead><tbody>{details.map((row, index) => <tr key={String(row.id ?? index)}>{Object.entries(row).map(([key,value]) => <td key={key}>{reportCellText(key, value, detailMetricKey)}</td>)}</tr>)}</tbody></table></div>
+          <div className="report-section-head">
+            <div>
+              <p className="overline">核对数据</p>
+              <h3>
+                {detailMetricKey === "monthly_invoice_amount" || detailMetricKey === "monthly_invoice"
+                  ? "月度掉票"
+                  : detailMetricKey === "qr_applicant_workload"
+                  ? "二维码申请人统计"
+                  : detailMetricKey === "qr_applicant_type_workload"
+                  ? "二维码申请类型工作量"
+                  : "下钻明细"}
+              </h3>
+            </div>
+            <span>
+              {detailMetricKey === "monthly_invoice_amount" || detailMetricKey === "monthly_invoice"
+                ? invoiceView === "summary" && (report?.sections.find((s) => s.key === detailMetricKey)?.rows.length ?? 0) > 0
+                  ? `${report?.sections.find((s) => s.key === detailMetricKey)?.rows.length ?? 0} 行汇总`
+                  : `${details.length} 行明细`
+                : `${details.length} 行`}
+            </span>
+          </div>
+
+          {(detailMetricKey === "monthly_invoice_amount" || detailMetricKey === "monthly_invoice") && (
+            <>
+              {(report?.sections.find((s) => s.key === detailMetricKey)?.rows.length ?? 0) > 0 && (
+                <div className="report-detail-tabs" role="tablist" aria-label="月度掉票视图切换">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={invoiceView === "summary"}
+                    className={invoiceView === "summary" ? "active" : ""}
+                    onClick={() => setInvoiceView("summary")}
+                  >
+                    月度掉票表（按月份+区域，已撤销不计）
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={invoiceView === "detail"}
+                    className={invoiceView === "detail" ? "active" : ""}
+                    onClick={() => setInvoiceView("detail")}
+                  >
+                    掉票下钻明细（{details.length} 行）
+                  </button>
+                </div>
+              )}
+              {invoiceView === "summary" && (
+                <p className="notice" style={{ margin: "0 0 10px" }}>
+                  月度掉票表按月份与区域统计金额、掉票次数与去重项目数（已撤销不计）。
+                </p>
+              )}
+            </>
+          )}
+
+          {detailMetricKey === "qr_applicant_workload" && (
+            <p className="notice" style={{ margin: "0 0 10px" }}>
+              二维码申请人统计：工作量按每条去重类型数计；申请人是业务申请人，非后台操作人。
+            </p>
+          )}
+
+          {detailMetricKey === "qr_applicant_type_workload" && (
+            <p className="notice" style={{ margin: "0 0 10px" }}>
+              二维码申请类型工作量：按申请人与申请类型细分统计工作量；申请人是业务申请人，非后台操作人。
+            </p>
+          )}
+
+          {(() => {
+            const isInvoice = detailMetricKey === "monthly_invoice_amount" || detailMetricKey === "monthly_invoice";
+            const summaryRows = isInvoice
+              ? (report?.sections.find((s) => s.key === detailMetricKey)?.rows as Array<Record<string, string | number | boolean | null>> ?? [])
+              : [];
+            const displayRows = isInvoice && invoiceView === "summary" && summaryRows.length > 0
+              ? summaryRows
+              : details;
+            return (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      {Object.keys(displayRows[0] ?? {}).map((key) => (
+                        <th key={key}>{reportColumnLabel(key, detailMetricKey)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayRows.map((row, index) => (
+                      <tr key={String(row.id ?? index)}>
+                        {Object.entries(row).map(([key, value]) => (
+                          <td key={key}>{reportCellText(key, value, detailMetricKey)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
         </section>
       )}
     </div>
@@ -5482,6 +5732,20 @@ function ReportPanelV2({ catalog, catalogLoading, catalogError, onRetryCatalog }
 function reportColumnLabel(key: string, metricKey?: string | null): string {
   if (key === "customerName" && (metricKey === "monthly_service_order_count" || metricKey === "monthly_order")) {
     return "客户单位";
+  }
+  if (key === "projectCount") {
+    return metricKey === "monthly_invoice_amount" || metricKey === "monthly_invoice" ? "去重项目数" : "项目数";
+  }
+  if (key === "requestCount") return "申请条数";
+  if (key === "workload") return "工作量";
+  if (key === "count") {
+    if (metricKey === "monthly_invoice_amount" || metricKey === "monthly_invoice") return "掉票次数";
+    if (metricKey === "qr_applicant_type_workload") return "工作量";
+    return "数量";
+  }
+  if (key === "amountCents") {
+    if (metricKey === "monthly_invoice_amount" || metricKey === "monthly_invoice") return "掉票金额（USD）";
+    return "金额（USD）";
   }
   const labels: Record<string, string> = {
     id: "记录编号", itemId: "维修事项编号", projectId: "项目编号", projectTempNo: "项目临时编号",
@@ -5499,6 +5763,7 @@ function reportColumnLabel(key: string, metricKey?: string | null): string {
     planTransportDate: "计划运输日期", submittedAt: "提交日期", applicant: "申请人", requestedAt: "申请日期",
     typeCode: "二维码申请类型", updatedAt: "更新日期", serialNo: "序列号",
     workScope: "工作范围", customer: "客户单位",
+    requestCount: "申请条数", workload: "工作量",
   };
   return labels[key] ?? "其他信息";
 }
@@ -5507,6 +5772,7 @@ function reportCellText(key: string, value: string | number | boolean | null, me
   if (value === null) return "—";
   if (typeof value === "boolean") return value ? "是" : "否";
   const text = String(value);
+  if (key === "region" && !text) return "(未填区域)";
   const enumLabels: Record<string, Record<string, string>> = {
     status: { ...STATUS_LABEL },
     orderType: { relocation: "搬迁", certification: "认证", parts_by_mail: "单寄备件", pm: "PM" },

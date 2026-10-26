@@ -4,7 +4,7 @@ import { Money, formatCents } from '../domain/core/money';
 import { ValidationError } from '../domain/core/errors';
 import { SystemClock, assertValidBusinessDate } from '../domain/core/time';
 import { CustomerService, ProjectService, isFormallyEntered, isTerminal, type ProjectStatusOrCancelled } from '../domain/capabilities/relocation-project-lifecycle';
-import { ExecutionService, type BatchQuoteInput, type LogisticsFeeInput, type WorkType } from '../domain/capabilities/relocation-execution';
+import { ExecutionService, type BatchQuoteInput, type LogisticsFeeInput } from '../domain/capabilities/relocation-execution';
 import { ServiceOrderService, type ServiceOrderWorkScope } from '../domain/capabilities/service-order-recording';
 import { ReminderService } from '../domain/capabilities/workbench-todos';
 import { ShipToService } from '../domain/capabilities/ship-to-management';
@@ -101,7 +101,7 @@ const hasProjectUpdateFields = (update: ProjectUpdatePayload): boolean => {
     update.siteConfirmed, update.projectNote, update.temporaryStorageAddress, update.isTemporaryStorage,
     update.managerApproved, update.temporaryInstrumentCount, update.temporaryInstrumentName,
     update.temporaryInstrumentModel, update.temporaryHasUps, update.ecc, update.entryAt,
-    legacy.enteredAt, update.contractUsdTaxAmount, update.finalConfirmableAmount,
+    legacy.enteredAt, update.contractUsdTaxAmount, update.entryAmountSnapshot, update.finalConfirmableAmount,
   ].some((value) => value !== undefined);
 };
 
@@ -748,7 +748,7 @@ export class WorkbenchFacade {
         : (update as ProjectUpdatePayload & { enteredAt?: string | null }).enteredAt;
       if (
         !formallyEntered &&
-        (update.ecc !== undefined || entryAt !== undefined || update.contractUsdTaxAmount !== undefined || update.finalConfirmableAmount !== undefined)
+        (update.ecc !== undefined || entryAt !== undefined || update.contractUsdTaxAmount !== undefined || update.entryAmountSnapshot !== undefined || update.finalConfirmableAmount !== undefined)
       ) {
         throw new ValidationError(
           'UPDATE_REQUIRES_FORMAL_ENTRY',
@@ -762,6 +762,7 @@ export class WorkbenchFacade {
       // 合同金额允许 0、拒绝负数（领域 5.1）；最终可确认金额必须 > 0 且不低于累计有效掉票（领域 5.4），
       // 空串/null 解析为 0，由领域校验拒绝非法清空。
       if (update.contractUsdTaxAmount !== undefined) this.financialService().setContractUsdTaxAmount(projectId, parseAmountInput(update.contractUsdTaxAmount));
+      if (update.entryAmountSnapshot !== undefined) this.financialService().correctEntryAmountSnapshot(projectId, parseAmountInput(update.entryAmountSnapshot));
       if (update.finalConfirmableAmount !== undefined) this.financialService().setFinalConfirmableAmount(projectId, parseAmountInput(update.finalConfirmableAmount));
       if (update.tagIds !== undefined) this.projectTags.replaceSet(projectId, update.tagIds);
     });
@@ -1203,7 +1204,7 @@ export class WorkbenchFacade {
           break;
         }
         case 'instrument': this.executionService().registerInstrument(projectId,{name:text(v.name),manufacturer:optional(v.manufacturer),model:optional(v.model),serviceLevel:optional(v.serviceLevel),serialNo:optional(v.serialNo),batchId:optional(v.batchId),ups:requiredBoolean(v.ups, 'UPS'),qrRequested:requiredBoolean(v.qrRequested, '二维码申请')},actor); break;
-        case 'visit': { const e=text(v.engineers).split(/[、,，]/).filter(Boolean); const a=this.executionService().createActivity(projectId,businessDate(v.visitAt,'到访日期')??null,e,actor); const ids=Array.isArray(v.instrumentIds)?v.instrumentIds.map(String):[text(v.instrumentId)].filter(Boolean); const types=Array.isArray(v.workTypes)?v.workTypes as WorkType[]:[text(v.workType) as WorkType]; for(const id of ids) for(const type of types){this.executionService().startWorkFact(a.id,id,type,actor); if(v.status==='done')this.executionService().completeWorkFact(a.id,id,type,actor);} break; }
+        case 'visit': throw new ValidationError('VISIT_DISABLED', '到访登记已下线，历史执行事实保留');
         case 'order': {
           // 合并服务单四字段后 UI 不再传 customerName：relocation/certification/
           // parts_by_mail/pm 四种类型都从当前项目关联客户派生客户单位。
@@ -1543,5 +1544,5 @@ function serializeShipToRequest(r:ShipToRequestRecord):ShipToRequestDto {
 }
 function serializeReport(report:ReportModel):ReportDto {
   const section=(key:string,label:string,rows:unknown[])=>({key,label,rows:serializeRows(rows)});
-  return {range:report.range,filters:report.filters,generatedAt:report.generatedAt,sections:[section('project_pipeline','项目管道',report.pipeline),section('entry_amount_by_region','各区域新项目进单金额',report.entryAmountByRegion),section('monthly_invoice_amount','月度掉票',report.monthlyInvoices),section('monthly_service_order_count','月度开单量',report.monthlyServiceOrders),section('damage_repair_stats','损坏维修统计',report.damageSummary),section('monthly_logistics','月度物流费用',report.monthlyLogistics),section('ship_to_request_workload','Account ID 申请工作量',report.shipToWorkload),section('qr_request_workload','二维码申请工作量',report.qrWorkload),section('serial_address_update_count','序列号地址更新记录数',report.serialAddressUpdates)]};
+  return {range:report.range,filters:report.filters,generatedAt:report.generatedAt,sections:[section('project_pipeline','项目管道',report.pipeline),section('entry_amount_by_region','各区域新项目进单金额',report.entryAmountByRegion),section('monthly_invoice_amount','月度掉票',report.monthlyInvoices),section('monthly_service_order_count','月度开单量',report.monthlyServiceOrders),section('damage_repair_stats','损坏维修统计',report.damageSummary),section('monthly_logistics','月度物流费用',report.monthlyLogistics),section('ship_to_request_workload','Account ID 申请工作量',report.shipToWorkload),section('qr_request_workload','二维码操作人工作量',report.qrWorkload),section('qr_applicant_workload','二维码申请人统计',report.qrApplicantWorkload),section('qr_applicant_type_workload','二维码申请类型工作量',report.qrApplicantTypeWorkload),section('serial_address_update_count','序列号地址更新记录数',report.serialAddressUpdates)]};
 }

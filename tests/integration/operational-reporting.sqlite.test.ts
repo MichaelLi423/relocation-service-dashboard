@@ -250,7 +250,10 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       ctx.financial.recordInvoice(p2, { amountCents: 200n, invoicedAt: '2026-07-15' }, ACTOR);
 
       const filter = { monthFrom: '2026-07', monthTo: '2026-07', tagIds: ['project-tag-project-type-relocation', 'project-tag-service-type-storage'] };
-      expect(ctx.reporting.buildReport(filter).monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 300n, count: 2 }]);
+      expect(ctx.reporting.buildReport(filter).monthlyInvoices).toEqual([
+        { month: '2026-07', region: 'East', amountCents: 100n, count: 1, projectCount: 1 },
+        { month: '2026-07', region: 'South', amountCents: 200n, count: 1, projectCount: 1 },
+      ]);
       expect(() => ctx.reporting.buildReport({ ...filter, tagIds: ['unknown-tag'] })).toThrow(/UNKNOWN_PROJECT_TAG_ID/);
       closeDatabase(ctx.db);
     } finally {
@@ -316,8 +319,8 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       ]);
       // 掉票跨月分次归属
       expect(report.monthlyInvoices).toEqual([
-        { month: '2026-06', amountCents: 500000n, count: 1 },
-        { month: '2026-07', amountCents: 300000n, count: 1 },
+        { month: '2026-06', region: 'South', projectCount: 1, amountCents: 500000n, count: 1 },
+        { month: '2026-07', region: 'East', projectCount: 1, amountCents: 300000n, count: 1 },
       ]);
       // 开单量按类型分组
       const orders = new Map(report.monthlyServiceOrders.map((r) => [`${r.month}:${r.orderType}`, r.count]));
@@ -505,7 +508,7 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
       expect(meta.range).toEqual({ from: '2026-07', to: '2026-07' });
       expect(meta.filters).toEqual({ region: 'East', orderType: null, transportCompany: null, engineer: null, operator: null, tagIds: [], workScope: null });
       const invoiceSection = meta.sections.find((s: { key: string }) => s.key === 'monthly_invoice');
-      expect(invoiceSection.rows).toContainEqual(['2026-07', '5000.00', '1']);
+      expect(invoiceSection.rows).toContainEqual(['2026-07', 'East', '5000.00', '1', '1']);
 
       closeDatabase(ctx.db);
     } finally {
@@ -1034,6 +1037,48 @@ describe('operational-reporting SQLite 集成（7.11）', () => {
   });
 });
 
+describe('客户迭代报表与全部导出', () => {
+  it('多月多区域掉票计去重项目、撤销不计；申请人不取操作人，Excel/PDF/PNG 一致', async () => {
+    const dir = makeTempDir();
+    try {
+      const ctx = openService(dir);
+      const east = seedEnteredProject(ctx, { region: 'East', entryAt: '2026-07-01', snapshot: '10000' });
+      const north = seedEnteredProject(ctx, { region: 'North', entryAt: '2026-07-01', snapshot: '10000' });
+      for (const [projectId, invoicedAt] of [[east, '2026-07-01'], [east, '2026-07-15'], [north, '2026-07-10'], [east, '2026-08-01']] as const) {
+        ctx.financial.recordInvoice(projectId, { amountCents: 100n, invoicedAt }, ACTOR);
+      }
+      const revoked = ctx.financial.recordInvoice(north, { amountCents: 100n, invoicedAt: '2026-08-01' }, ACTOR);
+      ctx.financial.revokeInvoice(revoked.id, { revokedAt: '2026-08-02', revokeReason: '更正' }, ACTOR);
+      ctx.qrService.createRequest({ applicant: '业务申请人', requestedAt: '2026-07-08', types: ['A', 'A', 'B'] }, ACTOR);
+      ctx.qrService.createRequest({ applicant: '业务申请人', requestedAt: '2026-07-09', types: ['A'] }, ACTOR);
+      const report = ctx.reporting.buildReport({ monthFrom: '2026-07', monthTo: '2026-08' });
+      expect(report.monthlyInvoices).toEqual([
+        { month: '2026-07', region: 'East', amountCents: 200n, count: 2, projectCount: 1 },
+        { month: '2026-07', region: 'North', amountCents: 100n, count: 1, projectCount: 1 },
+        { month: '2026-08', region: 'East', amountCents: 100n, count: 1, projectCount: 1 },
+      ]);
+      expect(report.qrApplicantWorkload).toEqual([{ month: '2026-07', applicant: '业务申请人', requestCount: 2, workload: 3 }]);
+      const xlsx = await ctx.exporter.exportExcel(report);
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(xlsx as unknown as Parameters<typeof wb.xlsx.load>[0]);
+      const rows = wb.worksheets[0].getSheetValues().filter(Boolean).map((row) => Object.values(row as object).map(String));
+      expect(rows).toContainEqual(['2026-07', 'East', '2.00', '2', '1']);
+      expect(rows).toContainEqual(['2026-07', '业务申请人', '2', '3']);
+      const pdf = await import('pdf-lib').then(async (m) => m.PDFDocument.load(await ctx.exporter.exportPdf(report)));
+      const pdfMeta = JSON.parse(pdf.getSubject()!);
+      const pngMeta = JSON.parse(extractPngTextChunk(ctx.exporter.exportPng(report), 'Report')!);
+      for (const meta of [pdfMeta, pngMeta]) {
+        expect(meta.sections.find((s: { key: string }) => s.key === 'monthly_invoice').rows).toContainEqual(['2026-07', 'East', '2.00', '2', '1']);
+        expect(meta.sections.find((s: { key: string }) => s.key === 'qr_applicant_workload').rows).toEqual([['2026-07', '业务申请人', '2', '3']]);
+        expect(meta.sections.find((s: { key: string }) => s.key === 'qr_applicant_type_workload').rows).toEqual([['2026-07', '业务申请人', 'A', '2'], ['2026-07', '业务申请人', 'B', '1']]);
+      }
+      closeDatabase(ctx.db);
+    } finally {
+      cleanupTempDir(dir);
+    }
+  });
+});
+
 describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例精确（BigInt 定点）', () => {
   /** 构造仅含月度掉票数据的最小 ReportModel（条形图主指标）。 */
   function invoiceOnlyReport(amounts: bigint[]): ReportModel {
@@ -1043,7 +1088,7 @@ describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例
       generatedAt: '2026-07-31T00:00:00+08:00',
       pipeline: [],
       entryAmountByRegion: [],
-      monthlyInvoices: amounts.map((amountCents) => ({ month: '2026-07', amountCents, count: 1 })),
+      monthlyInvoices: amounts.map((amountCents) => ({ month: '2026-07', region: 'East', projectCount: 1, amountCents, count: 1 })),
       monthlyServiceOrders: [],
       damageSummary: [],
       damageDetails: [],
@@ -1052,6 +1097,8 @@ describe('PNG 导出条形图：超过 MAX_SAFE_INTEGER 金额的标签与比例
       pendingLogistics: [],
       shipToWorkload: [],
       qrWorkload: [],
+      qrApplicantWorkload: [],
+      qrApplicantTypeWorkload: [],
       serialAddressUpdates: [],
     };
   }

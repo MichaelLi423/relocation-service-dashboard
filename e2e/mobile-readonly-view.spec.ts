@@ -94,11 +94,10 @@ async function expectProjectCard(page: Page, customer: string): Promise<void> {
   await expect(projectCardByName(page, customer).locator('.mr-project-name')).toContainText(customer);
 }
 
-/** 项目/记录 kind 与移动端展示标签的对应（服务端 kind 即快照六类键）。 */
+/** 当前可见记录类型；服务端仍兼容含上门活动的历史快照。 */
 const RECORD_KINDS = [
   ['batches', '批次'],
   ['instruments', '仪器'],
-  ['activities', '上门活动'],
   ['orders', '开单'],
   ['invoices', '掉票'],
   ['damage_items', '损坏维修'],
@@ -106,6 +105,7 @@ const RECORD_KINDS = [
 
 async function verifySixRecordKindsSecondPage(page: Page): Promise<void> {
   const recordTypes = page.getByRole('group', { name: '记录类型' });
+  await expect(recordTypes.getByRole('button', { name: '上门活动' })).toHaveCount(0);
   for (const [kind, label] of RECORD_KINDS) {
     await recordTypes.getByRole('button', { name: label }).click();
     const pagination = page.getByLabel('记录翻页');
@@ -222,7 +222,6 @@ for (const width of [360, 390]) {
     }
   });
 }
-
 test('尚未发布与已发布空快照在手机页面明确区分（未发布含 "尚未发布数据"，不显示任何写入表单）', async ({ browser }) => {
   test.setTimeout(60_000);
   // 场景一：服务已启动但从未成功接收发布 => 尚未发布
@@ -287,3 +286,56 @@ test('完整刷新且服务不可达时浏览器页面不可用（no-store 无�
     if (service) await closeFixtureService(service);
   }
 });
+
+for (const width of [360, 390]) {
+  test(`手机只读专项 ${width}px：打开合成客户-00核验上门活动入口下线、5类记录展示与第二页分页正常及含activities快照兼容（本次迭代）`, async ({ browser }) => {
+    test.setTimeout(60_000);
+    const service = await startPublishedViewService();
+    try {
+      const opened = await openMobileReadonlyPage(browser, service.baseUrl, { width, height: 844 });
+      const page = opened.page;
+      try {
+        await expect(page.getByRole('heading', { name: '项目工作台' })).toBeVisible();
+        await expect(page.getByText('已发布 · V1', { exact: true })).toBeVisible();
+
+        // 直接打开首个项目 合成客户-00（不经过旧搜索与筛选路径）
+        await expectProjectCard(page, '合成客户-00');
+        await projectCardByName(page, '合成客户-00').click();
+
+        // 验证详情基础信息
+        await expect(page.getByRole('heading', { name: '项目详情' })).toBeVisible();
+        const baseInfo = page.getByLabel('项目基础信息');
+        await expect(baseInfo).toContainText('TP-SYN-00');
+        await expect(baseInfo).toContainText('synthetic-project-00');
+        await expect(baseInfo).toContainText('合成客户-00');
+
+        // 验证记录类型中无「上门活动」按钮
+        const recordTypes = page.getByRole('group', { name: '记录类型' });
+        await expect(recordTypes.getByRole('button', { name: '上门活动' })).toHaveCount(0);
+
+        // 验证其余 5 类记录的展示与第 2 页翻页能力，且全程无横向溢出
+        for (const [kind, label] of RECORD_KINDS) {
+          const tabBtn = recordTypes.getByRole('button', { name: label });
+          await expect(tabBtn).toBeVisible();
+          await tabBtn.click();
+          const pagination = page.getByLabel('记录翻页');
+          await expect(pagination.getByText('第 1 页')).toBeVisible();
+          await expect(page.getByText(`p0-${kind}-0`, { exact: true }).first()).toBeVisible();
+          await pagination.getByRole('button', { name: '下一页 →' }).click();
+          await expect(pagination.getByText('第 2 页')).toBeVisible();
+          await expect(page.getByText(`p0-${kind}-24`, { exact: true }).first()).toBeVisible();
+          await expectNoHorizontalOverflow(page);
+        }
+
+        // 验证包含 activities 的历史快照在存在底层数据时页面稳定正常，返回列表亦无异常
+        await page.getByRole('button', { name: '← 返回项目列表' }).click();
+        await expect(page.getByRole('heading', { name: '项目工作台' })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+      } finally {
+        await opened.context.close();
+      }
+    } finally {
+      await closeService(service);
+    }
+  });
+}

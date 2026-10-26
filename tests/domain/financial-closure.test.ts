@@ -71,6 +71,34 @@ function prepareExecuting(ctx: ReturnType<typeof setup>, amount = '10000'): stri
   return projectId;
 }
 
+describe('显式进单金额快照更正', () => {
+  it('仅更正快照并保留分整数精度、合同与最终金额和状态不变；后续普通合同修改不影响快照', () => {
+    const ctx = setup();
+    const projectId = preparePendingInvoice(ctx);
+    ctx.financial.correctEntryAmountSnapshot(projectId, 9007199254740993n);
+    expect(ctx.contracts.findByProjectId(projectId)).toMatchObject({
+      entryAmountSnapshotCents: 9007199254740993n,
+      usdTaxAmountCents: 1000000n, finalConfirmableAmountCents: 1000000n,
+    });
+    expect(ctx.projects.findById(projectId)!.status).toBe('pending_invoice');
+    ctx.financial.setContractUsdTaxAmount(projectId, 123456n);
+    expect(ctx.contracts.findByProjectId(projectId)!.entryAmountSnapshotCents).toBe(9007199254740993n);
+    expect(() => ctx.financial.correctEntryAmountSnapshot(projectId, -1n)).toThrow(/负数/);
+    ctx.financial.correctEntryAmountSnapshot(projectId, 0n);
+    expect(ctx.contracts.findByProjectId(projectId)!.entryAmountSnapshotCents).toBe(0n);
+  });
+
+  it('未正式进单或终态项目不得更正', () => {
+    const ctx = setup();
+    const draft = ctx.projectService.createPendingProject().id;
+    ctx.projectService.attachContract(draft);
+    expect(() => ctx.financial.correctEntryAmountSnapshot(draft, 1n)).toThrow(/仅允许已正式进单项目/);
+    const projectId = prepareExecuting(ctx);
+    ctx.projectService.cancelProject(projectId, { time: '2026-08-07', reason: '取消' });
+    expect(() => ctx.financial.correctEntryAmountSnapshot(projectId, 1n)).toThrow();
+  });
+});
+
 describe('合同 USD 含税金额手工录入与直接覆盖（5.1 / TBD-20）', () => {
   it('手工录入合同含税金额：保存手工值，不根据净值税率自动计算或改写', () => {
     const ctx = setup();

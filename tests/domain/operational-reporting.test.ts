@@ -236,6 +236,54 @@ function setup() {
 const JULY: ReportFilter = { monthFrom: '2026-07', monthTo: '2026-07' };
 const JUNE_JULY: ReportFilter = { monthFrom: '2026-06', monthTo: '2026-07' };
 
+describe('客户迭代统计口径', () => {
+  it('申请人独立于操作人，按申请月份统计条数与去重类型工作量，并保留操作人筛选', () => {
+    const { facts, service } = setup();
+    facts.qrRequests = [
+      makeQrRequest({ id: 'q1', applicant: '申请甲', types: ['A', 'A', 'B'], operatorUsername: '录入甲' }),
+      makeQrRequest({ id: 'q2', applicant: '申请甲', types: ['C'], operatorUsername: '录入乙' }),
+      makeQrRequest({ id: 'q3', applicant: '申请乙', requestedAt: '2026-06-30', types: ['B'], operatorUsername: '录入甲' }),
+    ];
+    const report = service.buildReport(JUNE_JULY);
+    expect(report.qrApplicantWorkload).toEqual([
+      { month: '2026-06', applicant: '申请乙', requestCount: 1, workload: 1 },
+      { month: '2026-07', applicant: '申请甲', requestCount: 2, workload: 3 },
+    ]);
+    expect(report.qrApplicantTypeWorkload).toEqual([
+      { month: '2026-06', applicant: '申请乙', typeCode: 'B', count: 1 },
+      { month: '2026-07', applicant: '申请甲', typeCode: 'A', count: 1 },
+      { month: '2026-07', applicant: '申请甲', typeCode: 'B', count: 1 },
+      { month: '2026-07', applicant: '申请甲', typeCode: 'C', count: 1 },
+    ]);
+    expect(report.qrWorkload.every((row) => row.operatorUsername?.startsWith('录入'))).toBe(true);
+    expect(service.buildReport({ ...JULY, operator: '录入甲' }).qrApplicantWorkload).toEqual([
+      { month: '2026-07', applicant: '申请甲', requestCount: 1, workload: 2 },
+    ]);
+    expect(service.buildReport({ ...JULY, region: 'East' }).qrApplicantWorkload).toEqual([]);
+  });
+
+  it('掉票按月份区域聚合金额次数与去重项目数，撤销不计且区域修改实时回溯', () => {
+    const { facts, service } = setup();
+    facts.projects = [makeProject(), makeProject({ id: 'p2', region: 'North' }), makeProject({ id: 'p3' })];
+    facts.invoices = [
+      makeInvoice({ id: 'i1' }), makeInvoice({ id: 'i2' }),
+      makeInvoice({ id: 'i3', projectId: 'p2' }),
+      makeInvoice({ id: 'i4', projectId: 'p3' }),
+      makeInvoice({ id: 'i5', invoicedAt: '2026-06-10' }),
+      makeInvoice({ id: 'i6', projectId: 'p2', revokedAt: 't' }),
+    ];
+    expect(service.buildReport(JUNE_JULY).monthlyInvoices).toEqual([
+      { month: '2026-06', region: 'East', amountCents: 5000n, count: 1, projectCount: 1 },
+      { month: '2026-07', region: 'East', amountCents: 15000n, count: 3, projectCount: 2 },
+      { month: '2026-07', region: 'North', amountCents: 5000n, count: 1, projectCount: 1 },
+    ]);
+    facts.projects[1].region = 'East';
+    expect(service.buildReport(JULY).monthlyInvoices).toEqual([
+      { month: '2026-07', region: 'East', amountCents: 20000n, count: 4, projectCount: 3 },
+    ]);
+  });
+});
+
 describe('指标口径字典与来源映射（7.1）', () => {
   it('字典覆盖全部指标键，并给出时间归属、事实来源与筛选、下钻能力', () => {
     expect(REPORT_METRIC_KEYS.length).toBe(12);
@@ -357,8 +405,8 @@ describe('月度掉票金额与掉票次数（7.3）', () => {
     ];
     const report = service.buildReport(JUNE_JULY);
     expect(report.monthlyInvoices).toEqual([
-      { month: '2026-06', amountCents: 300000n, count: 1 },
-      { month: '2026-07', amountCents: 500000n, count: 1 },
+      { month: '2026-06', region: 'East', projectCount: 1, amountCents: 300000n, count: 1 },
+      { month: '2026-07', region: 'East', projectCount: 1, amountCents: 500000n, count: 1 },
     ]);
   });
 
@@ -370,7 +418,7 @@ describe('月度掉票金额与掉票次数（7.3）', () => {
       makeInvoice({ id: 'inv-2', amountCents: 500000n, revokedAt: '2026-07-20' }),
     ];
     const report = service.buildReport(JULY);
-    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 300000n, count: 1 }]);
+    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', region: 'East', projectCount: 1, amountCents: 300000n, count: 1 }]);
   });
 
   it('掉票编辑后报表实时更新（7.10）', () => {
@@ -1171,7 +1219,7 @@ describe('已取消项目的统计排除（7.9）', () => {
     // 进单金额排除已取消项目
     expect(report.entryAmountByRegion.map((r) => r.region)).toEqual(['South']);
     // 掉票金额/次数排除已取消项目
-    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 500000n, count: 1 }]);
+    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', region: 'South', projectCount: 1, amountCents: 500000n, count: 1 }]);
     // 项目管道排除已取消项目
     expect(report.pipeline.some((r) => r.status === 'cancelled')).toBe(false);
     expect(report.pipeline.find((r) => r.status === 'pending_execution')!.projectCount).toBe(1);
@@ -1193,7 +1241,7 @@ describe('已取消项目的统计排除（7.9）', () => {
     ];
     const report = service.buildReport(JULY);
     expect(report.entryAmountByRegion.map((r) => r.region)).toEqual(['South']);
-    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 500000n, count: 1 }]);
+    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', region: 'South', projectCount: 1, amountCents: 500000n, count: 1 }]);
     expect(report.pipeline.some((r) => r.status === 'transferred')).toBe(false);
     expect(report.pipeline.find((r) => r.status === 'pending_execution')!.projectCount).toBe(1);
   });
@@ -1343,7 +1391,7 @@ describe('项目分类标签筛选（add-project-tags reporting lane）', () => 
     const report = service.buildReport(filter);
     expect(report.filters.tagIds).toEqual(['tag-a', 'tag-b']);
     expect(report.pipeline.reduce((sum, row) => sum + row.projectCount, 0)).toBe(2);
-    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', amountCents: 300n, count: 2 }]);
+    expect(report.monthlyInvoices).toEqual([{ month: '2026-07', region: 'East', projectCount: 2, amountCents: 300n, count: 2 }]);
     expect(service.getMetricDetails('monthly_invoice_amount', filter)).toHaveLength(2);
   });
 

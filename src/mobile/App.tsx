@@ -126,7 +126,7 @@ export function MobileReadonlyApp({ controller: supplied }: { controller?: Mobil
       </> : <>
         <button className="mr-back" onClick={controller.backToProjects}>← 返回项目列表</button>
         {view.detail?.project ? <><ProjectDetail project={view.detail.project} /><section aria-label="关联记录"><h2 className="mr-list-heading">关联记录</h2>
-          <div className="mr-tabs" role="group" aria-label="记录类型">{MOBILE_READONLY_RECORD_KINDS.map((kind) => <button key={kind} aria-pressed={view.navigation.page === 'detail' && view.navigation.kind === kind} onClick={() => controller.selectKind(kind)}>{RECORD_LABELS[kind]}</button>)}</div>
+          <div className="mr-tabs" role="group" aria-label="记录类型">{MOBILE_READONLY_RECORD_KINDS.filter((kind) => kind !== 'activities').map((kind) => <button key={kind} aria-pressed={view.navigation.page === 'detail' && view.navigation.kind === kind} onClick={() => controller.selectKind(kind)}>{RECORD_LABELS[kind]}</button>)}</div>
           <h3 className="mr-record-heading">{RECORD_LABELS[view.navigation.kind]}</h3>
           {view.records?.items.length ? <ul className="mr-list">{view.records.items.map((row) => <li key={row.id} className="mr-panel"><Fields values={recordFields(view.records!.kind, row)} /></li>)}</ul> : <div className="mr-empty">暂无{RECORD_LABELS[view.navigation.kind]}记录</div>}
           <Pagination state={state} controller={controller} />

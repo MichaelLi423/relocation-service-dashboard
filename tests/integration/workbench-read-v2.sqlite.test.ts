@@ -76,6 +76,18 @@ function reader(ctx: Ctx, today = '2026-08-08', windowDays = 7): WorkbenchReadRe
   return new WorkbenchReadRepository(ctx.db, { today, windowDays });
 }
 
+/** 到访入口下线后，直接播种历史事实以验证兼容读取，不经过已禁用的新增命令。 */
+function seedHistoricalVisit(db: DatabaseSync, projectId: string, instrumentId: string, engineers: string[]): void {
+  db.prepare('INSERT INTO activities (id, project_id, visit_at, created_at, updated_at) VALUES (?,?,?,?,?)')
+    .run('historic-visit', projectId, '2026-08-12', 't', 't');
+  for (const [index, engineer] of engineers.entries()) {
+    db.prepare('INSERT INTO activity_engineers (id, activity_id, engineer) VALUES (?,?,?)')
+      .run(`historic-engineer-${index}`, 'historic-visit', engineer);
+  }
+  db.prepare(`INSERT INTO work_facts (id, activity_id, instrument_id, work_type, status, started_at, completed_at, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run('historic-work', 'historic-visit', instrumentId, 'teardown', 'done', 't', 't', 't', 't');
+}
+
 /** 直接 SQL 播种多个项目（temp_no 唯一；updated_at 递增保证排序稳定）。 */
 function seedProjects(db: DatabaseSync, count: number, baseUpdatedAt = '2026-08-01T00:00:00+08:00'): void {
   const stmt = db.prepare(
@@ -968,7 +980,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     // 加子记录
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-11', amount: '20000' } } });
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-12', engineers: '工程师甲、工程师乙', status: 'done', instrumentIds: [String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id)], workTypes: ['teardown'] } } });
+    seedHistoricalVisit(db, projectId, String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id), ['工程师甲', '工程师乙']);
 
     const detail = facade.v2ProjectDetail(projectId);
     expect(detail.businessRevision).toBeGreaterThan(0);
@@ -1030,7 +1042,7 @@ describe('工作台 v2 项目详情 + 子记录分页（Oracle #10）', () => {
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'batch', projectId, values: { planTransportDate: '2026-08-10', transportCompany: '运输公司', appliedAt: '2026-08-09', budgetPrice: '12000', dealPrice: '11000' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-11', amount: '1234.567' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', values: { orderType: 'relocation', serviceOrderNo: 'ORD-V2-001', orderedAt: '2026-08-11', engineer: '工程师甲', customerName: '集成客户甲', projectId } } });
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-12', engineers: '工程师甲、工程师乙', status: 'done', instrumentIds: [instrumentId], workTypes: ['teardown'] } } });
+    seedHistoricalVisit(db, projectId, instrumentId, ['工程师甲', '工程师乙']);
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'damage', projectId, values: { instrumentId, damageReason: '运输碰撞', issueStatus: 'processing', partNumber: 'PART-1', partQuantity: '1', partCurrency: 'USD', partAmount: '500', partStatus: 'arrived', registeredAt: '2026-08-12' } } });
 
     const kinds = ['batches', 'instruments', 'activities', 'orders', 'invoices', 'damage_items'] as const;
@@ -1610,7 +1622,7 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-07-15', amount: '1000' } } });
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'invoice', projectId, values: { invoicedAt: '2026-08-20', amount: '2000' } } });
     const instrumentId = String(db.prepare('SELECT id FROM instruments WHERE project_id = ?').get(projectId)!.id);
-    facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'visit', projectId, values: { visitAt: '2026-08-12', engineers: '工程师甲', status: 'done', instrumentIds: [instrumentId], workTypes: ['teardown'] } } });
+    seedHistoricalVisit(db, projectId, instrumentId, ['工程师甲']);
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', projectId, values: { orderType: 'relocation', serviceOrderNo: 'SO-HIST-001', orderedAt: '2026-08-11', engineer: '工程师乙' } } });
 
     // batch：项目上下文 + 日期筛选（含边界）

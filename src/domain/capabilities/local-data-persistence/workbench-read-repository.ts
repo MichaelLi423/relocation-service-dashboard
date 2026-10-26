@@ -680,11 +680,27 @@ export class WorkbenchReadRepository {
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
     const typesByRequest = this.qrTypesFor(pageRows.map((r) => String(r.id)));
+    // 使用与列表相同的筛选条件，但不带游标；同一读取快照保证列表与统计一致。
+    const matchedSql = `SELECT q.id, q.applicant, substr(q.requested_at, 1, 7) AS month,
+      (SELECT COUNT(DISTINCT t.type_code) FROM qr_request_types t WHERE t.qr_request_id = q.id) AS workload
+      FROM qr_requests q ${countWhere}`;
+    const statsParams = [...whereParams, ...range.params];
+    const byApplicant = this.db.prepare(`SELECT applicant, COUNT(*) AS requestCount, SUM(workload) AS workload
+      FROM (${matchedSql}) GROUP BY applicant ORDER BY applicant`).all(...statsParams) as Array<{ applicant: string; requestCount: number; workload: number }>;
+    const byMonth = this.db.prepare(`SELECT month, COUNT(*) AS requestCount, SUM(workload) AS workload
+      FROM (${matchedSql}) GROUP BY month ORDER BY month`).all(...statsParams) as Array<{ month: string; requestCount: number; workload: number }>;
+    const byType = this.db.prepare(`SELECT t.type_code AS typeCode, COUNT(DISTINCT q.id) AS count
+      FROM qr_requests q JOIN qr_request_types t ON t.qr_request_id = q.id ${countWhere}
+      GROUP BY t.type_code ORDER BY t.type_code`).all(...statsParams) as Array<{ typeCode: string; count: number }>;
     const last = pageRows[pageRows.length - 1];
     const nextCursor = hasMore && last ? encodeCursor(String(last.requested_at), String(last.id)) : null;
     return {
       businessRevision: readBusinessRevision(this.db),
       kind: request.kind,
+      qrStats: {
+        requestCount: total, workload: byMonth.reduce((sum, row) => sum + row.workload, 0),
+        byApplicant, byMonth, byType,
+      },
       rows: pageRows.map(
         (r): WorkbenchV2IndependentRow => {
           const types = typesByRequest.get(String(r.id)) ?? [];
@@ -694,7 +710,7 @@ export class WorkbenchReadRepository {
             applicant: String(r.applicant),
             requestedAt: String(r.requested_at),
             types,
-            workload: types.length,
+            workload: new Set(types).size,
             createdAt: String(r.created_at),
           };
         },
