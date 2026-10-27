@@ -25,12 +25,9 @@ import {
   type MobileReadonlyInstrumentRecord,
   type MobileReadonlyInvoiceRecord,
   type MobileReadonlyOrderRecord,
-  type MobileReadonlyOverview,
-  type MobileReadonlyProject,
-  type MobileReadonlyProjectRecords,
   type MobileReadonlyProjectSummary,
   type MobileReadonlyRecordKind,
-  type MobileReadonlySnapshot,
+  type MobileReadonlySnapshotV2,
   type MobileReadonlyStageSummary,
 } from '../../shared/mobile-readonly';
 
@@ -61,8 +58,7 @@ export interface BuildMobileReadonlySnapshotOptions {
   clock: Clock;
   /**
    * 读者临期窗口天数（桌面 facade 经 ReminderService/SqliteReminderSettingsRepository
-   * 读取的 reminder_upcoming_window_days，缺省默认 7 个自然日）。快照白名单不含提醒字段，
-   * 该值仅与既有桌面读取口径保持一致。
+   * 读取的 reminder_upcoming_window_days，缺省默认 7 个自然日），提醒分类与桌面口径一致。
    */
   windowDays?: number;
   /** sectionPage 遍历页大小（缺省沿用仓储默认 50；测试可注入小值制造多页）。 */
@@ -73,15 +69,15 @@ interface CapturedResult {
   dataAsOf: string;
   contentGenerationId: string;
   businessRevision: number;
-  overview: MobileReadonlyOverview;
-  projects: readonly MobileReadonlyProject[];
+  overview: MobileReadonlySnapshotV2['overview'];
+  projects: MobileReadonlySnapshotV2['projects'];
 }
 
 /**
- * 在单一同步一致事务内生成完整只读快照（schemaVersion=1，见 MOBILE_READONLY_SCHEMA_VERSION）。
+ * 在单一同步一致事务内生成完整只读快照（schemaVersion=2）。
  * 事务提交后对最终候选执行封闭白名单校验，非法即抛 ValidationError。
  */
-export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshotOptions): MobileReadonlySnapshot {
+export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshotOptions): MobileReadonlySnapshotV2 {
   const db = resolveDb(options.db);
   const clock = options.clock;
   const reader = new WorkbenchReadRepository(db, {
@@ -105,7 +101,7 @@ export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshot
     };
   });
 
-  const snapshot: MobileReadonlySnapshot = {
+  const snapshot: MobileReadonlySnapshotV2 = {
     schemaVersion: MOBILE_READONLY_SCHEMA_VERSION,
     contentGenerationId: captured.contentGenerationId,
     businessRevision: captured.businessRevision,
@@ -138,14 +134,42 @@ function readUpcomingWindowDays(db: DatabaseSync): number {
   return new SqliteReminderSettingsRepository(db).getUpcomingWindowDays() ?? DEFAULT_UPCOMING_WINDOW_DAYS;
 }
 
-function collectAllProjects(reader: WorkbenchReadRepository, sectionPageSize: number | undefined): MobileReadonlyProject[] {
-  const projects: MobileReadonlyProject[] = [];
+type ProjectV2 = MobileReadonlySnapshotV2['projects'][number];
+function collectAllProjects(reader: WorkbenchReadRepository, sectionPageSize: number | undefined): ProjectV2[] {
+  const projects: ProjectV2[] = [];
   let cursor: string | null | undefined;
   do {
     const page = reader.projectPage({ cursor: cursor ?? undefined });
     for (const row of page.projects) {
+      const dto = reader.projectDetail(row.id);
+      if (dto.detail === null || dto.project === null) {
+        throw new ValidationError('MOBILE_READONLY_DETAIL_MISSING', '一致快照中的项目详情缺失');
+      }
+      const detail = dto.detail;
       projects.push({
         ...mapProjectSummary(row),
+        detail: {
+          oldSiteContact: detail.oldSiteContact,
+          newSiteContact: detail.newSiteContact,
+          oldSiteAddress: detail.oldSiteAddress,
+          newSiteAddress: detail.newSiteAddress,
+          temporaryStorageAddress: detail.temporaryStorageAddress,
+          isTemporaryStorage: detail.isTemporaryStorage,
+          contractStartDate: detail.contractStartDate,
+          contractEndDate: detail.contractEndDate,
+          planTransportAt: detail.planTransportAt,
+          plannedInstallAt: detail.plannedInstallAt,
+          actualInstallDoneAt: detail.actualInstallDoneAt,
+          acceptanceReportDate: detail.acceptanceReportDate,
+          cancelledAt: detail.cancelledAt,
+          siteConfirmed: detail.siteConfirmed,
+          acceptanceReport: detail.acceptanceReport,
+          temporaryInstrumentCount: detail.temporaryInstrumentCount,
+          temporaryInstrumentName: detail.temporaryInstrumentName,
+          temporaryInstrumentModel: detail.temporaryInstrumentModel,
+          temporaryHasUps: detail.temporaryHasUps,
+          reminderNote: dto.project.reminderNote,
+        },
         records: collectProjectRecords(reader, row.id, sectionPageSize),
       });
     }
@@ -158,11 +182,11 @@ function collectProjectRecords(
   reader: WorkbenchReadRepository,
   projectId: string,
   sectionPageSize: number | undefined,
-): MobileReadonlyProjectRecords {
+): ProjectV2['records'] {
   const limit = sectionPageSize === undefined || !Number.isInteger(sectionPageSize) || sectionPageSize <= 0
     ? undefined
     : sectionPageSize;
-  const result: MobileReadonlyProjectRecords = {
+  const result: ProjectV2['records'] = {
     batches: [],
     instruments: [],
     activities: [],
@@ -194,7 +218,7 @@ function collectSectionRows(
 }
 
 function assignRecordRows(
-  records: MobileReadonlyProjectRecords,
+  records: ProjectV2['records'],
   kind: MobileReadonlyRecordKind,
   rows: WorkbenchV2SectionRow[],
 ): void {
@@ -224,7 +248,7 @@ function assignRecordRows(
 
 // ---- 白名单映射（只挑字段；金额/日期复用主进程已格式化 DTO 字符串） ----
 
-function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlyOverview {
+function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlySnapshotV2['overview'] {
   return {
     metrics: {
       totalProjects: dto.metrics.totalProjects,
@@ -232,6 +256,10 @@ function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlyOverview {
       pendingAmount: dto.metrics.pendingAmount,
       pendingAcceptance: dto.metrics.pendingAcceptance,
       pendingInvoice: dto.metrics.pendingInvoice,
+      reminderCount: dto.metrics.reminderCount,
+      reminderOverdue: dto.metrics.reminderOverdue,
+      reminderToday: dto.metrics.reminderToday,
+      openRepairProjects: dto.metrics.openRepairProjects,
     },
     stages: dto.stages.map(
       (stage): MobileReadonlyStageSummary => ({
@@ -243,7 +271,7 @@ function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlyOverview {
   };
 }
 
-function mapProjectSummary(row: WorkbenchProjectRow): MobileReadonlyProjectSummary {
+function mapProjectSummary(row: WorkbenchProjectRow): Required<MobileReadonlyProjectSummary> {
   return {
     id: row.id,
     tempNo: row.tempNo,
@@ -259,6 +287,12 @@ function mapProjectSummary(row: WorkbenchProjectRow): MobileReadonlyProjectSumma
     contractAmount: row.contractAmount,
     formallyEntered: row.formallyEntered,
     preEntryExecution: row.preEntryExecution,
+    reminderAt: row.reminderAt,
+    reminderDueClass: row.reminderDueClass,
+    groupedTags: (row.groupedTags ?? []).map(group => ({
+      groupId: group.groupId, groupName: group.groupName,
+      tagIds: [...group.tagIds], tagNames: [...group.tagNames],
+    })),
   };
 }
 
@@ -272,13 +306,16 @@ function toMobileBatchRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'batche
   };
 }
 
-function toMobileInstrumentRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'instruments' }>): MobileReadonlyInstrumentRecord {
+function toMobileInstrumentRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'instruments' }>): Required<MobileReadonlyInstrumentRecord> {
   return {
     id: row.id,
     name: row.name,
     model: row.model,
     serialNo: row.serialNo,
     ups: row.ups,
+    manufacturer: row.manufacturer,
+    serviceLevel: row.serviceLevel,
+    qrRequested: row.qrRequested,
   };
 }
 
@@ -290,13 +327,14 @@ function toMobileActivityRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'act
   };
 }
 
-function toMobileOrderRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'orders' }>): MobileReadonlyOrderRecord {
+function toMobileOrderRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'orders' }>): Required<MobileReadonlyOrderRecord> {
   return {
     id: row.id,
     orderType: row.orderType,
     serviceOrderNo: row.serviceOrderNo,
     orderedAt: row.orderedAt,
     engineer: row.engineer,
+    customerName: row.customerName,
   };
 }
 
@@ -312,7 +350,7 @@ function toMobileInvoiceRecord(row: Extract<WorkbenchV2SectionRow, { kind: 'invo
 
 function toMobileDamageItemRecord(
   row: Extract<WorkbenchV2SectionRow, { kind: 'damage_items' }>,
-): MobileReadonlyDamageItemRecord {
+): Required<MobileReadonlyDamageItemRecord> {
   // damage_repair_items.part_currency 由 DB CHECK(IN ('USD','RMB')) 约束；收窄到受控枚举。
   const partCurrency = row.partCurrency === 'USD' || row.partCurrency === 'RMB' ? row.partCurrency : null;
   return {
@@ -325,5 +363,7 @@ function toMobileDamageItemRecord(
     partAmount: row.partAmount,
     partCurrency,
     registeredAt: row.registeredAt,
+    // DB CHECK 限定备件状态；最终严格校验器仍拒绝越界值。
+    partStatus: row.partStatus as Required<MobileReadonlyDamageItemRecord>['partStatus'],
   };
 }

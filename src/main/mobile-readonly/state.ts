@@ -23,6 +23,7 @@ export interface MobileReadonlyResultsData {
   target: string | null;
   /** 最近成功发布候选捕获时的指纹（仅相等比较；非「上传完成时最新修订」）。 */
   lastSuccessfulFingerprint: MobileReadonlyFingerprint | null;
+  lastSuccessfulSchemaVersion?: number | null;
   lastSuccessfulAt: string | null;
   lastFailedCode: string | null;
   lastFailedAt: string | null;
@@ -32,6 +33,7 @@ export const EMPTY_MOBILE_READONLY_RESULTS: MobileReadonlyResultsData = Object.f
   version: MOBILE_READONLY_RESULTS_VERSION,
   target: null,
   lastSuccessfulFingerprint: null,
+  lastSuccessfulSchemaVersion: null,
   lastSuccessfulAt: null,
   lastFailedCode: null,
   lastFailedAt: null,
@@ -85,6 +87,7 @@ function parseResults(value: unknown): MobileReadonlyResultsData {
     version?: unknown;
     target?: unknown;
     lastSuccessfulFingerprint?: unknown;
+    lastSuccessfulSchemaVersion?: unknown;
     lastSuccessfulAt?: unknown;
     lastFailedCode?: unknown;
     lastFailedAt?: unknown;
@@ -111,6 +114,7 @@ function parseResults(value: unknown): MobileReadonlyResultsData {
     version: MOBILE_READONLY_RESULTS_VERSION,
     target,
     lastSuccessfulFingerprint: fingerprint,
+    lastSuccessfulSchemaVersion: typeof candidate.lastSuccessfulSchemaVersion === 'number' && Number.isSafeInteger(candidate.lastSuccessfulSchemaVersion) && candidate.lastSuccessfulSchemaVersion > 0 ? candidate.lastSuccessfulSchemaVersion : null,
     lastSuccessfulAt: nullableString(candidate.lastSuccessfulAt),
     lastFailedCode: nullableString(candidate.lastFailedCode),
     lastFailedAt: nullableString(candidate.lastFailedAt),

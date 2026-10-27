@@ -3,7 +3,7 @@
 /**
  * 移动只读本地开发/验证合成数据（CommonJS；供 scripts/dev-mobile-readonly.cjs 与后续 E2E 复用）。
  *
- * - 只产生脱敏合成快照（封闭白名单 schemaVersion=1），绝不读取/触碰 docs/ 真实客户文件；
+ * - 只产生脱敏合成快照（默认 v2，schemaVersion:1 可验证旧快照），绝不读取真实客户文件；
  * - 规模默认：45 个项目，首个项目每类关联记录 ≥25（便于有界分页验证），其余项目为空记录；
  * - 凭证：本地演示明文常量仅供本地 dev（非生产 secret），落盘只写 scrypt 摘要文件，
  *   格式与 src/server/mobile-readonly/credentials.ts 完全一致（scrypt$N$r$p$keyLen$salt$hash）。
@@ -237,6 +237,8 @@ function makeOverview(projectCount) {
  * @param {number} [options.firstProjectRecords=25]
  */
 function buildSyntheticSnapshot(options = {}) {
+  const schemaVersion = options.schemaVersion ?? 2;
+  if (schemaVersion !== 1 && schemaVersion !== 2) throw new Error('不支持的合成快照版本');
   const projectCount = options.projectCount ?? 45;
   const firstProjectRecords = options.firstProjectRecords ?? 25;
   if (!Number.isInteger(projectCount) || projectCount <= 0) throw new Error('projectCount 必须为正整数');
@@ -244,12 +246,33 @@ function buildSyntheticSnapshot(options = {}) {
   for (let index = 0; index < projectCount; index += 1) {
     projects.push(makeProject(index, firstProjectRecords));
   }
+  const overview = makeOverview(projectCount);
+  if (schemaVersion === 2) {
+    Object.assign(overview.metrics, { reminderCount: projectCount, reminderOverdue: 0, reminderToday: projectCount, openRepairProjects: 1 });
+    for (const project of projects) {
+      project.reminderAt = '2026-08-08';
+      project.reminderDueClass = 'today';
+      project.groupedTags = [{ groupId: 'synthetic-group', groupName: '合成分组', tagIds: ['synthetic-tag'], tagNames: ['合成标签'] }];
+      project.detail = {
+        oldSiteContact: '合成联系人 13800000000', newSiteContact: null,
+        oldSiteAddress: '合成搬出地址', newSiteAddress: '合成搬入地址', temporaryStorageAddress: null,
+        isTemporaryStorage: null, contractStartDate: null, contractEndDate: null,
+        planTransportAt: null, plannedInstallAt: null, actualInstallDoneAt: null,
+        acceptanceReportDate: null, cancelledAt: null, siteConfirmed: false, acceptanceReport: false,
+        temporaryInstrumentCount: null, temporaryInstrumentName: null, temporaryInstrumentModel: null,
+        temporaryHasUps: null, reminderNote: '合成提醒备注',
+      };
+      for (const row of project.records.instruments) Object.assign(row, { manufacturer: null, serviceLevel: null, qrRequested: false });
+      for (const row of project.records.orders) row.customerName = project.customerName;
+      for (const row of project.records.damage_items) row.partStatus = null;
+    }
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion,
     contentGenerationId: SYNTHETIC.contentGenerationId,
     businessRevision: projectCount * 2 + 3,
     dataAsOf: SYNTHETIC.dataAsOf,
-    overview: makeOverview(projectCount),
+    overview,
     projects,
   };
 }

@@ -23,6 +23,26 @@ import { makeSnapshotFixture } from '../helpers/mobile-readonly-fixtures';
 const TARGET = 'https://publish.example.com';
 const TOKEN = 'secret-token';
 
+describe('schema 元数据兼容解析', () => {
+  it.each([undefined, null, 1, 2])('兼容 snapshotSchemaVersion=%s，不把旧服务未知转成 null', async version => {
+    const metadata = {
+      ...metaBody({ published: true, currentVersion: 1, publicationId: 'p' }),
+      ...(version !== undefined ? { snapshotSchemaVersion: version } : {}),
+    };
+    const client = createMobileReadonlyRemoteClient({ credentials: { target: TARGET, token: TOKEN }, transport: async () => json(200, metadata) });
+    const result = await client.readMeta();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('metadata rejected');
+    expect(result.metadata.snapshotSchemaVersion).toBe(version);
+    expect(Object.hasOwn(result.metadata, 'snapshotSchemaVersion')).toBe(version !== undefined);
+  });
+
+  it.each(['2', -1, 0, 1.5, {}])('非法 schema 元数据 %s 拒绝', async version => {
+    const client = createMobileReadonlyRemoteClient({ credentials: { target: TARGET, token: TOKEN }, transport: async () => json(200, { ...metaBody(), snapshotSchemaVersion: version }) });
+    expect((await client.readMeta()).ok).toBe(false);
+  });
+});
+
 function json(status: number, body: unknown): MobileReadonlyHttpResponse {
   return { status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
 }

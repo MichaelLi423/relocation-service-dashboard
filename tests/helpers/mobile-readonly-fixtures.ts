@@ -2,7 +2,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   MOBILE_READONLY_ORDER_TYPES,
   MOBILE_READONLY_PROJECT_STATUSES,
-  MOBILE_READONLY_SCHEMA_VERSION,
   type MobileReadonlyActivityRecord,
   type MobileReadonlyBatchRecord,
   type MobileReadonlyDamageItemRecord,
@@ -16,6 +15,7 @@ import {
   type MobileReadonlyProjectSummary,
   type MobileReadonlyRecordKind,
   type MobileReadonlySnapshot,
+  type MobileReadonlySnapshotV2,
   type MobileReadonlyStageSummary,
 } from '../../src/shared/mobile-readonly';
 
@@ -86,7 +86,7 @@ export function makeEmptySnapshotFixture(overrides: Partial<MobileReadonlySnapsh
     stages: MOBILE_READONLY_PROJECT_STATUSES.map((status) => makeStageFixture(status)),
   };
   return {
-    schemaVersion: MOBILE_READONLY_SCHEMA_VERSION,
+    schemaVersion: 1,
     contentGenerationId: 'synthetic-generation-empty',
     businessRevision: 0,
     dataAsOf: '2026-08-08T09:00:00+08:00',
@@ -212,7 +212,7 @@ export function makeProjectFixture(overrides: Partial<MobileReadonlyProject> = {
 
 export function makeSnapshotFixture(overrides: Partial<MobileReadonlySnapshot> = {}): MobileReadonlySnapshot {
   return {
-    schemaVersion: MOBILE_READONLY_SCHEMA_VERSION,
+    schemaVersion: 1,
     contentGenerationId: 'fixture-generation-1',
     businessRevision: 7,
     dataAsOf: '2026-08-08T10:30:00+08:00',
@@ -222,7 +222,38 @@ export function makeSnapshotFixture(overrides: Partial<MobileReadonlySnapshot> =
   };
 }
 
-/** 深度冻结（防测试改动泄漏到后续用例的兜底，不做为唯一防篡改手段）。 */
+/** 完整 v2 合成快照；原工厂继续生成 v1，保留旧版本覆盖。 */
+export function makeSnapshotV2Fixture(overrides: Partial<MobileReadonlySnapshotV2> = {}): MobileReadonlySnapshotV2 {
+  const v1 = makeSnapshotFixture();
+  return {
+    ...v1,
+    schemaVersion: 2,
+    overview: { ...v1.overview, metrics: { ...v1.overview.metrics, reminderCount: 1, reminderOverdue: 0, reminderToday: 1, openRepairProjects: 1 } },
+    projects: v1.projects.map(project => ({
+      ...project,
+      reminderAt: '2026-08-08', reminderDueClass: 'today',
+      groupedTags: [{ groupId: 'group-1', groupName: '合成分组', tagIds: ['tag-1'], tagNames: ['合成标签'] }],
+      detail: {
+        oldSiteContact: '合成联系人 13800000000', newSiteContact: null,
+        oldSiteAddress: '合成搬出地址', newSiteAddress: null, temporaryStorageAddress: null,
+        isTemporaryStorage: null, contractStartDate: null, contractEndDate: null,
+        planTransportAt: null, plannedInstallAt: null, actualInstallDoneAt: null,
+        acceptanceReportDate: null, cancelledAt: null, siteConfirmed: false, acceptanceReport: false,
+        temporaryInstrumentCount: null, temporaryInstrumentName: null, temporaryInstrumentModel: null,
+        temporaryHasUps: null, reminderNote: '合成提醒备注',
+      },
+      records: {
+        ...project.records,
+        instruments: project.records.instruments.map(row => ({ ...row, manufacturer: null, serviceLevel: null, qrRequested: false })),
+        orders: project.records.orders.map(row => ({ ...row, customerName: SYNTHETIC_CUSTOMER_NAME })),
+        damage_items: project.records.damage_items.map(row => ({ ...row, partStatus: null })),
+      },
+    })),
+    ...overrides,
+  };
+}
+
+/** 深复制，防测试改动泄漏到后续用例。 */
 export function freezeSnapshot(snapshot: MobileReadonlySnapshot): MobileReadonlySnapshot {
   return structuredClone(snapshot);
 }

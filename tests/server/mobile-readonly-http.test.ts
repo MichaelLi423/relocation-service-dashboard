@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MobileReadonlyPublishResult } from '../../src/shared/mobile-readonly';
-import { makeEmptySnapshotFixture, makeSnapshotFixture, mutateFirstRowOfKind } from '../helpers/mobile-readonly-fixtures';
+import { makeEmptySnapshotFixture, makeSnapshotFixture, makeSnapshotV2Fixture, mutateFirstRowOfKind } from '../helpers/mobile-readonly-fixtures';
 import {
   TEST_UPLOAD_TOKEN,
   TEST_VIEWER_USERNAME,
@@ -50,6 +50,55 @@ function uploadPayload(publicationId: string, expectedCurrentVersion: number, sn
 }
 
 describe('no-store 与静态页/资产（7.5）', () => {
+  it('v2 发布元数据报告实际 schema，Basic Auth 详情可读但列表无联系人，非法嵌套拒绝且 no-store', async () => {
+    const service = await startFresh();
+    const meta = await doFetch(service.baseUrl, '/api/meta', { headers: { Authorization: bearerHeader() } });
+    expect((await meta.json() as any).snapshotSchemaVersion).toBeNull();
+    const snapshot = makeSnapshotV2Fixture();
+    const publish = await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('v2-http', 0, snapshot), TEST_UPLOAD_TOKEN));
+    expect(publish.status).toBe(200);
+    expect((await publish.json() as any).metadata.snapshotSchemaVersion).toBe(2);
+    const auth = { headers: { Authorization: basicAuthHeader() } };
+    const detail = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`, auth);
+    expect(detail.headers.get('cache-control')).toBe('no-store');
+    const body = await detail.json() as any;
+    expect(body.data.project.detail.oldSiteContact).toBe('合成联系人 13800000000');
+    expect(body.data.recordCounts.instruments).toBe(1);
+    const list = await doFetch(service.baseUrl, '/api/projects?limit=1', auth);
+    const listed = await list.json() as any;
+    expect(listed.data.total).toBe(1);
+    expect(JSON.stringify(listed)).not.toContain('oldSiteContact');
+    const denied = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`);
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get('cache-control')).toBe('no-store');
+    const deniedText = await denied.text();
+    const bearerDenied = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`, { headers: { Authorization: bearerHeader() } });
+    expect(bearerDenied.status).toBe(403);
+    expect(bearerDenied.headers.get('cache-control')).toBe('no-store');
+    const bearerDeniedText = await bearerDenied.text();
+    for (const text of [deniedText, bearerDeniedText]) {
+      for (const sensitive of ['oldSiteContact', 'reminderNote', '合成联系人', '13800000000', '合成搬出地址', '合成提醒备注']) {
+        expect(text).not.toContain(sensitive);
+      }
+    }
+    const currentFile = join(service.dataDir, 'snapshots', 'current.json');
+    const acceptedBytes = readFileSync(currentFile);
+    const acceptedEnvelope = JSON.parse(acceptedBytes.toString('utf8'));
+    expect(acceptedEnvelope.currentVersion).toBe(1);
+    expect(acceptedEnvelope.snapshot.projects[0].detail).toEqual(snapshot.projects[0].detail);
+    (snapshot.projects[0].groupedTags[0] as any).note = '禁止文本哨兵';
+    const invalid = await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('v2-invalid', 1, snapshot), TEST_UPLOAD_TOKEN));
+    expect(invalid.status).toBe(422);
+    expect(invalid.headers.get('cache-control')).toBe('no-store');
+    expect(readFileSync(currentFile)).toEqual(acceptedBytes);
+    const unknown = await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('unknown-schema', 1, { ...makeSnapshotV2Fixture(), schemaVersion: 999 }), TEST_UPLOAD_TOKEN));
+    expect(unknown.status).toBe(422);
+    expect(unknown.headers.get('cache-control')).toBe('no-store');
+    expect(readFileSync(currentFile)).toEqual(acceptedBytes);
+    const after = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`, auth);
+    expect(await after.json()).toEqual(body);
+  });
+
   it('内建页模板与业务/错误响应均携带 Cache-Control: no-store', async () => {
     const service = await startFresh();
     const authHeaders = { Authorization: basicAuthHeader() };

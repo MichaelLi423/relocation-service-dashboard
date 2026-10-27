@@ -2,6 +2,8 @@ import {
   MOBILE_READONLY_PROJECT_STATUSES,
   MOBILE_READONLY_RECORD_KINDS,
   type MobileReadonlyProject,
+  type MobileReadonlyProjectDetailData,
+  type MobileReadonlyRecordsPage,
   type MobileReadonlyProjectListData,
   type MobileReadonlyProjectRecords,
   type MobileReadonlyProjectSummary,
@@ -114,6 +116,9 @@ function toProjectSummary(project: MobileReadonlyProject): MobileReadonlyProject
     contractAmount: project.contractAmount,
     formallyEntered: project.formallyEntered,
     preEntryExecution: project.preEntryExecution,
+    ...(project.reminderAt !== undefined ? { reminderAt: project.reminderAt } : {}),
+    ...(project.reminderDueClass !== undefined ? { reminderDueClass: project.reminderDueClass } : {}),
+    ...(project.groupedTags !== undefined ? { groupedTags: project.groupedTags } : {}),
   };
 }
 
@@ -121,7 +126,7 @@ function toPage<T>(items: readonly T[], offset: number, limit: number, version: 
   const pageItems = items.slice(offset, offset + limit);
   const nextOffset = offset + pageItems.length;
   const nextCursor = nextOffset < total ? encodeCursor(version, nextOffset) : null;
-  return { items: pageItems, nextCursor };
+  return { items: pageItems, nextCursor, total };
 }
 
 /** 项目搜索/筛选/分页（仅当前版本快照内执行）。 */
@@ -130,7 +135,7 @@ export function buildProjectListPage(
   currentVersion: number,
   query: ProjectListQuery,
 ): MobileReadonlyProjectListData {
-  if (snapshot === null) return { items: [], nextCursor: null };
+  if (snapshot === null) return { items: [], nextCursor: null, total: 0 };
   const offset = query.offset ?? 0;
   const filtered: MobileReadonlyProject[] = [];
   for (const project of snapshot.projects) {
@@ -143,10 +148,15 @@ export function buildProjectListPage(
 }
 
 /** 项目详情（id 精确匹配；未命中返回 project:null；不含 records）。 */
-export function buildProjectDetail(snapshot: MobileReadonlySnapshot | null, projectId: string): { project: MobileReadonlyProjectSummary | null } {
+export function buildProjectDetail(snapshot: MobileReadonlySnapshot | null, projectId: string): MobileReadonlyProjectDetailData {
   if (snapshot === null) return { project: null };
   const project = snapshot.projects.find((p) => p.id === projectId);
-  return { project: project === undefined ? null : toProjectSummary(project) };
+  if (project === undefined) return { project: null };
+  const recordCounts = Object.fromEntries(MOBILE_READONLY_RECORD_KINDS.map(kind => [kind, project.records[kind].length])) as Record<MobileReadonlyRecordKind, number>;
+  return {
+    project: { ...toProjectSummary(project), ...(project.detail !== undefined ? { detail: project.detail } : {}) },
+    recordCounts,
+  };
 }
 
 export interface RecordsQuery {
@@ -179,13 +189,13 @@ export function buildRecordsPage(
   snapshot: MobileReadonlySnapshot | null,
   currentVersion: number,
   query: RecordsQuery,
-): { kind: MobileReadonlyRecordKind; items: readonly MobileReadonlyRecordRow[]; nextCursor: string | null } {
-  if (snapshot === null) return { kind: query.kind, items: [], nextCursor: null };
+): MobileReadonlyRecordsPage {
+  if (snapshot === null) return { kind: query.kind, items: [], nextCursor: null, total: 0 };
   const project = snapshot.projects.find((p) => p.id === query.projectId);
-  if (project === undefined) return { kind: query.kind, items: [], nextCursor: null };
+  if (project === undefined) return { kind: query.kind, items: [], nextCursor: null, total: 0 };
   const rows = recordsOf(project, query.kind);
   const page = toPage(rows, query.offset ?? 0, query.limit, currentVersion, rows.length);
-  return { kind: query.kind, items: page.items, nextCursor: page.nextCursor };
+  return { kind: query.kind, items: page.items, nextCursor: page.nextCursor, total: page.total };
 }
 
 /** 合法状态筛选值集合（供 HTTP 层校验 status 参数）。 */

@@ -2913,4 +2913,31 @@ export const scenarioMap = {
       note: "异步状态可感知（announcer），滚动/卸载不抢夺焦点",
     },
   },
+  'mobile-readonly-service': {
+    'v1 与 v2 分版本封闭校验': {
+      evidence: [
+        ['tests/main/mobile-readonly-v2.test.ts', 'v1 原字段仍合法，v2 授权字段不会反向进入 v1 白名单'],
+        ['tests/main/mobile-readonly-v2.test.ts', 'v2 每个新增必填字段缺失或 undefined 均拒绝，null 与未知不互转'],
+        ['tests/main/mobile-readonly-whitelist.test.ts', '未知 schemaVersion 一律拒绝'],
+        ['tests/server/mobile-readonly-v2.test.ts', '从旧 v1 文件启动，提交 v2 后重启恢复详情，再合法替换为 v1 不残留详情'],
+      ],
+    },
+    '服务先升级且不自动降级': {
+      abstract: true,
+      evidence: [
+        ['docs/verification/mobile-readonly-detail-expansion-2026-10-27.md', '新服务先部署，再升级桌面；旧服务拒绝 v2，桌面不得自动降级上传 v1'],
+      ],
+      note: '仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已授权或已执行。',
+    },
+  },
+  'mobile-readonly-workbench': {
+    'v2 详情完整展示且旧快照不伪造字段': {
+      evidence: [
+        ['tests/renderer/mobile-readonly-view.expansion.test.tsx', '概览展示新增指标'],
+        ['tests/renderer/mobile-readonly-view.expansion.test.tsx', '详情页展示全部分组字段、正确术语文案、null/false/0与长多行文本'],
+        ['tests/renderer/mobile-readonly-view.expansion.test.tsx', '旧 v1 快照缺少扩展字段时友好提示“当前快照未提供”，不冒充 null 或 0'],
+        ['tests/renderer/mobile-readonly-view.expansion.test.tsx', '开单记录展示 customerName；损坏维修备件状态 4 种合法枚举正确映射为中文'],
+      ],
+    },
+  },
 };

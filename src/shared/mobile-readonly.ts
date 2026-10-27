@@ -5,8 +5,8 @@ import type { ProjectStatus } from './ipc';
  *
  * 本模块是桌面端/云端服务/手机只读入口三方共用的**纯 TS** 契约层：
  * - 不 import node 内建模块，不发起任何网络请求，不依赖领域/持久化模块；
- * - 业务快照的「封闭字段白名单」以 `openspec/changes/add-mobile-readonly-publication/design.md`
- *   的「封闭字段白名单」表（design.md:128-249）为唯一权威来源，任何表外/嵌套未知 key 一律非法；
+ * - v1 保留原封闭字段白名单；v2 仅扩充明确授权的联系人、地址、提醒及业务事实，
+ *   其他自由备注/原因仍禁止，任何表外/嵌套未知 key 一律非法；
  * - 金额字段一律为主单位**固定两位小数字符串**（源为分整数 BigInt 经 `formatCents` 输出，如
  *   `"1234.57"`/`"0.00"`/`"-12.34"`）。发布/手机链路禁止再次除以 100 或转 Number（`formatCents`
  *   自身的分→主单位格式化除外），本模块的校验也绝不以 Number 解析金额；
@@ -19,7 +19,7 @@ import type { ProjectStatus } from './ipc';
  */
 
 /** 当前快照格式版本（schemaVersion）。未知版本一律拒绝。 */
-export const MOBILE_READONLY_SCHEMA_VERSION = 1;
+export const MOBILE_READONLY_SCHEMA_VERSION = 2;
 
 /** 六类关联记录 kind（与 `WorkbenchV2SectionKind` 顺序一致；JSON 容器键含 `damage_items`）。 */
 export const MOBILE_READONLY_RECORD_KINDS = [
@@ -53,11 +53,19 @@ export type MobileReadonlyOrderType = (typeof MOBILE_READONLY_ORDER_TYPES)[numbe
 export const MOBILE_READONLY_PART_CURRENCIES = ['USD', 'RMB'] as const;
 export type MobileReadonlyPartCurrency = (typeof MOBILE_READONLY_PART_CURRENCIES)[number];
 
+/** 与 damage_repair_items.part_status CHECK 及领域 PART_STATUSES 一致。 */
+export const MOBILE_READONLY_PART_STATUSES = ['pending_submit', 'processing', 'arrived', 'used'] as const;
+export type MobileReadonlyPartStatus = (typeof MOBILE_READONLY_PART_STATUSES)[number];
+
 // ---------------------------------------------------------------------------
 // 快照业务类型（封闭白名单的逐字段形状；空集合合法，见 design D10）
 // ---------------------------------------------------------------------------
 
 export interface MobileReadonlyOverviewMetrics {
+  reminderCount?: number;
+  reminderOverdue?: number;
+  reminderToday?: number;
+  openRepairProjects?: number;
   /** OverviewDto.metrics.totalProjects 项目总数。 */
   totalProjects: number;
   /** OverviewDto.metrics.activeProjects 活跃项目数（未完成、未取消且未转单）。 */
@@ -97,6 +105,9 @@ export interface MobileReadonlyBatchRecord {
 
 /** 仪器记录（whitelist：id/name/model/serialNo/ups）。 */
 export interface MobileReadonlyInstrumentRecord {
+  manufacturer?: string | null;
+  serviceLevel?: string | null;
+  qrRequested?: boolean;
   id: string;
   name: string;
   model: string | null;
@@ -116,6 +127,7 @@ export interface MobileReadonlyActivityRecord {
 
 /** 开单记录（whitelist：id/orderType/serviceOrderNo/orderedAt/engineer）。 */
 export interface MobileReadonlyOrderRecord {
+  customerName?: string;
   id: string;
   orderType: MobileReadonlyOrderType;
   serviceOrderNo: string | null;
@@ -139,6 +151,7 @@ export interface MobileReadonlyInvoiceRecord {
 
 /** 损坏/维修事项记录（whitelist：id/instrumentName/serialNo/issueStatus/partNumber/partQuantity/partAmount/partCurrency/registeredAt）。 */
 export interface MobileReadonlyDamageItemRecord {
+  partStatus?: MobileReadonlyPartStatus | null;
   id: string;
   /** 关联仪器名称。 */
   instrumentName: string;
@@ -177,6 +190,9 @@ export interface MobileReadonlyProjectRecords {
  * 云服务对手机返回项目行/详情时**不携带 records**（见 MobileReadonlyProjectDetailData）。
  */
 export interface MobileReadonlyProjectSummary {
+  reminderAt?: string | null;
+  reminderDueClass?: 'upcoming' | 'today' | 'overdue' | null;
+  groupedTags?: readonly { groupId: string; groupName: string; tagIds: readonly string[]; tagNames: readonly string[] }[];
   id: string;
   tempNo: string;
   ecc: string | null;
@@ -198,8 +214,33 @@ export interface MobileReadonlyProjectSummary {
   preEntryExecution: boolean;
 }
 
-/** 快照内的项目（行字段 + 全部六类关联记录）。 */
+/** v2 授权详情；null 表示源未填写，不包含任何其他自由备注/原因。 */
+export interface MobileReadonlyProjectDetailFields {
+  oldSiteContact: string | null;
+  newSiteContact: string | null;
+  oldSiteAddress: string | null;
+  newSiteAddress: string | null;
+  temporaryStorageAddress: string | null;
+  isTemporaryStorage: boolean | null;
+  contractStartDate: string | null;
+  contractEndDate: string | null;
+  planTransportAt: string | null;
+  plannedInstallAt: string | null;
+  actualInstallDoneAt: string | null;
+  acceptanceReportDate: string | null;
+  cancelledAt: string | null;
+  siteConfirmed: boolean;
+  acceptanceReport: boolean;
+  temporaryInstrumentCount: number | null;
+  temporaryInstrumentName: string | null;
+  temporaryInstrumentModel: string | null;
+  temporaryHasUps: boolean | null;
+  reminderNote: string | null;
+}
+
+/** 快照内的项目（v1 无 detail，v2 必填；全部六类关联记录）。 */
 export interface MobileReadonlyProject extends MobileReadonlyProjectSummary {
+  detail?: MobileReadonlyProjectDetailFields;
   records: MobileReadonlyProjectRecords;
 }
 
@@ -217,6 +258,20 @@ export interface MobileReadonlySnapshot {
   overview: MobileReadonlyOverview;
   projects: readonly MobileReadonlyProject[];
 }
+
+/** 桌面只生成 v2；兼容读取类型的可选字段在生成侧全部必填。 */
+export type MobileReadonlySnapshotV2 = Omit<MobileReadonlySnapshot, 'schemaVersion' | 'overview' | 'projects'> & {
+  schemaVersion: 2;
+  overview: Omit<MobileReadonlyOverview, 'metrics'> & { metrics: Required<MobileReadonlyOverviewMetrics> };
+  projects: readonly (Required<MobileReadonlyProjectSummary> & {
+    detail: MobileReadonlyProjectDetailFields;
+    records: Omit<MobileReadonlyProjectRecords, 'instruments' | 'orders' | 'damage_items'> & {
+      instruments: readonly Required<MobileReadonlyInstrumentRecord>[];
+      orders: readonly Required<MobileReadonlyOrderRecord>[];
+      damage_items: readonly Required<MobileReadonlyDamageItemRecord>[];
+    };
+  })[];
+};
 
 // ---------------------------------------------------------------------------
 // 上传/信封/元数据线协议（design D3/D6；protocol 与 snapshot 分层）
@@ -251,6 +306,8 @@ export interface MobileReadonlyPublishEnvelope {
 
 /** 版本元数据（/api/meta 与全部业务响应的 metadata 载体）。 */
 export interface MobileReadonlyPublishMetadata {
+  /** 旧服务缺失=未知；新服务未发布=null，已发布=实际快照版本。 */
+  snapshotSchemaVersion?: number | null;
   /** true = 已成功发布（含合法空集合快照）；false = 尚未发布（无文件、无版本 0）。 */
   published: boolean;
   /** 当前发布版本；尚未发布时逻辑版本 0（不落文件）。 */
@@ -270,6 +327,7 @@ export const UNPUBLISHED_MOBILE_READONLY_METADATA: MobileReadonlyPublishMetadata
   publishedAt: null,
   dataAsOf: null,
   fingerprint: null,
+  snapshotSchemaVersion: null,
 });
 
 /**
@@ -277,6 +335,7 @@ export const UNPUBLISHED_MOBILE_READONLY_METADATA: MobileReadonlyPublishMetadata
  * 项目行/详情与记录均排除 records 全文；记录经独立按 kind 端点分页返回。
  */
 export interface MobileReadonlyQueryPage<TItem> {
+  total?: number;
   items: readonly TItem[];
   nextCursor: string | null;
 }
@@ -284,10 +343,12 @@ export interface MobileReadonlyQueryPage<TItem> {
 export type MobileReadonlyProjectListData = MobileReadonlyQueryPage<MobileReadonlyProjectSummary>;
 
 export interface MobileReadonlyProjectDetailData {
-  project: MobileReadonlyProjectSummary | null;
+  project: (MobileReadonlyProjectSummary & { detail?: MobileReadonlyProjectDetailFields }) | null;
+  recordCounts?: Record<MobileReadonlyRecordKind, number>;
 }
 
 export interface MobileReadonlyRecordsPage {
+  total?: number;
   kind: MobileReadonlyRecordKind;
   items: readonly MobileReadonlyRecordRow[];
   nextCursor: string | null;
@@ -421,6 +482,8 @@ type ValueCheck =
   | { kind: 'string' }
   | { kind: 'nullableString' }
   | { kind: 'boolean' }
+  | { kind: 'nullableBoolean' }
+  | { kind: 'nullableNonNegativeInt' }
   | { kind: 'nonNegativeInt' }
   | { kind: 'nonNegativeNumber' }
   | { kind: 'money' }
@@ -466,9 +529,11 @@ function checkValue(
       if (!isAnyString(value)) issue(issues, path, 'INVALID_TYPE', '应为字符串或 null');
       return;
     case 'boolean':
+    case 'nullableBoolean':
       if (typeof value !== 'boolean') issue(issues, path, 'INVALID_TYPE', '应为布尔值');
       return;
     case 'nonNegativeInt':
+    case 'nullableNonNegativeInt':
       if (!isNonNegativeSafeInteger(value)) issue(issues, path, 'INVALID_VALUE', '应为不小于 0 的整数');
       return;
     case 'nonNegativeNumber':
@@ -523,8 +588,10 @@ function describeValueCheck(check: ValueCheck): string {
     case 'nullableString':
       return '字符串或 null';
     case 'boolean':
+    case 'nullableBoolean':
       return '布尔值';
     case 'nonNegativeInt':
+    case 'nullableNonNegativeInt':
       return '不小于 0 的整数';
     case 'nonNegativeNumber':
       return '不小于 0 的数字';
@@ -680,6 +747,37 @@ const RECORD_KIND_CHECK: Record<MobileReadonlyRecordKind, ObjectSpec> = {
   },
 };
 
+function extendSpec(base: ObjectSpec, values: Record<string, ValueCheck>, nested: string[] = []): ObjectSpec {
+  return { keys: [...base.keys, ...Object.keys(values), ...nested], values: { ...base.values, ...values } };
+}
+
+const METRICS_V2_SPEC = extendSpec(METRICS_SPEC, {
+  reminderCount: { kind: 'nonNegativeInt' }, reminderOverdue: { kind: 'nonNegativeInt' },
+  reminderToday: { kind: 'nonNegativeInt' }, openRepairProjects: { kind: 'nonNegativeInt' },
+});
+const RECORD_V2_VALUES: Partial<Record<MobileReadonlyRecordKind, Record<string, ValueCheck>>> = {
+  instruments: { manufacturer: { kind: 'nullableString' }, serviceLevel: { kind: 'nullableString' }, qrRequested: { kind: 'boolean' } },
+  orders: { customerName: { kind: 'string' } },
+  damage_items: { partStatus: { kind: 'nullableEnum', values: MOBILE_READONLY_PART_STATUSES } },
+};
+const DETAIL_VALUES: Record<keyof MobileReadonlyProjectDetailFields, ValueCheck> = {
+  oldSiteContact: { kind: 'nullableString' }, newSiteContact: { kind: 'nullableString' },
+  oldSiteAddress: { kind: 'nullableString' }, newSiteAddress: { kind: 'nullableString' },
+  temporaryStorageAddress: { kind: 'nullableString' }, isTemporaryStorage: { kind: 'nullableBoolean' },
+  contractStartDate: { kind: 'nullableDate' }, contractEndDate: { kind: 'nullableDate' },
+  planTransportAt: { kind: 'nullableDate' }, plannedInstallAt: { kind: 'nullableDate' },
+  actualInstallDoneAt: { kind: 'nullableDate' }, acceptanceReportDate: { kind: 'nullableDate' },
+  cancelledAt: { kind: 'nullableDate' }, siteConfirmed: { kind: 'boolean' }, acceptanceReport: { kind: 'boolean' },
+  temporaryInstrumentCount: { kind: 'nullableNonNegativeInt' }, temporaryInstrumentName: { kind: 'nullableString' },
+  temporaryInstrumentModel: { kind: 'nullableString' }, temporaryHasUps: { kind: 'nullableBoolean' },
+  reminderNote: { kind: 'nullableString' },
+};
+const DETAIL_SPEC: ObjectSpec = { keys: Object.keys(DETAIL_VALUES), values: DETAIL_VALUES };
+const TAG_GROUP_SPEC: ObjectSpec = {
+  keys: ['groupId', 'groupName', 'tagIds', 'tagNames'],
+  values: { groupId: { kind: 'nonEmptyString' }, groupName: { kind: 'string' } },
+};
+
 function childPath(path: string, key: string): string {
   return path === '' ? key : `${path}.${key}`;
 }
@@ -689,20 +787,21 @@ function checkRecordKindList(
   path: string,
   value: unknown,
   kind: MobileReadonlyRecordKind,
+  version: number,
 ): void {
   if (!Array.isArray(value)) {
     issue(issues, path, 'INVALID_TYPE', `「${kind}」应为数组`);
     return;
   }
-  const spec = RECORD_KIND_CHECK[kind];
+  const spec = version === 2 ? extendSpec(RECORD_KIND_CHECK[kind], RECORD_V2_VALUES[kind] ?? {}) : RECORD_KIND_CHECK[kind];
   value.forEach((row, index) => {
     checkObject(issues, `${path}[${index}]`, row, spec);
   });
 }
 
-function checkProjectRecords(issues: MobileReadonlySnapshotIssue[], path: string, value: Record<string, unknown>): void {
+function checkProjectRecords(issues: MobileReadonlySnapshotIssue[], path: string, value: Record<string, unknown>, version: number): void {
   for (const kind of MOBILE_READONLY_RECORD_KINDS) {
-    checkRecordKindList(issues, childPath(path, kind), value[kind], kind);
+    checkRecordKindList(issues, childPath(path, kind), value[kind], kind, version);
   }
 }
 
@@ -747,26 +846,45 @@ const PROJECT_SPEC: ObjectSpec = {
   },
 };
 
-function checkProjects(issues: MobileReadonlySnapshotIssue[], value: unknown): void {
+function checkProjects(issues: MobileReadonlySnapshotIssue[], value: unknown, version: number): void {
   if (!Array.isArray(value)) {
     issue(issues, 'projects', 'INVALID_TYPE', '「projects」应为数组');
     return;
   }
   value.forEach((project, index) => {
     const path = `projects[${index}]`;
-    checkObject(issues, path, project, PROJECT_SPEC, (issues, path, obj) => {
-      checkObject(issues, childPath(path, 'records'), obj.records, PROJECT_RECORDS_SPEC, checkProjectRecords);
+    const spec = version === 2 ? extendSpec(PROJECT_SPEC, {
+      reminderAt: { kind: 'nullableDate' },
+      reminderDueClass: { kind: 'nullableEnum', values: ['upcoming', 'today', 'overdue'] },
+    }, ['groupedTags', 'detail']) : PROJECT_SPEC;
+    checkObject(issues, path, project, spec, (issues, path, obj) => {
+      checkObject(issues, childPath(path, 'records'), obj.records, PROJECT_RECORDS_SPEC,
+        (issues, path, records) => checkProjectRecords(issues, path, records, version));
+      if (version === 2) {
+        checkObject(issues, childPath(path, 'detail'), obj.detail, DETAIL_SPEC);
+        if (!Array.isArray(obj.groupedTags)) {
+          issue(issues, childPath(path, 'groupedTags'), 'INVALID_TYPE', '应为数组');
+        } else obj.groupedTags.forEach((tag, index) => {
+          checkObject(issues, `${path}.groupedTags[${index}]`, tag, TAG_GROUP_SPEC, (issues, path, group) => {
+            for (const key of ['tagIds', 'tagNames']) {
+              if (!Array.isArray(group[key]) || !group[key].every(isAnyString)) {
+                issue(issues, childPath(path, key), 'INVALID_TYPE', '应为字符串数组');
+              }
+            }
+          });
+        });
+      }
     });
   });
 }
 
-function checkOverview(issues: MobileReadonlySnapshotIssue[], value: unknown): void {
+function checkOverview(issues: MobileReadonlySnapshotIssue[], value: unknown, version: number): void {
   if (!isPlainObject(value)) {
     issue(issues, 'overview', 'INVALID_TYPE', '「overview」应为对象');
     return;
   }
   checkObject(issues, 'overview', value, OVERVIEW_SPEC, (issues, path, obj) => {
-    checkObject(issues, childPath(path, 'metrics'), obj.metrics, METRICS_SPEC);
+    checkObject(issues, childPath(path, 'metrics'), obj.metrics, version === 2 ? METRICS_V2_SPEC : METRICS_SPEC);
     if (!Array.isArray(obj.stages)) {
       issue(issues, childPath(path, 'stages'), 'INVALID_TYPE', '「overview.stages」应为数组');
       return;
@@ -795,18 +913,18 @@ export function validateMobileReadonlySnapshot(value: unknown): MobileReadonlySn
     return { ok: false, issues };
   }
   checkObject(issues, '', value, SNAPSHOT_TOP_SPEC, (issues, path, obj) => {
-    if (obj.schemaVersion !== MOBILE_READONLY_SCHEMA_VERSION) {
+    if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
       // 报错信息不得对不可信值做字符串强转（schemaVersion 可能来自 JSON.parse，
       // 对象/toString 缺失会抛 TypeError）；使用固定安全文案。
       issue(
         issues,
         childPath(path, 'schemaVersion'),
         'INVALID_VALUE',
-        `不支持的快照 schemaVersion；当前仅支持版本 ${MOBILE_READONLY_SCHEMA_VERSION}`,
+        '不支持的快照 schemaVersion；当前仅支持版本 1 / 2',
       );
     }
   });
-  checkOverview(issues, value.overview);
-  checkProjects(issues, value.projects);
+  checkOverview(issues, value.overview, value.schemaVersion as number);
+  checkProjects(issues, value.projects, value.schemaVersion as number);
   return issues.length === 0 ? { ok: true } : { ok: false, issues };
 }

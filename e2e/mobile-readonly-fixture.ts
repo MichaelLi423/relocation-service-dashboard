@@ -104,12 +104,17 @@ interface MobileReadonlySyntheticBuilder {
   STAGE_STATUSES: readonly string[];
   ORDER_TYPES: readonly string[];
   REGIONS: readonly string[];
-  buildSyntheticSnapshot(options?: { projectCount?: number; firstProjectRecords?: number }): MobileReadonlySnapshot;
+  buildSyntheticSnapshot(options?: {
+    projectCount?: number;
+    firstProjectRecords?: number;
+    schemaVersion?: number;
+  }): MobileReadonlySnapshot;
   buildSyntheticUploadBody(options?: {
     projectCount?: number;
     firstProjectRecords?: number;
     publicationId?: string;
     expectedCurrentVersion?: number;
+    schemaVersion?: number;
   }): { protocol: { publicationId: string; expectedCurrentVersion: number }; snapshot: MobileReadonlySnapshot };
 }
 
@@ -569,27 +574,25 @@ export async function renameProjectCustomer(page: Page, oldName: string, newName
   await expect(page.getByText(newName, { exact: true }).first()).toBeVisible();
 }
 
-/** 通过真实桌面 UI 快速记录一条物流费用登记（搬迁批次）。 */
-export async function createBatchQuickRecord(
+/** 通过当前真实桌面 UI 快速记录一台搬迁仪器。 */
+export async function createInstrumentQuickRecord(
   page: Page,
-  values: { company: string; transportDate?: string; appliedAt?: string },
+  values: { name: string },
 ): Promise<void> {
   await page.getByRole('button', { name: '快速记录', exact: false }).first().click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: /^物流费用登记/ }).click();
-  await dialog.getByLabel('运输日期').fill(values.transportDate ?? '2026-08-12');
-  await dialog.getByLabel('运输公司').fill(values.company);
-  await dialog.getByLabel('费用登记日期').fill(values.appliedAt ?? '2026-08-11');
-  await dialog.getByLabel('合同预算价').fill('12000');
-  await dialog.getByLabel('物流成交价').fill('11000');
+  await dialog.getByRole('button', { name: /^搬迁仪器/ }).click();
+  await dialog.getByLabel('仪器名称').fill(values.name);
   await dialog.getByRole('button', { name: '保存记录' }).click();
+  await expectDialogClosed(dialog);
+  await page.getByRole('tab', { name: '搬迁仪器', exact: true }).click();
+  await expect(page.getByRole('tabpanel').getByRole('row').filter({ hasText: values.name })).toBeVisible();
 }
 
-/** 在「物流费用登记」记录页删除含指定运输公司文本的记录（真实 UI + window.confirm）。 */
-export async function deleteBatchRecordByCompany(page: Page, company: string): Promise<void> {
-  await page.getByRole('tab', { name: '物流费用登记' }).first().click();
-  const tabpanel = page.getByRole('tabpanel').filter({ hasText: company });
-  const row = tabpanel.getByRole('row').filter({ hasText: company });
+/** 在「搬迁仪器」记录页删除指定仪器（真实 UI + window.confirm）。 */
+export async function deleteInstrumentRecordByName(page: Page, name: string): Promise<void> {
+  await page.getByRole('tab', { name: '搬迁仪器', exact: true }).click();
+  const row = page.getByRole('tabpanel').getByRole('row').filter({ hasText: name });
   await expect(row).toBeVisible();
   page.once('dialog', (dialog) => void dialog.accept());
   await row.getByRole('button', { name: '删除' }).click();

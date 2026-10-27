@@ -100,7 +100,7 @@ describe('401/403 与双凭证互相隔离（tasks 7.2）', () => {
     expect(metaBody.publishedAt).not.toBeNull();
     // meta 是非业务版本元数据：绝不携带业务快照内容。
     const raw = JSON.stringify(metaBody);
-    expect(raw).not.toContain('snapshot');
+    expect(JSON.parse(raw)).not.toHaveProperty('snapshot');
     expect(raw).not.toContain('projects');
   });
 

@@ -191,6 +191,7 @@ export function envelopeMetadata(envelope: MobileReadonlyPublishEnvelope | null)
     publicationId: envelope.publicationId,
     publishedAt: envelope.publishedAt,
     dataAsOf: envelope.snapshot.dataAsOf,
+    snapshotSchemaVersion: envelope.snapshot.schemaVersion,
     fingerprint: {
       contentGenerationId: envelope.snapshot.contentGenerationId,
       businessRevision: envelope.snapshot.businessRevision,

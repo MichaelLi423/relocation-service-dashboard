@@ -33,11 +33,65 @@ const LONG_CUSTOMER_NAME = `合成客户-44-超长文本${'ABCDE'.repeat(60)}`;
 
 function buildViewSnapshot() {
   const base = cloneSnapshot(
-    syntheticBuilder.buildSyntheticSnapshot({ projectCount: 45, firstProjectRecords: 25 }),
+    syntheticBuilder.buildSyntheticSnapshot({
+      projectCount: 45,
+      firstProjectRecords: 25,
+      schemaVersion: 2,
+    }),
   );
   const projects = base.projects.slice();
   const last = projects[44]!;
   projects[44] = { ...last, customerName: LONG_CUSTOMER_NAME };
+
+  // 为首个项目注入丰富且真实覆盖的 v2 扩展字段
+  const p0 = projects[0]!;
+  p0.finalAmount = '900719925474099312345678901.23';
+  p0.contractAmount = '5000000.00';
+  p0.invoicedAmount = '0.00';
+  p0.reminderAt = '2026-08-08';
+  p0.reminderDueClass = 'today';
+  p0.groupedTags = [
+    { groupId: 'g1', groupName: '所属科室', tagIds: ['t1'], tagNames: ['质谱核心实验室'] },
+    { groupId: 'g2', groupName: '搬迁等级', tagIds: ['t2'], tagNames: ['一级重点管控'] },
+  ];
+  p0.detail = {
+    oldSiteContact: '张主任 13900001111 / 李助理 021-50800000',
+    newSiteContact: '王经理 13800002222',
+    oldSiteAddress: '上海市浦东新区张江高科祖冲之东路 888 号张江生物港 2 号楼 301 实验室\n（近 2 号门货梯口）',
+    newSiteAddress: '江苏省苏州市工业园区生物医药产业园三期 C4 栋 102 室精密仪器大厅',
+    temporaryStorageAddress: '昆山市花桥经济开发区顺扬路 55 号恒温恒湿暂存库 3 号库位',
+    isTemporaryStorage: true,
+    contractStartDate: '2026-07-01',
+    contractEndDate: '2026-12-31',
+    planTransportAt: '2026-08-02',
+    plannedInstallAt: '2026-08-03',
+    actualInstallDoneAt: null,
+    acceptanceReportDate: null,
+    cancelledAt: null,
+    siteConfirmed: false,
+    acceptanceReport: false,
+    temporaryInstrumentCount: 0,
+    temporaryInstrumentName: '超微量核酸蛋白测定仪',
+    temporaryInstrumentModel: 'NanoDrop OneC',
+    temporaryHasUps: false,
+    reminderNote: '注意事项：\n1. 提前 24 小时报备物业放行条；\n2. 仪器拆机前进行腔体真空泄压并排空残液；\n3. 搬入地基需由驻场工程师复核水平度。',
+  };
+
+  // 首个项目的 4 类记录扩展字段
+  for (const row of p0.records.instruments) {
+    row.manufacturer = '赛默飞世尔';
+    row.serviceLevel = '原厂白金维护';
+    row.qrRequested = true;
+  }
+  for (const row of p0.records.orders) {
+    row.customerName = '合成客户-00-独立开单抬头';
+  }
+  for (let i = 0; i < p0.records.damage_items.length; i++) {
+    const row = p0.records.damage_items[i]!;
+    const statuses = ['pending_submit', 'processing', 'arrived', 'used'] as const;
+    row.partStatus = statuses[i % statuses.length]!;
+  }
+
   return { ...base, projects };
 }
 
@@ -156,11 +210,11 @@ async function runFullViewPath(browser: Browser, width: number, baseUrl: string)
     await page.getByRole('button', { name: '重置条件' }).click();
     await expectProjectCard(page, '合成客户-00');
 
-    // —— 状态筛选：已完成（idx 6/14/22/30/38 共 5 项，单页且无下一页） ——
+    // —— 状态筛选：已完成（idx 6/15/24/33/42 共 5 项，单页且无下一页） ——
     await page.getByLabel('项目状态').selectOption('completed');
     await page.getByRole('button', { name: '查询项目' }).click();
     await expectProjectCard(page, '合成客户-06');
-    await expectProjectCard(page, '合成客户-38');
+    await expectProjectCard(page, '合成客户-42');
     await expect(projectCardCount(page)).toHaveCount(5);
     await expect(projectCardByName(page, '合成客户-00')).toHaveCount(0);
     await expect(page.getByLabel('项目翻页').getByRole('button', { name: '下一页 →' })).toBeDisabled();
@@ -309,6 +363,54 @@ for (const width of [360, 390]) {
         await expect(baseInfo).toContainText('synthetic-project-00');
         await expect(baseInfo).toContainText('合成客户-00');
 
+        // v2 扩展字段与分组内容实测断言
+        const nav = page.getByLabel('详情分组快速导航');
+        await expect(nav.getByRole('link', { name: '基本信息' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '日程与合同' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '搬迁与暂存' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '暂定仪器' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '提醒与标签' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '金额与结算' })).toBeVisible();
+        await expect(nav.getByRole('link', { name: '关联记录' })).toBeVisible();
+
+        // 基本信息：false 与场地已确认/已形成验收报告
+        await expect(baseInfo.getByText('场地已确认', { exact: true })).toBeVisible();
+        await expect(baseInfo.getByText('已形成验收报告', { exact: true })).toBeVisible();
+
+        // 执行日程与合同日期：计划装机/实际装机完成
+        const datesSection = page.getByLabel('执行日程与合同日期');
+        await expect(datesSection.getByText('计划装机日期', { exact: true })).toBeVisible();
+        await expect(datesSection.getByText('2026-08-03', { exact: true })).toBeVisible();
+        await expect(datesSection.getByText('实际装机完成日期', { exact: true })).toBeVisible();
+
+        // 搬迁与暂存：长联系人与长地址
+        const relocSection = page.getByLabel('搬出搬入联系与地址');
+        await expect(relocSection).toContainText('张主任 13900001111');
+        await expect(relocSection).toContainText('王经理 13800002222');
+        await expect(relocSection).toContainText('张江生物港 2 号楼 301 实验室');
+        await expect(relocSection).toContainText('昆山市花桥经济开发区顺扬路 55 号');
+        await expect(relocSection.getByText('是否暂存', { exact: true })).toBeVisible();
+
+        // 暂定仪器：数字 0 与暂定配备 UPS false
+        const tempSection = page.getByLabel('暂定仪器');
+        const countDt = tempSection.locator('dt:has-text("暂定仪器数量")');
+        await expect(countDt.locator('xpath=following-sibling::dd')).toHaveText('0');
+        await expect(tempSection).toContainText('超微量核酸蛋白测定仪');
+        await expect(tempSection).toContainText('NanoDrop OneC');
+        const upsDt = tempSection.locator('dt:has-text("暂定配备 UPS")');
+        await expect(upsDt.locator('xpath=following-sibling::dd')).toHaveText('否');
+
+        // 提醒与多行备注安全转义
+        const reminderSection = page.getByLabel('提醒与分类标签');
+        await expect(reminderSection).toContainText('今日到期（快照时）');
+        await expect(reminderSection).toContainText('质谱核心实验室');
+        await expect(reminderSection).toContainText('一级重点管控');
+        await expect(reminderSection).toContainText('拆机前进行腔体真空泄压并排空残液');
+
+        // 金额精确大字符串与原样保留
+        const moneySection = page.getByLabel('金额与结算');
+        await expect(moneySection).toContainText('900719925474099312345678901.23');
+
         // 验证刚打开详情时默认记录 heading 为「仪器」，且没有批次记录/上门活动记录
         const recordHeading = page.locator('.mr-record-heading');
         await expect(recordHeading).toHaveText('仪器');
@@ -321,14 +423,26 @@ for (const width of [360, 390]) {
         await expect(recordTypes.getByRole('button', { name: '批次' })).toHaveCount(0);
         await expect(recordTypes.getByRole('button', { name: '上门活动' })).toHaveCount(0);
 
-        // 验证其余 4 类记录的展示与第 2 页翻页能力，且全程无横向溢出
+        // 验证其余 4 类记录的展示、扩展字段与第 2 页翻页能力，且全程无横向溢出
         for (const [kind, label] of RECORD_KINDS) {
-          const tabBtn = recordTypes.getByRole('button', { name: label });
+          const tabBtn = recordTypes.getByRole('button', { name: new RegExp(`^${label}`) });
           await expect(tabBtn).toBeVisible();
           await tabBtn.click();
           const pagination = page.getByLabel('记录翻页');
           await expect(pagination.getByText('第 1 页')).toBeVisible();
           await expect(page.getByText(`p0-${kind}-0`, { exact: true }).first()).toBeVisible();
+
+          // 校验各类记录的专有扩展字段
+          if (kind === 'instruments') {
+            await expect(recordsSection).toContainText('赛默飞世尔');
+            await expect(recordsSection).toContainText('原厂白金维护');
+            await expect(recordsSection.locator('dt:has-text("已申请二维码")').first()).toBeVisible();
+          } else if (kind === 'orders') {
+            await expect(recordsSection).toContainText('合成客户-00-独立开单抬头');
+          } else if (kind === 'damage_items') {
+            await expect(recordsSection.getByText('待提交', { exact: true }).first()).toBeVisible();
+          }
+
           await pagination.getByRole('button', { name: '下一页 →' }).click();
           await expect(pagination.getByText('第 2 页')).toBeVisible();
           await expect(page.getByText(`p0-${kind}-24`, { exact: true }).first()).toBeVisible();
@@ -347,3 +461,50 @@ for (const width of [360, 390]) {
     }
   });
 }
+
+test('旧 v1 兼容快照在浏览器中缺少字段明确显示"当前快照未提供"且无横向溢出', async ({ browser }) => {
+  test.setTimeout(60_000);
+  const service = await startFixtureMobileService({ clockIso: '2026-08-08T10:00:00.000Z' });
+  try {
+    const v1Snapshot = cloneSnapshot(
+      syntheticBuilder.buildSyntheticSnapshot({ projectCount: 5, firstProjectRecords: 5, schemaVersion: 1 }),
+    );
+    const response = await uploadSnapshotHttp(service.baseUrl, {
+      publicationId: 'synthetic-e2e-v1-pub',
+      expectedCurrentVersion: 0,
+      snapshot: v1Snapshot,
+    });
+    expect(response.status).toBe(200);
+
+    const opened = await openMobileReadonlyPage(browser, service.baseUrl, { width: 390, height: 844 });
+    const page = opened.page;
+    try {
+      await expect(page.getByRole('heading', { name: '项目工作台' })).toBeVisible();
+      await expectProjectCard(page, '合成客户-00');
+      await projectCardByName(page, '合成客户-00').click();
+
+      await expect(page.getByRole('heading', { name: '项目详情' })).toBeVisible();
+      const baseInfo = page.getByLabel('项目基础信息');
+      const siteConfirmedDt = baseInfo.locator('dt:has-text("场地已确认")');
+      await expect(siteConfirmedDt.locator('xpath=following-sibling::dd')).toHaveText('当前快照未提供');
+
+      const relocSection = page.getByLabel('搬出搬入联系与地址');
+      const oldContactDt = relocSection.locator('dt:has-text("搬出联系人")');
+      await expect(oldContactDt.locator('xpath=following-sibling::dd')).toHaveText('当前快照未提供');
+
+      const tempSection = page.getByLabel('暂定仪器');
+      const countDt = tempSection.locator('dt:has-text("暂定仪器数量")');
+      await expect(countDt.locator('xpath=following-sibling::dd')).toHaveText('当前快照未提供');
+
+      const reminderSection = page.getByLabel('提醒与分类标签');
+      const reminderStatusDt = reminderSection.locator('dt:has-text("提醒到期状态")');
+      await expect(reminderStatusDt.locator('xpath=following-sibling::dd')).toHaveText('当前快照未提供');
+
+      await expectNoHorizontalOverflow(page);
+    } finally {
+      await opened.context.close();
+    }
+  } finally {
+    await closeService(service);
+  }
+});

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { MOBILE_READONLY_SCHEMA_VERSION } from '../../shared/mobile-readonly';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock } from '../../domain/core/time';
 import { SystemClock } from '../../domain/core/time';
@@ -170,11 +171,12 @@ export function createMobileReadonlyPublishRuntime(
    */
   let recoveryConfirmed = false;
 
-  function recordAccepted(fingerprint: MobileReadonlyFingerprint): void {
+  function recordAccepted(fingerprint: MobileReadonlyFingerprint, schemaVersion: number): void {
     recoveryConfirmed = true;
     memoryResults = {
       ...memoryResults,
       lastSuccessfulFingerprint: fingerprint,
+      lastSuccessfulSchemaVersion: schemaVersion,
       lastSuccessfulAt: clock.nowIso(),
       lastFailedCode: null,
       lastFailedAt: null,
@@ -344,6 +346,7 @@ export function createMobileReadonlyPublishRuntime(
 
       const baselineMatches =
         pending === null &&
+        memoryResults.lastSuccessfulSchemaVersion === MOBILE_READONLY_SCHEMA_VERSION &&
         sameMobileReadonlyFingerprint(memoryResults.lastSuccessfulFingerprint, currentFingerprint);
 
       // 无在途候选、本地基线一致且本实例已「恢复确认」→ 周期无变化，不打扰远端
@@ -364,7 +367,7 @@ export function createMobileReadonlyPublishRuntime(
       const metadata = metaResult.metadata;
 
       // 本地基线==当前指纹 且 远端仍发布同一指纹 → 一致：无需上传，也不改写最近成功状态。
-      if (baselineMatches && metadata.published && sameMobileReadonlyFingerprint(metadata.fingerprint, currentFingerprint)) {
+      if (baselineMatches && metadata.published && metadata.snapshotSchemaVersion === MOBILE_READONLY_SCHEMA_VERSION && sameMobileReadonlyFingerprint(metadata.fingerprint, currentFingerprint)) {
         recoveryConfirmed = true;
         return;
       }
@@ -388,7 +391,7 @@ export function createMobileReadonlyPublishRuntime(
 
         if (outcome.kind === 'accepted') {
           pending = null;
-          recordAccepted(candidate.fingerprint);
+          recordAccepted(candidate.fingerprint, candidate.snapshot.schemaVersion);
           return;
         }
         if (outcome.kind === 'rejected') {
@@ -416,7 +419,7 @@ export function createMobileReadonlyPublishRuntime(
         if (reconcile.publicationId === candidate.publicationId) {
           // (1) 已被接受：确认成功并保存候选捕获时指纹。
           pending = null;
-          recordAccepted(candidate.fingerprint);
+          recordAccepted(candidate.fingerprint, candidate.snapshot.schemaVersion);
           return;
         }
         if (reconcile.currentVersion === candidate.expectedCurrentVersion) {
@@ -533,6 +536,7 @@ export function createMobileReadonlyPublishRuntime(
           ...memoryResults,
           target: validation.origin,
           lastSuccessfulFingerprint: null,
+          lastSuccessfulSchemaVersion: null,
           lastSuccessfulAt: null,
           lastFailedCode: null,
           lastFailedAt: null,

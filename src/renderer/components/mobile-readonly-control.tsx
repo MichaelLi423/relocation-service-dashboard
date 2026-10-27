@@ -149,7 +149,7 @@ function PublicationPanel({ api, close, returnFocus }: { api?: MobileReadonlyCon
     <section className="mrp-panel" role="dialog" aria-modal="true" aria-labelledby="mrp-title" aria-describedby="mrp-description" ref={panel}>
       <header className="mrp-header"><div><p>电脑发布 · 手机只读</p><h2 id="mrp-title">发布云端</h2></div><button ref={closeButton} className="button" type="button" aria-label="关闭发布云端" onClick={() => { setToken(""); close(); }}>关闭</button></header>
       <div className="mrp-body">
-        <p id="mrp-description" className="mrp-description">默认关闭。配置后需单独启用，才会把只读快照发布到指定服务。发布失败不影响本地录入和查看。</p>
+        <p id="mrp-description" className="mrp-description">默认关闭。配置后需单独启用，才会把只读快照发布到指定服务。发布失败不影响本地录入和查看。<br />发布范围说明：联系人及联系方式、搬出/搬入/暂存地址、提醒日期/提醒备注与对应业务信息将同步云端，持有原查看凭证均可查看；其他项目/业务自由备注、开单备注、维修备注等仍严格排除在外。</p>
         {!available ? <p role="status" className="mrp-warning">当前版本未提供发布接口，暂不可用。未读取到配置或启用状态。</p> : <>
           {pending && <p role="status" className="mrp-hint">正在读取或保存发布状态…</p>}
           {error && <div role="alert" className="mrp-error">{error}</div>}

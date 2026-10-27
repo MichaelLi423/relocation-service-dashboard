@@ -360,8 +360,11 @@ function parseMetadataObject(value: unknown): MobileReadonlyPublishMetadata | nu
     publishedAt?: unknown;
     dataAsOf?: unknown;
     fingerprint?: unknown;
+    snapshotSchemaVersion?: unknown;
   };
   if (typeof candidate.published !== 'boolean') return null;
+  if (candidate.snapshotSchemaVersion !== undefined && candidate.snapshotSchemaVersion !== null &&
+      (typeof candidate.snapshotSchemaVersion !== 'number' || !Number.isSafeInteger(candidate.snapshotSchemaVersion) || candidate.snapshotSchemaVersion < 1)) return null;
   if (
     typeof candidate.currentVersion !== 'number' ||
     !Number.isInteger(candidate.currentVersion) ||
@@ -380,7 +383,9 @@ function parseMetadataObject(value: unknown): MobileReadonlyPublishMetadata | nu
         : null;
   const unpublished = !candidate.published && candidate.currentVersion === 0;
   if (unpublished && candidate.fingerprint === null) {
-    return { ...UNPUBLISHED_MOBILE_READONLY_METADATA };
+    const metadata = { ...UNPUBLISHED_MOBILE_READONLY_METADATA };
+    if (candidate.snapshotSchemaVersion === undefined) delete metadata.snapshotSchemaVersion;
+    return metadata;
   }
   return {
     published: candidate.published,
@@ -389,6 +394,7 @@ function parseMetadataObject(value: unknown): MobileReadonlyPublishMetadata | nu
     publishedAt: nullableString(candidate.publishedAt),
     dataAsOf: nullableString(candidate.dataAsOf),
     fingerprint,
+    ...(candidate.snapshotSchemaVersion !== undefined ? { snapshotSchemaVersion: candidate.snapshotSchemaVersion as number | null } : {}),
   };
 }
 

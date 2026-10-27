@@ -95,8 +95,8 @@ function expectHasUnknownKeyIssue(value: unknown, pathFragment: string, key = 'l
 /** 复制快照并对首个项目调用 mutate（原始类型保持，便于项目定位）。 */
 
 describe('移动只读快照 封闭白名单结构（tasks 2.1）', () => {
-  it('schemaVersion 常量为 1，默认合成快照与空快照均通过校验', () => {
-    expect(MOBILE_READONLY_SCHEMA_VERSION).toBe(1);
+  it('schemaVersion 常量为 2，旧 v1 合成快照与空快照仍通过校验', () => {
+    expect(MOBILE_READONLY_SCHEMA_VERSION).toBe(2);
     expect(validateMobileReadonlySnapshot(makeSnapshotFixture()).ok).toBe(true);
     expect(validateMobileReadonlySnapshot(makeEmptySnapshotFixture()).ok).toBe(true);
   });

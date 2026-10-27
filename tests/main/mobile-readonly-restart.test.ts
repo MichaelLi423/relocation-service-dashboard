@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { bootstrapDatabase } from '../../src/domain/capabilities/local-data-persistence/bootstrap';
@@ -72,6 +72,7 @@ function createRemote(server: RecordingServer): MobileReadonlyRemote {
           publishedAt: FIXED_ISO,
           dataAsOf: FIXED_ISO,
           fingerprint: server.fingerprint,
+          snapshotSchemaVersion: server.uploads.at(-1)?.snapshot.schemaVersion ?? null,
         },
       };
     },
@@ -106,6 +107,89 @@ function makeRuntime(dir: string, db: () => DatabaseSync, server: RecordingServe
 }
 
 describe('桌面重启恢复（tasks 4.7）', () => {
+  it.each([undefined, 1])('旧成功 schema=%s 同指纹仍补发一次 v2，重启后不重复', async oldVersion => {
+    const dir = makeTempDir('mobile-readonly-upgrade-'); dirs.push(dir);
+    const { db } = bootstrapDatabase({ dataDir: dir });
+    try {
+      seedSyntheticProject(db, { index: 0 });
+      const server = makeServer();
+      const runtimeA = makeRuntime(dir, () => db, server);
+      await runtimeA.configure({ target: 'https://publish.example.com', token: 'token-1' });
+      await runtimeA.setEnabled(true); runtimeA.stop();
+      const file = join(dir, 'mobile-readonly-results.json');
+      const old = JSON.parse(readFileSync(file, 'utf8'));
+      if (oldVersion === undefined) delete old.lastSuccessfulSchemaVersion;
+      else old.lastSuccessfulSchemaVersion = oldVersion;
+      writeFileSync(file, JSON.stringify(old));
+      const runtimeB = makeRuntime(dir, () => db, server);
+      await runtimeB.checkNow(); await runtimeB.checkNow(); runtimeB.stop();
+      expect(server.uploads).toHaveLength(2);
+      expect(server.uploads[1].snapshot.schemaVersion).toBe(2);
+      expect(JSON.parse(readFileSync(file, 'utf8')).lastSuccessfulSchemaVersion).toBe(2);
+      const runtimeC = makeRuntime(dir, () => db, server);
+      await runtimeC.checkNow(); runtimeC.stop();
+      expect(server.uploads).toHaveLength(2);
+    } finally { closeDatabase(db); }
+  });
+
+  it('旧服务拒绝 v2 不降级、失败不推进成功版本，停用不自动开启', async () => {
+    const dir = makeTempDir('mobile-readonly-upgrade-failed-'); dirs.push(dir);
+    const { db } = bootstrapDatabase({ dataDir: dir });
+    try {
+      seedSyntheticProject(db, { index: 0 });
+      const server = makeServer();
+      const runtimeA = makeRuntime(dir, () => db, server);
+      await runtimeA.configure({ target: 'https://publish.example.com', token: 'token-1' });
+      await runtimeA.setEnabled(true); runtimeA.stop();
+      const file = join(dir, 'mobile-readonly-results.json');
+      const old = JSON.parse(readFileSync(file, 'utf8'));
+      delete old.lastSuccessfulSchemaVersion; writeFileSync(file, JSON.stringify(old));
+      const attempts: number[] = [];
+      const remote = createRemote(server);
+      const runtimeB = createMobileReadonlyPublishRuntime({
+        storageDir: dir, db: () => db, clock: new FixedClock(FIXED_ISO), timer: systemMobileReadonlyTimer,
+        safeStorage: mockSafeStorage(), remoteFactory: () => ({ ...remote, upload: async body => {
+          attempts.push(body.snapshot.schemaVersion); return { kind: 'rejected', code: 'UPLOAD_REJECTED' };
+        } }),
+      });
+      await runtimeB.checkNow(); await runtimeB.checkNow();
+      expect(attempts).toEqual([2, 2]);
+      const failed = JSON.parse(readFileSync(file, 'utf8'));
+      expect(failed.lastSuccessfulSchemaVersion).toBeNull();
+      expect(failed.lastSuccessfulFingerprint).toEqual(old.lastSuccessfulFingerprint);
+      await runtimeB.setEnabled(false); runtimeB.stop();
+      const runtimeC = makeRuntime(dir, () => db, server);
+      await runtimeC.checkNow();
+      expect(runtimeC.getStatus().enabled).toBe(false);
+      expect(server.uploads).toHaveLength(1);
+    } finally { closeDatabase(db); }
+  });
+
+  it('本地 v2 成功但远端 schema 未知或 v1，重启保守重发', async () => {
+    const dir = makeTempDir('mobile-readonly-remote-schema-'); dirs.push(dir);
+    const { db } = bootstrapDatabase({ dataDir: dir });
+    try {
+      seedSyntheticProject(db, { index: 0 });
+      const server = makeServer();
+      const first = makeRuntime(dir, () => db, server);
+      await first.configure({ target: 'https://publish.example.com', token: 'token-1' });
+      await first.setEnabled(true); first.stop();
+      for (const version of [undefined, 1]) {
+        const remote = createRemote(server);
+        const next = createMobileReadonlyPublishRuntime({
+          storageDir: dir, db: () => db, clock: new FixedClock(FIXED_ISO), timer: systemMobileReadonlyTimer,
+          safeStorage: mockSafeStorage(), remoteFactory: () => ({ ...remote, readMeta: async () => {
+            const result = await remote.readMeta();
+            if (result.ok) result.metadata.snapshotSchemaVersion = version;
+            return result;
+          } }),
+        });
+        await next.checkNow(); next.stop();
+      }
+      expect(server.uploads).toHaveLength(3);
+    } finally { closeDatabase(db); }
+  });
+
   it('持久化指纹==当前指纹且云端已发布 → 重启后不重复上传（先读元数据语义由周期实现）', async () => {
     const dir = makeTempDir('mobile-readonly-restart-');
     dirs.push(dir);

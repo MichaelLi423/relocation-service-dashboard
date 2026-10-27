@@ -46,14 +46,14 @@
 
 ### Requirement: 必要字段白名单只读快照（封闭契约）
 
-发布上传的内容 SHALL 是**仅覆盖手机入口所需读取面的必要字段白名单只读快照**：概览（关键指标与阶段分布）、搬迁项目搜索/列表（含查询、筛选与有界分页所需的项目行）、项目详情（基础信息、主状态、金额与日期），以及详情下六类关联业务记录（批次/仪器/上门活动/开单/掉票/损坏维修事项）。白名单字段、JSON 路径、源字段、类型/空值与用途 SHALL 以本能力设计文档 `design.md`（归档于 `add-mobile-readonly-publication`）的封闭字段表为准，逐类列明，不得以"展开整个 DTO"或"运行时可再决定"替代；快照中任何位置（含嵌套对象）出现白名单之外的未知 key SHALL 被判定为非法。默认 SHALL NOT 上传：联系人、详细地址、自由备注、来源审计、账号与凭证数据、本机文件路径、附件内容、报表导出数据、备份文件内容及与既定只读功能无关的敏感字段。金额 SHALL 复用主进程已格式化 DTO 的主单位固定两位小数字符串（可空字段未填写为 `null`；允许负值的字段保留负号两位小数字符串，如 `"-12.34"`），发布链路 SHALL NOT 再次除以 100 或转 Number（`formatCents` 自身的分→主单位格式化除外）；业务日期 SHALL 使用 `yyyy-mm-dd`。
+发布上传的内容 SHALL 是**仅覆盖手机入口所需读取面的必要字段白名单只读快照**：概览、搬迁项目搜索/列表、项目详情及快照内六类关联记录。v1 白名单 SHALL 保持[归档 design.md](../../changes/archive/2026-09-12-add-mobile-readonly-publication/design.md#封闭字段白名单)不变；新桌面 SHALL 生成 `schemaVersion=2`，其封闭白名单为 v1 表加[本次 v2 现行扩展表](../../../docs/verification/mobile-readonly-detail-expansion-2026-10-27.md#v2-现行扩展表)。字段 SHALL 从既有 WorkbenchV2 DTO 在单一一致事务内逐字段投影，SHALL NOT 展开整个 DTO 或新增数据库字段；任意层级未知 key SHALL 拒绝。本次明确授权联系人及联系方式、搬出/搬入/暂存详细地址、提醒日期/提醒备注与表列非敏感业务字段同步云端，所有现有 Basic Auth 查看者均可只读查看；此授权 SHALL NOT 视为生产部署授权。提醒备注是唯一自由备注例外，一般项目/业务自由备注、开单备注、维修备注、取消/撤销/损坏/经理批复原因等仍 SHALL NOT 上传；来源审计、账号凭证、本机路径、附件、报表导出及备份内容仍排除。金额 SHALL 复用主进程已格式化 DTO 的主单位固定两位小数字符串（可空字段未填写为 `null`；允许负值如 `"-12.34"`），SHALL NOT 再次除以 100 或转 Number（`formatCents` 自身格式化除外）；业务日期 SHALL 使用 `yyyy-mm-dd`。
 
 #### Scenario: 快照仅含已定契约字段
 
 - **GIVEN** 负责人已显式启用移动只读发布
 - **WHEN** 系统生成待上传快照
-- **THEN** 快照只包含 `design.md` 封闭字段表列明的字段与用途
-- **AND** 不包含联系人、详细地址、自由备注、来源审计、账号、凭证、报表导出数据、本机路径等被排除内容
+- **THEN** 快照只包含对应 schemaVersion 的封闭字段表列明的字段与用途，v2 新字段均必填（可空字段 `null` 表示未填写）
+- **AND** 除明确授权的联系人/联系方式、详细地址与提醒备注外，不包含一般自由备注、原因文本、来源审计、账号、凭证、报表导出数据、本机路径等被排除内容
 
 #### Scenario: 未知 key 使快照非法
 
@@ -96,11 +96,11 @@
 
 ### Requirement: 启动检查与运行中周期变化检测
 
-启用状态下，系统 SHALL 在应用启动时检查一次本地数据是否有变化；应用运行且网络可用时，SHALL 约每 2 分钟检查一次。变化判定 SHALL 以"上次成功发布候选捕获的指纹"与当前 `contentGenerationId`/`businessRevision` 比较：同代际内 `businessRevision` 增长、或 `contentGenerationId` 轮换（含从备份恢复）均 SHALL 视为有变化并全量上传；未变化 SHALL NOT 上传，且该"无新发布"状态 SHALL 被桌面如实标记（如最近发布/最后成功时间），不得伪称刚刚发布。
+启用状态下，系统 SHALL 在应用启动时检查一次本地数据是否有变化；应用运行且网络可用时，SHALL 约每 2 分钟检查一次。变化判定 SHALL 比较上次成功候选的指纹及 `lastSuccessfulSchemaVersion`：同代际 `businessRevision` 增长、`contentGenerationId` 轮换或成功 schema 版本尚非 2 均 SHALL 全量上传。因此无业务变化也 SHALL 成功发布一次 v2；成功确认前 SHALL NOT 推进成功指纹或成功 schema 版本。二者均未变化才 SHALL NOT 上传，并如实标记无新发布；停用状态 SHALL NOT 因 schema 升级重新启用或上传。
 
 #### Scenario: 启动时检查并仅在变化时上传
 
-- **GIVEN** 负责人已启用发布且上一次成功发布后本地业务数据无变化
+- **GIVEN** 负责人已启用发布、上一次已成功发布 schemaVersion 2 且本地业务数据无变化
 - **WHEN** 应用启动
 - **THEN** 系统检查本地数据变化
 - **AND** 无变化时不发起上传，并在桌面如实标记最近发布状态
@@ -121,7 +121,7 @@
 
 #### Scenario: 无写入不上传且如实标记
 
-- **GIVEN** 负责人已启用发布且发布后本地无任何业务变化
+- **GIVEN** 负责人已启用发布、已成功发布 schemaVersion 2 且本地无任何业务变化
 - **WHEN** 连续多个检查周期到达
 - **THEN** 系统不重复上传相同内容
 - **AND** 桌面与手机如实展示最近一次发布/检查时间，不伪称有新发布
@@ -163,7 +163,7 @@
 1. 元数据 `publicationId` 等于候选 `publicationId` → 候选已被接受：确认成功并保存候选捕获指纹为 `lastSuccessfulFingerprint`；
 2. 元数据 `currentVersion` 仍等于候选 `expectedCurrentVersion`（说明从未提交成功）→ 以**完全相同**的 `publicationId`、内容与 `expectedCurrentVersion` 重传，不得因看不到响应而另生成新候选；
 3. 元数据 `currentVersion` 已前进且 `publicationId` 不同 → 冲突：重新取本地一致快照生成新 `publicationId`，以元数据当前版本为新 `expectedCurrentVersion` 重试。
-读取元数据失败 SHALL 保留候选为未确认并进入下一周期，SHALL NOT 推进成功指纹。桌面重启且处于有效启用配置时 SHALL 先读取元数据恢复判定；若在途候选内容已丢失，SHALL NOT 凭空确认成功——依据持久化 `lastSuccessfulFingerprint` 与当前本地指纹保守处理：不同则重新生成候选发布，相同则视为已发布不重复上传。桌面状态 SHALL 持久化 `lastSuccessfulFingerprint`，SHALL NOT 持久化整份待上传业务候选。
+读取元数据失败 SHALL 保留候选为未确认并进入下一周期，SHALL NOT 推进成功指纹或 `lastSuccessfulSchemaVersion`。桌面重启且处于有效启用配置时 SHALL 先读取元数据恢复判定；若在途候选内容已丢失，SHALL NOT 凭空确认成功——依据持久化 `lastSuccessfulFingerprint`、`lastSuccessfulSchemaVersion` 与当前本地指纹保守处理：指纹不同或成功 schema 尚非 2 则重新生成候选发布，均一致才不重复上传。成功确认 SHALL 同时记录候选 schema 版本与捕获指纹，SHALL NOT 持久化整份待上传业务候选。元数据 `snapshotSchemaVersion` SHALL 兼容旧服务缺失，不得把缺失视为 v2 成功。
 
 #### Scenario: 同一时刻仅一个候选上传
 
@@ -204,7 +204,7 @@
 
 - **GIVEN** 桌面在有效启用配置下重启且此前已发布过指纹 F
 - **WHEN** 系统读取云端元数据并与本地持久化 `lastSuccessfulFingerprint` 比较
-- **THEN** 本地指纹与云端一致则不重复上传；不一致（或云端尚未发布）则保守地重新生成候选发布
+- **THEN** 本地指纹与云端一致且成功 schema 为 2 才不重复上传；不一致、成功 schema 尚非 2 或云端尚未发布则保守地重新生成候选发布
 - **AND** 不凭内存丢失的在途候选凭空确认成功
 
 ### Requirement: 上传凭证独立、OS 安全存储且配置只写不回显

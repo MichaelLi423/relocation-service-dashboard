@@ -6,9 +6,9 @@ import {
   closeFixtureService,
   closePublishPanel,
   configurePublish,
-  createBatchQuickRecord,
+  createInstrumentQuickRecord,
   createFormalProject,
-  deleteBatchRecordByCompany,
+  deleteInstrumentRecordByName,
   expectProjectDetail,
   DESKTOP_PERIODIC_MS,
   MOBILE_CHECK_INTERVAL_MS,
@@ -236,8 +236,9 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
   let restarted: FixtureMobileService | null = null;
   const originalName = 'E2E 失败恢复客户-原名';
   const renamedName = 'E2E 失败恢复客户-已改名';
-  const keepCompany = 'E2E-P2-承运-保留';
-  const deleteCompany = 'E2E-P2-承运-待删除';
+  const keepInstrument = 'E2E-P2-仪器-保留';
+  const deleteInstrument = 'E2E-P2-仪器-待删除';
+  const offlineInstrument = 'E2E-P2-仪器-断网期间新增';
   try {
     service = await startFixtureMobileService({ clockIso: SERVICE_CLOCK_ISO });
     const dataDir = service.dataDir;
@@ -251,18 +252,18 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
     await clickEnable(page);
     await closePublishPanel(page);
 
-    // 建档 + 两条物流费用记录（真实 UI）
+    // 建档 + 两台仪器（真实 UI）
     await createFormalProject(page, { customer: originalName, ecc: 'E2E-P2-0001' });
     await expectProjectDetail(page, originalName);
-    await createBatchQuickRecord(page, { company: deleteCompany });
-    await createBatchQuickRecord(page, { company: keepCompany });
+    await createInstrumentQuickRecord(page, { name: deleteInstrument });
+    await createInstrumentQuickRecord(page, { name: keepInstrument });
 
-    // 启用时已立即首发空快照（V1）；本周期发布项目 + 两条批次（V2，服务在线）
+    // 启用时已立即首发空快照（V1）；本周期发布项目 + 两台仪器（V2，服务在线）
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
     await waitForServerVersion(service.baseUrl, 2, 60_000);
     const projectIdBefore = (await queryProjectsHttp(service.baseUrl, { q: originalName }))[0]!.id;
-    const batchesAfterProjectPublish = await queryRecordsHttp(service.baseUrl, projectIdBefore, 'batches');
-    expect(batchesAfterProjectPublish.some((row) => row.transportCompany === deleteCompany)).toBeTruthy();
+    const instrumentsAfterProjectPublish = await queryRecordsHttp(service.baseUrl, projectIdBefore, 'instruments');
+    expect(instrumentsAfterProjectPublish.map((row) => row.name).sort()).toEqual([deleteInstrument, keepInstrument].sort());
     await assertSuccessStatus(page);
 
     // 关闭服务前先固定本服务的 origin/端口：重启必须复用同一端口（桌面 target 已保存该 origin，
@@ -276,7 +277,7 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
     await renameProjectCustomer(page, originalName, renamedName);
     await expectProjectDetail(page, renamedName);
     // 服务不可达期间再补一条本地记录（桌面主操作流不受影响）
-    await createBatchQuickRecord(page, { company: 'E2E-P2-承运-断网期间新增' });
+    await createInstrumentQuickRecord(page, { name: offlineInstrument });
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
     const failedField = await readFieldUntil(page, '最近失败', (value) => value.includes('META_READ_FAILED'));
     expect(failedField).toContain('META_READ_FAILED');
@@ -295,17 +296,17 @@ test('P2 发布失败不阻断本地、恢复服务后自动成功；真实 UI �
     const projectsAfterRecovery = await queryProjectsHttp(restarted.baseUrl, { q: renamedName });
     expect(projectsAfterRecovery.length).toBeGreaterThanOrEqual(1);
     const projectId = projectsAfterRecovery[0]!.id;
-    const batchesAfterRecovery = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
-    expect(batchesAfterRecovery.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
+    const instrumentsAfterRecovery = await queryRecordsHttp(restarted.baseUrl, projectId, 'instruments');
+    expect(instrumentsAfterRecovery.map((row) => row.name).sort()).toEqual([deleteInstrument, keepInstrument, offlineInstrument].sort());
     await assertSuccessStatus(page);
 
-    // 真实 UI 删除一条批次记录（window.confirm 接受）→ 下一周期全量替换快照（V4）
-    await deleteBatchRecordByCompany(page, deleteCompany);
+    // 真实 UI 删除指定仪器（window.confirm 接受）→ 下一周期全量替换快照（V4）
+    await deleteInstrumentRecordByName(page, deleteInstrument);
     await advanceDesktopClock(app, DESKTOP_PERIODIC_MS);
     await waitForServerVersion(restarted.baseUrl, 4, 60_000);
-    const batchesAfterDelete = await queryRecordsHttp(restarted.baseUrl, projectId, 'batches');
-    expect(batchesAfterDelete.some((row) => row.transportCompany === keepCompany)).toBeTruthy();
-    expect(batchesAfterDelete.some((row) => row.transportCompany === deleteCompany)).toBeFalsy();
+    const instrumentsAfterDelete = await queryRecordsHttp(restarted.baseUrl, projectId, 'instruments');
+    expect(instrumentsAfterDelete.map((row) => row.name).sort()).toEqual([keepInstrument, offlineInstrument].sort());
+    expect(instrumentsAfterDelete.some((row) => row.name === deleteInstrument)).toBeFalsy();
     await assertSuccessStatus(page);
   } finally {
     if (service) await closeFixtureService(service);

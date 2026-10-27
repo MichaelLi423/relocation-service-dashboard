@@ -9,8 +9,8 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 18 |
-| ADDED Requirements 场景总数 | 738 |
-| 有有效测试证据（✅） | 619 |
+| ADDED Requirements 场景总数 | 741 |
+| 有有效测试证据（✅） | 622 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
 | 缺证据 / 证据无效（❌） | 119 |
 
@@ -262,6 +262,8 @@
 | 轻量服务与文件信封快照存储 | 服务仅依赖文件快照 | ❌ | — |  |
 | 轻量服务与文件信封快照存储 | 启动从文件恢复发布状态 | ❌ | — |  |
 | 轻量服务与文件信封快照存储 | 从未提交则无文件无版本 | ❌ | — |  |
+| 完整快照校验后原子替换 | v1 与 v2 分版本封闭校验 | ✅ | `tests/main/mobile-readonly-v2.test.ts`「v1 原字段仍合法，v2 授权字段不会反向进入 v1 白名单」<br>`tests/main/mobile-readonly-v2.test.ts`「v2 每个新增必填字段缺失或 undefined 均拒绝，null 与未知不互转」<br>`tests/main/mobile-readonly-whitelist.test.ts`「未知 schemaVersion 一律拒绝」<br>`tests/server/mobile-readonly-v2.test.ts`「从旧 v1 文件启动，提交 v2 后重启恢复详情，再合法替换为 v1 不残留详情」 |  |
+| 完整快照校验后原子替换 | 服务先升级且不自动降级 | ✅ | `docs/verification/mobile-readonly-detail-expansion-2026-10-27.md`「新服务先部署，再升级桌面；旧服务拒绝 v2，桌面不得自动降级上传 v1」 | 仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已授权或已执行。 |
 | 完整快照校验后原子替换 | 有效快照原子替换当前版本 | ❌ | — |  |
 | 完整快照校验后原子替换 | 校验失败保留旧版本 | ❌ | — |  |
 | 完整快照校验后原子替换 | 嵌套未知 key 被拒 | ❌ | — |  |
@@ -296,6 +298,7 @@
 | 只读入口且无业务写入表单 | 无业务写入能力即使用户尝试 | ❌ | — |  |
 | 概览与项目搜索/列表（服务端有界读取） | 打开即见概览与项目列表 | ❌ | — |  |
 | 概览与项目搜索/列表（服务端有界读取） | 项目搜索与筛选由服务端执行 | ❌ | — |  |
+| 项目详情与关联业务记录 | v2 详情完整展示且旧快照不伪造字段 | ✅ | `tests/renderer/mobile-readonly-view.expansion.test.tsx`「概览展示新增指标」<br>`tests/renderer/mobile-readonly-view.expansion.test.tsx`「详情页展示全部分组字段、正确术语文案、null/false/0与长多行文本」<br>`tests/renderer/mobile-readonly-view.expansion.test.tsx`「旧 v1 快照缺少扩展字段时友好提示“当前快照未提供”，不冒充 null 或 0」<br>`tests/renderer/mobile-readonly-view.expansion.test.tsx`「开单记录展示 customerName；损坏维修备件状态 4 种合法枚举正确映射为中文」 |  |
 | 项目详情与关联业务记录 | 打开项目详情并浏览关联记录 | ❌ | — |  |
 | 项目详情与关联业务记录 | 版本改变时提示重载 | ❌ | — |  |
 | 打开/回前台/联网恢复立即检查，前台定时检查间隔不超过 60 秒 | 打开与回前台立即检查 | ❌ | — |  |

@@ -131,7 +131,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
     }
   });
 
-  it('空库生成合法空集合快照（D10：schemaVersion=1，空项目，指标零值）', () => {
+  it('空库生成合法空集合快照（D10：schemaVersion=2，空项目，指标零值）', () => {
     const { db, close } = setupDb();
     try {
       const snapshot = buildWith(db);
@@ -142,8 +142,12 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
         pendingAmount: '0.00',
         pendingAcceptance: 0,
         pendingInvoice: 0,
+        reminderCount: 0,
+        reminderOverdue: 0,
+        reminderToday: 0,
+        openRepairProjects: 0,
       });
-      expect(snapshot.schemaVersion).toBe(1);
+      expect(snapshot.schemaVersion).toBe(2);
       expect(snapshot.dataAsOf).toBe(FIXED_ISO);
       expect(snapshot.contentGenerationId.length).toBeGreaterThan(0);
       expect(snapshot.businessRevision).toBeGreaterThanOrEqual(0);
@@ -173,7 +177,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
       );
       expect(sorted(Object.keys(snapshot.overview))).toEqual(sorted(['metrics', 'stages']));
       expect(sorted(Object.keys(snapshot.overview.metrics))).toEqual(
-        sorted(['totalProjects', 'activeProjects', 'pendingAmount', 'pendingAcceptance', 'pendingInvoice']),
+        sorted(['totalProjects', 'activeProjects', 'pendingAmount', 'pendingAcceptance', 'pendingInvoice', 'reminderCount', 'reminderOverdue', 'reminderToday', 'openRepairProjects']),
       );
       expect(sorted(Object.keys(project))).toEqual(
         sorted([
@@ -192,6 +196,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
           'formallyEntered',
           'preEntryExecution',
           'records',
+          'detail', 'reminderAt', 'reminderDueClass', 'groupedTags',
         ]),
       );
       expect(sorted(Object.keys(project.records))).toEqual(
@@ -201,13 +206,13 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
         sorted(['id', 'planTransportDate', 'transportCompany', 'startedAt', 'appliedAt']),
       );
       expect(sorted(Object.keys(project.records.instruments[0]))).toEqual(
-        sorted(['id', 'name', 'model', 'serialNo', 'ups']),
+        sorted(['id', 'name', 'model', 'serialNo', 'ups', 'manufacturer', 'serviceLevel', 'qrRequested']),
       );
       expect(sorted(Object.keys(project.records.activities[0]))).toEqual(
         sorted(['id', 'visitAt', 'engineers']),
       );
       expect(sorted(Object.keys(project.records.orders[0]))).toEqual(
-        sorted(['id', 'orderType', 'serviceOrderNo', 'orderedAt', 'engineer']),
+        sorted(['id', 'orderType', 'serviceOrderNo', 'orderedAt', 'engineer', 'customerName']),
       );
       expect(sorted(Object.keys(project.records.invoices[0]))).toEqual(
         sorted(['id', 'amount', 'invoicedAt', 'active', 'revokedAt']),
@@ -223,6 +228,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
           'partAmount',
           'partCurrency',
           'registeredAt',
+          'partStatus',
         ]),
       );
     } finally {
