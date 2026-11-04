@@ -3,7 +3,7 @@
 /**
  * 移动只读本地开发/验证合成数据（CommonJS；供 scripts/dev-mobile-readonly.cjs 与后续 E2E 复用）。
  *
- * - 只产生脱敏合成快照（默认 v2，schemaVersion:1 可验证旧快照），绝不读取真实客户文件；
+ * - 只产生脱敏合成快照（默认 v3，schemaVersion:1/2 可验证旧快照），绝不读取真实客户文件；
  * - 规模默认：45 个项目，首个项目每类关联记录 ≥25（便于有界分页验证），其余项目为空记录；
  * - 凭证：本地演示明文常量仅供本地 dev（非生产 secret），落盘只写 scrypt 摘要文件，
  *   格式与 src/server/mobile-readonly/credentials.ts 完全一致（scrypt$N$r$p$keyLen$salt$hash）。
@@ -237,8 +237,8 @@ function makeOverview(projectCount) {
  * @param {number} [options.firstProjectRecords=25]
  */
 function buildSyntheticSnapshot(options = {}) {
-  const schemaVersion = options.schemaVersion ?? 2;
-  if (schemaVersion !== 1 && schemaVersion !== 2) throw new Error('不支持的合成快照版本');
+  const schemaVersion = options.schemaVersion ?? 3;
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) throw new Error('不支持的合成快照版本');
   const projectCount = options.projectCount ?? 45;
   const firstProjectRecords = options.firstProjectRecords ?? 25;
   if (!Number.isInteger(projectCount) || projectCount <= 0) throw new Error('projectCount 必须为正整数');
@@ -247,7 +247,7 @@ function buildSyntheticSnapshot(options = {}) {
     projects.push(makeProject(index, firstProjectRecords));
   }
   const overview = makeOverview(projectCount);
-  if (schemaVersion === 2) {
+  if (schemaVersion >= 2) {
     Object.assign(overview.metrics, { reminderCount: projectCount, reminderOverdue: 0, reminderToday: projectCount, openRepairProjects: 1 });
     for (const project of projects) {
       project.reminderAt = '2026-08-08';
@@ -262,6 +262,7 @@ function buildSyntheticSnapshot(options = {}) {
         temporaryInstrumentCount: null, temporaryInstrumentName: null, temporaryInstrumentModel: null,
         temporaryHasUps: null, reminderNote: '合成提醒备注',
       };
+      if (schemaVersion === 3) project.detail.projectNote = '合成项目备注';
       for (const row of project.records.instruments) Object.assign(row, { manufacturer: null, serviceLevel: null, qrRequested: false });
       for (const row of project.records.orders) row.customerName = project.customerName;
       for (const row of project.records.damage_items) row.partStatus = null;

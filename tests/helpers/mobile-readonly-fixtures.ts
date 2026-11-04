@@ -16,6 +16,7 @@ import {
   type MobileReadonlyRecordKind,
   type MobileReadonlySnapshot,
   type MobileReadonlySnapshotV2,
+  type MobileReadonlySnapshotV3,
   type MobileReadonlyStageSummary,
 } from '../../src/shared/mobile-readonly';
 
@@ -249,6 +250,17 @@ export function makeSnapshotV2Fixture(overrides: Partial<MobileReadonlySnapshotV
         damage_items: project.records.damage_items.map(row => ({ ...row, partStatus: null })),
       },
     })),
+    ...overrides,
+  };
+}
+
+/** 完整 v3 合成快照；保留 v1/v2 工厂及其原有语义。 */
+export function makeSnapshotV3Fixture(overrides: Partial<MobileReadonlySnapshotV3> = {}): MobileReadonlySnapshotV3 {
+  const v2 = makeSnapshotV2Fixture();
+  return {
+    ...v2,
+    schemaVersion: 3,
+    projects: v2.projects.map(project => ({ ...project, detail: { ...project.detail, projectNote: '合成项目备注' } })),
     ...overrides,
   };
 }

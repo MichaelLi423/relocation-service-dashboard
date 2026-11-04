@@ -107,7 +107,7 @@ function makeRuntime(dir: string, db: () => DatabaseSync, server: RecordingServe
 }
 
 describe('桌面重启恢复（tasks 4.7）', () => {
-  it.each([undefined, 1])('旧成功 schema=%s 同指纹仍补发一次 v2，重启后不重复', async oldVersion => {
+  it.each([undefined, 1, 2])('旧成功 schema=%s 同指纹仍补发一次 v3，重启后不重复', async oldVersion => {
     const dir = makeTempDir('mobile-readonly-upgrade-'); dirs.push(dir);
     const { db } = bootstrapDatabase({ dataDir: dir });
     try {
@@ -116,6 +116,10 @@ describe('桌面重启恢复（tasks 4.7）', () => {
       const runtimeA = makeRuntime(dir, () => db, server);
       await runtimeA.configure({ target: 'https://publish.example.com', token: 'token-1' });
       await runtimeA.setEnabled(true); runtimeA.stop();
+      if (oldVersion === 2) {
+        server.uploads[0].snapshot.schemaVersion = 2;
+        for (const project of server.uploads[0].snapshot.projects) delete project.detail?.projectNote;
+      }
       const file = join(dir, 'mobile-readonly-results.json');
       const old = JSON.parse(readFileSync(file, 'utf8'));
       if (oldVersion === undefined) delete old.lastSuccessfulSchemaVersion;
@@ -124,15 +128,15 @@ describe('桌面重启恢复（tasks 4.7）', () => {
       const runtimeB = makeRuntime(dir, () => db, server);
       await runtimeB.checkNow(); await runtimeB.checkNow(); runtimeB.stop();
       expect(server.uploads).toHaveLength(2);
-      expect(server.uploads[1].snapshot.schemaVersion).toBe(2);
-      expect(JSON.parse(readFileSync(file, 'utf8')).lastSuccessfulSchemaVersion).toBe(2);
+      expect(server.uploads[1].snapshot.schemaVersion).toBe(3);
+      expect(JSON.parse(readFileSync(file, 'utf8')).lastSuccessfulSchemaVersion).toBe(3);
       const runtimeC = makeRuntime(dir, () => db, server);
       await runtimeC.checkNow(); runtimeC.stop();
       expect(server.uploads).toHaveLength(2);
     } finally { closeDatabase(db); }
   });
 
-  it('旧服务拒绝 v2 不降级、失败不推进成功版本，停用不自动开启', async () => {
+  it('旧服务拒绝 v3 不降级、schema2 同指纹升级失败重试不推进成功版本，停用不自动开启', async () => {
     const dir = makeTempDir('mobile-readonly-upgrade-failed-'); dirs.push(dir);
     const { db } = bootstrapDatabase({ dataDir: dir });
     try {
@@ -143,7 +147,7 @@ describe('桌面重启恢复（tasks 4.7）', () => {
       await runtimeA.setEnabled(true); runtimeA.stop();
       const file = join(dir, 'mobile-readonly-results.json');
       const old = JSON.parse(readFileSync(file, 'utf8'));
-      delete old.lastSuccessfulSchemaVersion; writeFileSync(file, JSON.stringify(old));
+      old.lastSuccessfulSchemaVersion = 2; writeFileSync(file, JSON.stringify(old));
       const attempts: number[] = [];
       const remote = createRemote(server);
       const runtimeB = createMobileReadonlyPublishRuntime({
@@ -153,9 +157,9 @@ describe('桌面重启恢复（tasks 4.7）', () => {
         } }),
       });
       await runtimeB.checkNow(); await runtimeB.checkNow();
-      expect(attempts).toEqual([2, 2]);
+      expect(attempts).toEqual([3, 3]);
       const failed = JSON.parse(readFileSync(file, 'utf8'));
-      expect(failed.lastSuccessfulSchemaVersion).toBeNull();
+      expect(failed.lastSuccessfulSchemaVersion).toBe(2);
       expect(failed.lastSuccessfulFingerprint).toEqual(old.lastSuccessfulFingerprint);
       await runtimeB.setEnabled(false); runtimeB.stop();
       const runtimeC = makeRuntime(dir, () => db, server);
@@ -165,7 +169,7 @@ describe('桌面重启恢复（tasks 4.7）', () => {
     } finally { closeDatabase(db); }
   });
 
-  it('本地 v2 成功但远端 schema 未知或 v1，重启保守重发', async () => {
+  it('本地 v3 成功但远端 schema 未知或 v1/v2，重启保守重发', async () => {
     const dir = makeTempDir('mobile-readonly-remote-schema-'); dirs.push(dir);
     const { db } = bootstrapDatabase({ dataDir: dir });
     try {
@@ -174,7 +178,7 @@ describe('桌面重启恢复（tasks 4.7）', () => {
       const first = makeRuntime(dir, () => db, server);
       await first.configure({ target: 'https://publish.example.com', token: 'token-1' });
       await first.setEnabled(true); first.stop();
-      for (const version of [undefined, 1]) {
+      for (const version of [undefined, 1, 2]) {
         const remote = createRemote(server);
         const next = createMobileReadonlyPublishRuntime({
           storageDir: dir, db: () => db, clock: new FixedClock(FIXED_ISO), timer: systemMobileReadonlyTimer,
@@ -186,7 +190,7 @@ describe('桌面重启恢复（tasks 4.7）', () => {
         });
         await next.checkNow(); next.stop();
       }
-      expect(server.uploads).toHaveLength(3);
+      expect(server.uploads).toHaveLength(4);
     } finally { closeDatabase(db); }
   });
 

@@ -168,6 +168,16 @@ function ProjectDetail({ project }: ProjectDetailProps) {
           ['场地已确认', detail ? detail.siteConfirmed : undefined],
           ['已形成验收报告', detail ? detail.acceptanceReport : undefined],
         ]} />
+        <div style={{ marginTop: '8px' }}>
+          <span className="mr-caption" style={{ display: 'block', marginBottom: '4px' }}>项目备注</span>
+          {detail === undefined || detail.projectNote === undefined ? (
+            <span className="mr-caption">当前快照未提供</span>
+          ) : detail.projectNote === null || detail.projectNote === '' ? (
+            <span>未填写</span>
+          ) : (
+            <div className="mr-long-text" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{detail.projectNote}</div>
+          )}
+        </div>
       </section>
 
       {/* 分组 2: 执行日程与合同日期 */}
@@ -233,7 +243,7 @@ function ProjectDetail({ project }: ProjectDetailProps) {
           ) : detail.reminderNote === null || detail.reminderNote === '' ? (
             <span>未填写</span>
           ) : (
-            <div className="mr-long-text">{detail.reminderNote}</div>
+            <div className="mr-long-text" style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{detail.reminderNote}</div>
           )}
         </div>
       </section>

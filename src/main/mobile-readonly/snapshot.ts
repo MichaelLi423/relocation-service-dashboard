@@ -27,7 +27,7 @@ import {
   type MobileReadonlyOrderRecord,
   type MobileReadonlyProjectSummary,
   type MobileReadonlyRecordKind,
-  type MobileReadonlySnapshotV2,
+  type MobileReadonlySnapshotV3,
   type MobileReadonlyStageSummary,
 } from '../../shared/mobile-readonly';
 
@@ -69,15 +69,15 @@ interface CapturedResult {
   dataAsOf: string;
   contentGenerationId: string;
   businessRevision: number;
-  overview: MobileReadonlySnapshotV2['overview'];
-  projects: MobileReadonlySnapshotV2['projects'];
+  overview: MobileReadonlySnapshotV3['overview'];
+  projects: MobileReadonlySnapshotV3['projects'];
 }
 
 /**
- * 在单一同步一致事务内生成完整只读快照（schemaVersion=2）。
+ * 在单一同步一致事务内生成完整只读快照（schemaVersion=3）。
  * 事务提交后对最终候选执行封闭白名单校验，非法即抛 ValidationError。
  */
-export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshotOptions): MobileReadonlySnapshotV2 {
+export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshotOptions): MobileReadonlySnapshotV3 {
   const db = resolveDb(options.db);
   const clock = options.clock;
   const reader = new WorkbenchReadRepository(db, {
@@ -101,7 +101,7 @@ export function buildMobileReadonlySnapshot(options: BuildMobileReadonlySnapshot
     };
   });
 
-  const snapshot: MobileReadonlySnapshotV2 = {
+  const snapshot: MobileReadonlySnapshotV3 = {
     schemaVersion: MOBILE_READONLY_SCHEMA_VERSION,
     contentGenerationId: captured.contentGenerationId,
     businessRevision: captured.businessRevision,
@@ -134,9 +134,9 @@ function readUpcomingWindowDays(db: DatabaseSync): number {
   return new SqliteReminderSettingsRepository(db).getUpcomingWindowDays() ?? DEFAULT_UPCOMING_WINDOW_DAYS;
 }
 
-type ProjectV2 = MobileReadonlySnapshotV2['projects'][number];
-function collectAllProjects(reader: WorkbenchReadRepository, sectionPageSize: number | undefined): ProjectV2[] {
-  const projects: ProjectV2[] = [];
+type ProjectV3 = MobileReadonlySnapshotV3['projects'][number];
+function collectAllProjects(reader: WorkbenchReadRepository, sectionPageSize: number | undefined): ProjectV3[] {
+  const projects: ProjectV3[] = [];
   let cursor: string | null | undefined;
   do {
     const page = reader.projectPage({ cursor: cursor ?? undefined });
@@ -149,6 +149,7 @@ function collectAllProjects(reader: WorkbenchReadRepository, sectionPageSize: nu
       projects.push({
         ...mapProjectSummary(row),
         detail: {
+          projectNote: detail.projectNote,
           oldSiteContact: detail.oldSiteContact,
           newSiteContact: detail.newSiteContact,
           oldSiteAddress: detail.oldSiteAddress,
@@ -182,11 +183,11 @@ function collectProjectRecords(
   reader: WorkbenchReadRepository,
   projectId: string,
   sectionPageSize: number | undefined,
-): ProjectV2['records'] {
+): ProjectV3['records'] {
   const limit = sectionPageSize === undefined || !Number.isInteger(sectionPageSize) || sectionPageSize <= 0
     ? undefined
     : sectionPageSize;
-  const result: ProjectV2['records'] = {
+  const result: ProjectV3['records'] = {
     batches: [],
     instruments: [],
     activities: [],
@@ -218,7 +219,7 @@ function collectSectionRows(
 }
 
 function assignRecordRows(
-  records: ProjectV2['records'],
+  records: ProjectV3['records'],
   kind: MobileReadonlyRecordKind,
   rows: WorkbenchV2SectionRow[],
 ): void {
@@ -248,7 +249,7 @@ function assignRecordRows(
 
 // ---- 白名单映射（只挑字段；金额/日期复用主进程已格式化 DTO 字符串） ----
 
-function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlySnapshotV2['overview'] {
+function mapOverview(dto: WorkbenchV2OverviewDto): MobileReadonlySnapshotV3['overview'] {
   return {
     metrics: {
       totalProjects: dto.metrics.totalProjects,

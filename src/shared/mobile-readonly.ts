@@ -6,7 +6,7 @@ import type { ProjectStatus } from './ipc';
  * 本模块是桌面端/云端服务/手机只读入口三方共用的**纯 TS** 契约层：
  * - 不 import node 内建模块，不发起任何网络请求，不依赖领域/持久化模块；
  * - v1 保留原封闭字段白名单；v2 仅扩充明确授权的联系人、地址、提醒及业务事实，
- *   其他自由备注/原因仍禁止，任何表外/嵌套未知 key 一律非法；
+ *   v3 仅再授权项目详情 projectNote；其他自由备注/原因仍禁止，嵌套未知 key 一律非法；
  * - 金额字段一律为主单位**固定两位小数字符串**（源为分整数 BigInt 经 `formatCents` 输出，如
  *   `"1234.57"`/`"0.00"`/`"-12.34"`）。发布/手机链路禁止再次除以 100 或转 Number（`formatCents`
  *   自身的分→主单位格式化除外），本模块的校验也绝不以 Number 解析金额；
@@ -19,7 +19,7 @@ import type { ProjectStatus } from './ipc';
  */
 
 /** 当前快照格式版本（schemaVersion）。未知版本一律拒绝。 */
-export const MOBILE_READONLY_SCHEMA_VERSION = 2;
+export const MOBILE_READONLY_SCHEMA_VERSION = 3;
 
 /** 六类关联记录 kind（与 `WorkbenchV2SectionKind` 顺序一致；JSON 容器键含 `damage_items`）。 */
 export const MOBILE_READONLY_RECORD_KINDS = [
@@ -216,6 +216,8 @@ export interface MobileReadonlyProjectSummary {
 
 /** v2 授权详情；null 表示源未填写，不包含任何其他自由备注/原因。 */
 export interface MobileReadonlyProjectDetailFields {
+  /** v3 项目备注；旧 v2 缺失，null 表示源未填写。 */
+  projectNote?: string | null;
   oldSiteContact: string | null;
   newSiteContact: string | null;
   oldSiteAddress: string | null;
@@ -238,7 +240,7 @@ export interface MobileReadonlyProjectDetailFields {
   reminderNote: string | null;
 }
 
-/** 快照内的项目（v1 无 detail，v2 必填；全部六类关联记录）。 */
+/** 快照内的项目（v1 无 detail，v2/v3 必填；全部六类关联记录）。 */
 export interface MobileReadonlyProject extends MobileReadonlyProjectSummary {
   detail?: MobileReadonlyProjectDetailFields;
   records: MobileReadonlyProjectRecords;
@@ -259,17 +261,25 @@ export interface MobileReadonlySnapshot {
   projects: readonly MobileReadonlyProject[];
 }
 
-/** 桌面只生成 v2；兼容读取类型的可选字段在生成侧全部必填。 */
+/** 旧 v2 生成类型：保留原白名单，不包含项目备注。 */
 export type MobileReadonlySnapshotV2 = Omit<MobileReadonlySnapshot, 'schemaVersion' | 'overview' | 'projects'> & {
   schemaVersion: 2;
   overview: Omit<MobileReadonlyOverview, 'metrics'> & { metrics: Required<MobileReadonlyOverviewMetrics> };
   projects: readonly (Required<MobileReadonlyProjectSummary> & {
-    detail: MobileReadonlyProjectDetailFields;
+    detail: Omit<MobileReadonlyProjectDetailFields, 'projectNote'>;
     records: Omit<MobileReadonlyProjectRecords, 'instruments' | 'orders' | 'damage_items'> & {
       instruments: readonly Required<MobileReadonlyInstrumentRecord>[];
       orders: readonly Required<MobileReadonlyOrderRecord>[];
       damage_items: readonly Required<MobileReadonlyDamageItemRecord>[];
     };
+  })[];
+};
+
+/** 桌面只生成 v3；项目备注键必填，null 表示源未填写。 */
+export type MobileReadonlySnapshotV3 = Omit<MobileReadonlySnapshotV2, 'schemaVersion' | 'projects'> & {
+  schemaVersion: 3;
+  projects: readonly (Omit<MobileReadonlySnapshotV2['projects'][number], 'detail'> & {
+    detail: Required<MobileReadonlyProjectDetailFields>;
   })[];
 };
 
@@ -760,7 +770,7 @@ const RECORD_V2_VALUES: Partial<Record<MobileReadonlyRecordKind, Record<string, 
   orders: { customerName: { kind: 'string' } },
   damage_items: { partStatus: { kind: 'nullableEnum', values: MOBILE_READONLY_PART_STATUSES } },
 };
-const DETAIL_VALUES: Record<keyof MobileReadonlyProjectDetailFields, ValueCheck> = {
+const DETAIL_VALUES: Record<Exclude<keyof MobileReadonlyProjectDetailFields, 'projectNote'>, ValueCheck> = {
   oldSiteContact: { kind: 'nullableString' }, newSiteContact: { kind: 'nullableString' },
   oldSiteAddress: { kind: 'nullableString' }, newSiteAddress: { kind: 'nullableString' },
   temporaryStorageAddress: { kind: 'nullableString' }, isTemporaryStorage: { kind: 'nullableBoolean' },
@@ -773,6 +783,7 @@ const DETAIL_VALUES: Record<keyof MobileReadonlyProjectDetailFields, ValueCheck>
   reminderNote: { kind: 'nullableString' },
 };
 const DETAIL_SPEC: ObjectSpec = { keys: Object.keys(DETAIL_VALUES), values: DETAIL_VALUES };
+const DETAIL_V3_SPEC = extendSpec(DETAIL_SPEC, { projectNote: { kind: 'nullableString' } });
 const TAG_GROUP_SPEC: ObjectSpec = {
   keys: ['groupId', 'groupName', 'tagIds', 'tagNames'],
   values: { groupId: { kind: 'nonEmptyString' }, groupName: { kind: 'string' } },
@@ -793,7 +804,7 @@ function checkRecordKindList(
     issue(issues, path, 'INVALID_TYPE', `「${kind}」应为数组`);
     return;
   }
-  const spec = version === 2 ? extendSpec(RECORD_KIND_CHECK[kind], RECORD_V2_VALUES[kind] ?? {}) : RECORD_KIND_CHECK[kind];
+  const spec = version === 2 || version === 3 ? extendSpec(RECORD_KIND_CHECK[kind], RECORD_V2_VALUES[kind] ?? {}) : RECORD_KIND_CHECK[kind];
   value.forEach((row, index) => {
     checkObject(issues, `${path}[${index}]`, row, spec);
   });
@@ -853,15 +864,15 @@ function checkProjects(issues: MobileReadonlySnapshotIssue[], value: unknown, ve
   }
   value.forEach((project, index) => {
     const path = `projects[${index}]`;
-    const spec = version === 2 ? extendSpec(PROJECT_SPEC, {
+    const spec = version === 2 || version === 3 ? extendSpec(PROJECT_SPEC, {
       reminderAt: { kind: 'nullableDate' },
       reminderDueClass: { kind: 'nullableEnum', values: ['upcoming', 'today', 'overdue'] },
     }, ['groupedTags', 'detail']) : PROJECT_SPEC;
     checkObject(issues, path, project, spec, (issues, path, obj) => {
       checkObject(issues, childPath(path, 'records'), obj.records, PROJECT_RECORDS_SPEC,
         (issues, path, records) => checkProjectRecords(issues, path, records, version));
-      if (version === 2) {
-        checkObject(issues, childPath(path, 'detail'), obj.detail, DETAIL_SPEC);
+      if (version === 2 || version === 3) {
+        checkObject(issues, childPath(path, 'detail'), obj.detail, version === 3 ? DETAIL_V3_SPEC : DETAIL_SPEC);
         if (!Array.isArray(obj.groupedTags)) {
           issue(issues, childPath(path, 'groupedTags'), 'INVALID_TYPE', '应为数组');
         } else obj.groupedTags.forEach((tag, index) => {
@@ -884,7 +895,7 @@ function checkOverview(issues: MobileReadonlySnapshotIssue[], value: unknown, ve
     return;
   }
   checkObject(issues, 'overview', value, OVERVIEW_SPEC, (issues, path, obj) => {
-    checkObject(issues, childPath(path, 'metrics'), obj.metrics, version === 2 ? METRICS_V2_SPEC : METRICS_SPEC);
+    checkObject(issues, childPath(path, 'metrics'), obj.metrics, version === 2 || version === 3 ? METRICS_V2_SPEC : METRICS_SPEC);
     if (!Array.isArray(obj.stages)) {
       issue(issues, childPath(path, 'stages'), 'INVALID_TYPE', '「overview.stages」应为数组');
       return;
@@ -913,14 +924,14 @@ export function validateMobileReadonlySnapshot(value: unknown): MobileReadonlySn
     return { ok: false, issues };
   }
   checkObject(issues, '', value, SNAPSHOT_TOP_SPEC, (issues, path, obj) => {
-    if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
+    if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2 && obj.schemaVersion !== 3) {
       // 报错信息不得对不可信值做字符串强转（schemaVersion 可能来自 JSON.parse，
       // 对象/toString 缺失会抛 TypeError）；使用固定安全文案。
       issue(
         issues,
         childPath(path, 'schemaVersion'),
         'INVALID_VALUE',
-        '不支持的快照 schemaVersion；当前仅支持版本 1 / 2',
+        '不支持的快照 schemaVersion；当前仅支持版本 1 / 2 / 3',
       );
     }
   });

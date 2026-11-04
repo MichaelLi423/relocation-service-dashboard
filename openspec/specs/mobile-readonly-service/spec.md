@@ -33,7 +33,7 @@
 
 ### Requirement: 完整快照校验后原子替换
 
-服务 SHALL 在接收上传时先完整校验**业务快照层（`snapshot`）**，按 `schemaVersion` 严格分支：v1 仅接受[归档 design.md](../../changes/archive/2026-09-12-add-mobile-readonly-publication/design.md#封闭字段白名单)原表，v2 接受原表加[v2 现行扩展表](../../../docs/verification/mobile-readonly-detail-expansion-2026-10-27.md#v2-现行扩展表)，其他版本拒绝。各版本均 SHALL 封闭校验全部嵌套 key、必填字段、类型、金额与日期及捕获指纹/`dataAsOf`；v2 新增字段缺失非法，可空值 `null` 为未填写。v1 缺少扩展字段 SHALL 表示当前快照未提供，SHALL NOT 从历史 v2 合并或补成已填写/未填写。`protocol` 层（`publicationId`/`expectedCurrentVersion`）SHALL 单独校验，不参与业务 unknown-key 判定。校验通过后 SHALL 一次原子替换完整包络；替换或校验失败 SHALL 保留上一份完整包络可读并返回明确错误，临时候选（含重启遗留）SHALL NOT 成为可读版本。
+服务 SHALL 在接收上传时先完整校验**业务快照层（`snapshot`）**，按 `schemaVersion` 严格分支：v1 仅接受[归档 design.md](../../changes/archive/2026-09-12-add-mobile-readonly-publication/design.md#封闭字段白名单)原表，v2 接受原表加[v2 扩展表](../../../docs/verification/mobile-readonly-detail-expansion-2026-10-27.md#v2-现行扩展表)，v3 在 v2 基础上增加[v3 项目备注字段](../../../docs/verification/mobile-project-note-release-2026-11-04.md#v3-封闭字段表)，其他版本拒绝。各版本均 SHALL 封闭校验全部嵌套 key、必填字段、类型、金额与日期及捕获指纹/`dataAsOf`；相应版本新增字段缺失非法，可空值 `null` 为未填写。旧版本缺少扩展字段 SHALL 表示当前快照未提供，SHALL NOT 从历史较新快照合并或补成已填写/未填写。`protocol` 层（`publicationId`/`expectedCurrentVersion`）SHALL 单独校验，不参与业务 unknown-key 判定。校验通过后 SHALL 一次原子替换完整包络；替换或校验失败 SHALL 保留上一份完整包络可读并返回明确错误，临时候选（含重启遗留）SHALL NOT 成为可读版本。
 
 #### Scenario: v1 与 v2 分版本封闭校验
 
@@ -44,10 +44,17 @@
 
 #### Scenario: 服务先升级且不自动降级
 
-- **GIVEN** 桌面即将开始生成 schemaVersion 2
+- **GIVEN** 桌面即将开始生成 schemaVersion 3
 - **WHEN** 安排升级或回滚
-- **THEN** SHALL 先部署支持 v1/v2 的新服务，再升级桌面；旧服务拒绝 v2，桌面不降级成 v1 重传
-- **AND** 回滚旧服务不保证可读取已落盘 v2；字段同步授权不构成生产部署授权
+- **THEN** SHALL 先部署支持 v1/v2/v3 的新服务，再升级桌面；旧服务拒绝 v3，桌面不降级成旧版本重传
+- **AND** 回滚旧服务不保证可读取已落盘 v3；生产部署与回滚 SHALL 按用户明确授权执行
+
+#### Scenario: 项目备注按 v3 白名单发布
+
+- **GIVEN** 新服务兼容 schemaVersion 1、2、3
+- **WHEN** 发布带项目备注字段的 v3 快照或不带该字段的旧快照
+- **THEN** v3 要求 `projects[].detail.projectNote` 必填且为字符串或 null；v1/v2 携带该字段应被拒绝
+- **AND** 备注仅在鉴权后的项目详情返回，项目列表、非业务元数据和未授权响应不泄漏备注；旧快照替换后不保留此前备注
 
 #### Scenario: 有效快照原子替换当前版本
 
@@ -163,6 +170,8 @@
 - **AND** 运行日志不包含业务记录内容、上传凭证、Basic Auth 密码或凭证明文
 
 ### Requirement: 有界只读查询端点且全部响应携带版本
+
+项目备注 SHALL 与提醒备注同属 detail-only 字段，仅进入鉴权后的项目详情，SHALL NOT 进入项目列表或非业务元数据。
 
 服务 SHALL 向手机提供有界查询端点（概览、项目搜索/筛选/分页、项目详情、按类分页的关联记录），在服务端执行搜索、筛选与分页，SHALL NOT 返回整份快照 JSON。列表 SHALL 明确投影列表字段，SHALL NOT 包含 detail-only 字段（包括联系人/详细地址/暂存/暂定仪器/详情日期及提醒备注）或 records；详情 SHALL 返回授权详情并追加 `recordCounts`，从当前项目六类完整记录数组长度计算，不依赖当前页。分页 SHALL 追加 `total`：项目列表为搜索/筛选后的总数，关联记录为该项目整类记录总数，SHALL NOT 以当前页长度冒充。所有业务响应 SHALL 携带当前发布版本及 `dataAsOf`/`publishedAt`；元数据 SHALL 提供 `snapshotSchemaVersion`（尚未发布为 null，旧服务可缺失），其不属于业务字段白名单。版本不同 SHALL 通知手机丢弃旧结果重载，服务 SHALL NOT 保留历史版本。手机仅展示仪器/开单/掉票/损坏维修四类，快照内批次/到访保留既有契约但不恢复手机入口。
 

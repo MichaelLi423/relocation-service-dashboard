@@ -138,6 +138,7 @@ describe('独立手机只读视图扩展测试（v2 现行扩展与边界）', (
       stages: [],
     };
     const detailFields: MobileReadonlyProjectDetailFields = {
+      projectNote: '重点项目执行备注：\n第一行现场勘验完毕\n第二行包含特殊字符 <script>console.log("xss")</script> & <b>粗体标签</b>\n第三行持续跟进中',
       oldSiteContact: '张三 13900000000',
       newSiteContact: null,
       oldSiteAddress: '上海市浦东新区张江高科南路 100 号 3 幢 201 室',
@@ -230,6 +231,12 @@ describe('独立手机只读视图扩展测试（v2 现行扩展与边界）', (
     expect(siteConfirmedDt.nextElementSibling?.textContent).toBe('否');
     const acceptanceReportDt = within(basicSec).getByText('已形成验收报告', { selector: 'dt' });
     expect(acceptanceReportDt.nextElementSibling?.textContent).toBe('否');
+    const projectNoteLabel = within(basicSec).getByText('项目备注');
+    expect(projectNoteLabel).toBeTruthy();
+    expect(within(basicSec).getByText(/重点项目执行备注：/)).toBeTruthy();
+    expect(within(basicSec).getByText(/第一行现场勘验完毕/)).toBeTruthy();
+    expect(within(basicSec).getByText(/<script>console.log\("xss"\)<\/script> & <b>粗体标签<\/b>/)).toBeTruthy();
+    expect(document.querySelector('b')).toBeNull();
 
     // 日程与合同（术语：计划装机/实际装机完成）
     const datesSec = screen.getByLabelText('执行日程与合同日期');
@@ -327,6 +334,8 @@ describe('独立手机只读视图扩展测试（v2 现行扩展与边界）', (
     const basicSec = screen.getByLabelText('基本信息');
     const siteConfirmedDt = within(basicSec).getByText('场地已确认', { selector: 'dt' });
     expect(siteConfirmedDt.nextElementSibling?.textContent).toBe('当前快照未提供');
+    const projectNoteLabel = within(basicSec).getByText('项目备注');
+    expect(projectNoteLabel.nextElementSibling?.textContent).toBe('当前快照未提供');
 
     const relocSec = screen.getByLabelText('搬出搬入联系与地址');
     const oldContactDt = within(relocSec).getByText('搬出联系人', { selector: 'dt' });
@@ -445,5 +454,240 @@ describe('独立手机只读视图扩展测试（v2 现行扩展与边界）', (
       const partStatusDt = await within(recordSec).findByText('备件状态', { selector: 'dt' });
       expect(partStatusDt.nextElementSibling?.textContent).toBe(expectedLabel);
     }
+  });
+
+  it('项目备注 + 提醒（日期与备注） + 双联系人双地址同时可见，且长多行安全转义保留换行不注入 HTML', async () => {
+    const overview: MobileReadonlyOverview = {
+      metrics: { totalProjects: 1, activeProjects: 1, pendingAmount: '0.00', pendingAcceptance: 0, pendingInvoice: 0 },
+      stages: [],
+    };
+    const detailFields: MobileReadonlyProjectDetailFields = {
+      projectNote: '重点项目备注：\n第一行搬迁前置条件\n第二行安全警示 <img src=x onerror=alert("hacked") />\n第三行结束',
+      oldSiteContact: '搬出方-张主管 13900001111',
+      newSiteContact: '搬入方-李经理 13800002222',
+      oldSiteAddress: '北京市海淀区中关村南大街 1 号科研楼 A 座 101',
+      newSiteAddress: '北京市昌平区生命科学园生命路 2 号 B 栋 202',
+      temporaryStorageAddress: null,
+      isTemporaryStorage: false,
+      contractStartDate: '2026-08-01',
+      contractEndDate: '2026-10-01',
+      planTransportAt: '2026-08-10',
+      plannedInstallAt: '2026-08-12',
+      actualInstallDoneAt: null,
+      acceptanceReportDate: null,
+      cancelledAt: null,
+      siteConfirmed: true,
+      acceptanceReport: false,
+      temporaryInstrumentCount: null,
+      temporaryInstrumentName: null,
+      temporaryInstrumentModel: null,
+      temporaryHasUps: null,
+      reminderNote: '提醒备注：\n提前申请出入证并报备车牌号',
+    };
+    const project: MobileReadonlyProjectSummary & { detail: MobileReadonlyProjectDetailFields } = {
+      id: 'proj-simultaneous-01',
+      tempNo: 'TP-SIM-01',
+      ecc: 'ECC-SIM-01',
+      customerName: '北京前沿生命科学研究所',
+      status: 'executing',
+      region: 'North',
+      regionNeedsAdjustment: false,
+      entryAt: '2026-08-01',
+      planVisitAt: '2026-08-10',
+      finalAmount: '8888.00',
+      invoicedAmount: '0.00',
+      contractAmount: '10000.00',
+      formallyEntered: true,
+      preEntryExecution: false,
+      reminderAt: '2026-08-15',
+      reminderDueClass: 'upcoming',
+      groupedTags: [],
+      detail: detailFields,
+    };
+
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input), 'https://synthetic.invalid');
+      if (url.pathname === '/api/overview') return response({ overview });
+      if (url.pathname === '/api/projects') return response({ total: 1, items: [project], nextCursor: null });
+      if (url.pathname === '/api/project') return response({ project });
+      if (url.pathname === '/api/records') return response({ kind: 'instruments', total: 0, items: [], nextCursor: null });
+      throw new Error(`Unexpected url: ${url.pathname}`);
+    });
+
+    const { container } = render(<MobileReadonlyApp controller={new MobileReadonlyController({ ...browserEnvironment(), isOnline: () => true, fetch: fetcher })} />);
+    fireEvent.click(await screen.findByText('北京前沿生命科学研究所'));
+    await screen.findByRole('heading', { name: '项目详情' });
+
+    // 1. 项目备注可见
+    const basicSec = screen.getByLabelText('基本信息');
+    expect(within(basicSec).getByText('项目备注')).toBeTruthy();
+    expect(within(basicSec).getByText(/重点项目备注：/)).toBeTruthy();
+    expect(within(basicSec).getByText(/第一行搬迁前置条件/)).toBeTruthy();
+    expect(within(basicSec).getByText(/第二行安全警示 <img src=x onerror=alert\("hacked"\) \/>/)).toBeTruthy();
+    expect(within(basicSec).getByText(/第三行结束/)).toBeTruthy();
+
+    // 安全性验证：HTML 标签未被注入为 DOM 节点
+    expect(container.querySelector('img')).toBeNull();
+
+    // 2. 双联系人、双地址同时可见
+    const relocSec = screen.getByLabelText('搬出搬入联系与地址');
+    expect(within(relocSec).getByText('搬出方-张主管 13900001111')).toBeTruthy();
+    expect(within(relocSec).getByText('搬入方-李经理 13800002222')).toBeTruthy();
+    expect(within(relocSec).getByText('北京市海淀区中关村南大街 1 号科研楼 A 座 101')).toBeTruthy();
+    expect(within(relocSec).getByText('北京市昌平区生命科学园生命路 2 号 B 栋 202')).toBeTruthy();
+
+    // 3. 提醒日期与提醒备注同时可见
+    const reminderSec = screen.getByLabelText('提醒与分类标签');
+    expect(within(reminderSec).getByText('2026-08-15')).toBeTruthy();
+    expect(within(reminderSec).getByText('即将到期（快照时）')).toBeTruthy();
+    expect(within(reminderSec).getByText(/提醒备注：/)).toBeTruthy();
+    expect(within(reminderSec).getByText(/提前申请出入证并报备车牌号/)).toBeTruthy();
+  });
+
+  it('项目备注为 null 或空串时明确展示“未填写”', async () => {
+    for (const noteValue of [null, '']) {
+      cleanup();
+      const overview: MobileReadonlyOverview = {
+        metrics: { totalProjects: 1, activeProjects: 1, pendingAmount: '0.00', pendingAcceptance: 0, pendingInvoice: 0 },
+        stages: [],
+      };
+      const detailFields: MobileReadonlyProjectDetailFields = {
+        projectNote: noteValue,
+        oldSiteContact: '联系人A',
+        newSiteContact: '联系人B',
+        oldSiteAddress: '地址A',
+        newSiteAddress: '地址B',
+        temporaryStorageAddress: null,
+        isTemporaryStorage: false,
+        contractStartDate: null,
+        contractEndDate: null,
+        planTransportAt: null,
+        plannedInstallAt: null,
+        actualInstallDoneAt: null,
+        acceptanceReportDate: null,
+        cancelledAt: null,
+        siteConfirmed: false,
+        acceptanceReport: false,
+        temporaryInstrumentCount: null,
+        temporaryInstrumentName: null,
+        temporaryInstrumentModel: null,
+        temporaryHasUps: null,
+        reminderNote: null,
+      };
+      const project: MobileReadonlyProjectSummary & { detail: MobileReadonlyProjectDetailFields } = {
+        id: `proj-note-${noteValue === null ? 'null' : 'empty'}`,
+        tempNo: 'TP-NOTE-01',
+        ecc: null,
+        customerName: '空备注测试客户',
+        status: 'pending_execution',
+        region: null,
+        regionNeedsAdjustment: false,
+        entryAt: null,
+        planVisitAt: null,
+        finalAmount: null,
+        invoicedAmount: '0.00',
+        contractAmount: null,
+        formallyEntered: true,
+        preEntryExecution: false,
+        detail: detailFields,
+      };
+
+      const fetcher = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input), 'https://synthetic.invalid');
+        if (url.pathname === '/api/overview') return response({ overview });
+        if (url.pathname === '/api/projects') return response({ total: 1, items: [project], nextCursor: null });
+        if (url.pathname === '/api/project') return response({ project });
+        if (url.pathname === '/api/records') return response({ kind: 'instruments', total: 0, items: [], nextCursor: null });
+        throw new Error(`Unexpected url: ${url.pathname}`);
+      });
+
+      render(<MobileReadonlyApp controller={new MobileReadonlyController({ ...browserEnvironment(), isOnline: () => true, fetch: fetcher })} />);
+      fireEvent.click(await screen.findByText('空备注测试客户'));
+      await screen.findByRole('heading', { name: '项目详情' });
+
+      const basicSec = screen.getByLabelText('基本信息');
+      const noteLabel = within(basicSec).getByText('项目备注');
+      expect(noteLabel.nextElementSibling?.textContent).toBe('未填写');
+    }
+  });
+
+  it('兼容 legacy v2 快照（缺失 projectNote 即 undefined），友好提示“当前快照未提供”，不影响地址、联系人与提醒正常展示', async () => {
+    const overview: MobileReadonlyOverview = {
+      metrics: { totalProjects: 1, activeProjects: 1, pendingAmount: '0.00', pendingAcceptance: 0, pendingInvoice: 0 },
+      stages: [],
+    };
+    // 模拟旧 v2 detail：无 projectNote 属性
+    const legacyV2Detail: MobileReadonlyProjectDetailFields = {
+      oldSiteContact: '旧v2搬出联系人 021-12345678',
+      newSiteContact: '旧v2搬入联系人 010-87654321',
+      oldSiteAddress: '上海市徐汇区宜山路 100 号',
+      newSiteAddress: '北京市朝阳区酒仙桥路 200 号',
+      temporaryStorageAddress: null,
+      isTemporaryStorage: false,
+      contractStartDate: '2026-06-01',
+      contractEndDate: '2026-12-31',
+      planTransportAt: null,
+      plannedInstallAt: null,
+      actualInstallDoneAt: null,
+      acceptanceReportDate: null,
+      cancelledAt: null,
+      siteConfirmed: true,
+      acceptanceReport: true,
+      temporaryInstrumentCount: null,
+      temporaryInstrumentName: null,
+      temporaryInstrumentModel: null,
+      temporaryHasUps: null,
+      reminderNote: '旧v2提醒备注依然完好',
+    };
+    const project: MobileReadonlyProjectSummary & { detail: MobileReadonlyProjectDetailFields } = {
+      id: 'proj-legacy-v2',
+      tempNo: 'TP-V2-01',
+      ecc: 'ECC-V2-01',
+      customerName: '历史v2客户',
+      status: 'executing',
+      region: 'East',
+      regionNeedsAdjustment: false,
+      entryAt: '2026-06-01',
+      planVisitAt: '2026-06-10',
+      finalAmount: '6666.00',
+      invoicedAmount: '0.00',
+      contractAmount: '8888.00',
+      formallyEntered: true,
+      preEntryExecution: false,
+      reminderAt: '2026-06-15',
+      reminderDueClass: 'overdue',
+      detail: legacyV2Detail,
+    };
+
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input), 'https://synthetic.invalid');
+      if (url.pathname === '/api/overview') return response({ overview }, metadataV2);
+      if (url.pathname === '/api/projects') return response({ total: 1, items: [project], nextCursor: null }, metadataV2);
+      if (url.pathname === '/api/project') return response({ project }, metadataV2);
+      if (url.pathname === '/api/records') return response({ kind: 'instruments', total: 0, items: [], nextCursor: null }, metadataV2);
+      throw new Error(`Unexpected url: ${url.pathname}`);
+    });
+
+    render(<MobileReadonlyApp controller={new MobileReadonlyController({ ...browserEnvironment(), isOnline: () => true, fetch: fetcher })} />);
+    fireEvent.click(await screen.findByText('历史v2客户'));
+    await screen.findByRole('heading', { name: '项目详情' });
+
+    // 项目备注缺失 -> 友好展示“当前快照未提供”
+    const basicSec = screen.getByLabelText('基本信息');
+    const noteLabel = within(basicSec).getByText('项目备注');
+    expect(noteLabel.nextElementSibling?.textContent).toBe('当前快照未提供');
+
+    // 搬出搬入联系人与地址不受任何影响
+    const relocSec = screen.getByLabelText('搬出搬入联系与地址');
+    expect(within(relocSec).getByText('旧v2搬出联系人 021-12345678')).toBeTruthy();
+    expect(within(relocSec).getByText('旧v2搬入联系人 010-87654321')).toBeTruthy();
+    expect(within(relocSec).getByText('上海市徐汇区宜山路 100 号')).toBeTruthy();
+    expect(within(relocSec).getByText('北京市朝阳区酒仙桥路 200 号')).toBeTruthy();
+
+    // 提醒日期与提醒备注不受任何影响
+    const reminderSec = screen.getByLabelText('提醒与分类标签');
+    expect(within(reminderSec).getByText('2026-06-15')).toBeTruthy();
+    expect(within(reminderSec).getByText('已逾期（快照时）')).toBeTruthy();
+    expect(within(reminderSec).getByText('旧v2提醒备注依然完好')).toBeTruthy();
   });
 });

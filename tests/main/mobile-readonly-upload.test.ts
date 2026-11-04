@@ -24,7 +24,7 @@ const TARGET = 'https://publish.example.com';
 const TOKEN = 'secret-token';
 
 describe('schema 元数据兼容解析', () => {
-  it.each([undefined, null, 1, 2])('兼容 snapshotSchemaVersion=%s，不把旧服务未知转成 null', async version => {
+  it.each([undefined, null, 1, 2, 3])('兼容 snapshotSchemaVersion=%s，不把旧服务未知转成 null', async version => {
     const metadata = {
       ...metaBody({ published: true, currentVersion: 1, publicationId: 'p' }),
       ...(version !== undefined ? { snapshotSchemaVersion: version } : {}),

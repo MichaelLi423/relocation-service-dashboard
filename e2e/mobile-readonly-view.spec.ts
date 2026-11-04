@@ -36,14 +36,14 @@ function buildViewSnapshot() {
     syntheticBuilder.buildSyntheticSnapshot({
       projectCount: 45,
       firstProjectRecords: 25,
-      schemaVersion: 2,
+      schemaVersion: 3,
     }),
   );
   const projects = base.projects.slice();
   const last = projects[44]!;
   projects[44] = { ...last, customerName: LONG_CUSTOMER_NAME };
 
-  // 为首个项目注入丰富且真实覆盖的 v2 扩展字段
+  // 为首个项目注入 v2 联系/提醒字段与 v3 项目备注
   const p0 = projects[0]!;
   p0.finalAmount = '900719925474099312345678901.23';
   p0.contractAmount = '5000000.00';
@@ -55,6 +55,7 @@ function buildViewSnapshot() {
     { groupId: 'g2', groupName: '搬迁等级', tagIds: ['t2'], tagNames: ['一级重点管控'] },
   ];
   p0.detail = {
+    projectNote: '重点项目执行备注：\n1. 涉及精密仪器搬迁，需防震气垫车；\n2. 提前与现场安全员对接动火/用电规范。',
     oldSiteContact: '张主任 13900001111 / 李助理 021-50800000',
     newSiteContact: '王经理 13800002222',
     oldSiteAddress: '上海市浦东新区张江高科祖冲之东路 888 号张江生物港 2 号楼 301 实验室\n（近 2 号门货梯口）',
@@ -363,7 +364,7 @@ for (const width of [360, 390]) {
         await expect(baseInfo).toContainText('synthetic-project-00');
         await expect(baseInfo).toContainText('合成客户-00');
 
-        // v2 扩展字段与分组内容实测断言
+        // v2/v3 扩展字段与分组内容实测断言
         const nav = page.getByLabel('详情分组快速导航');
         await expect(nav.getByRole('link', { name: '基本信息' })).toBeVisible();
         await expect(nav.getByRole('link', { name: '日程与合同' })).toBeVisible();
@@ -373,9 +374,12 @@ for (const width of [360, 390]) {
         await expect(nav.getByRole('link', { name: '金额与结算' })).toBeVisible();
         await expect(nav.getByRole('link', { name: '关联记录' })).toBeVisible();
 
-        // 基本信息：false 与场地已确认/已形成验收报告
+        // 基本信息：false 与场地已确认/已形成验收报告 以及 项目备注
         await expect(baseInfo.getByText('场地已确认', { exact: true })).toBeVisible();
         await expect(baseInfo.getByText('已形成验收报告', { exact: true })).toBeVisible();
+        await expect(baseInfo.getByText('项目备注', { exact: true })).toBeVisible();
+        await expect(baseInfo).toContainText('重点项目执行备注');
+        await expect(baseInfo).toContainText('涉及精密仪器搬迁，需防震气垫车');
 
         // 执行日程与合同日期：计划装机/实际装机完成
         const datesSection = page.getByLabel('执行日程与合同日期');
@@ -487,6 +491,9 @@ test('旧 v1 兼容快照在浏览器中缺少字段明确显示"当前快照未
       const baseInfo = page.getByLabel('项目基础信息');
       const siteConfirmedDt = baseInfo.locator('dt:has-text("场地已确认")');
       await expect(siteConfirmedDt.locator('xpath=following-sibling::dd')).toHaveText('当前快照未提供');
+      const projectNoteBlock = baseInfo.locator('span.mr-caption:has-text("项目备注")');
+      await expect(projectNoteBlock).toBeVisible();
+      await expect(projectNoteBlock.locator('xpath=following-sibling::span')).toHaveText('当前快照未提供');
 
       const relocSection = page.getByLabel('搬出搬入联系与地址');
       const oldContactDt = relocSection.locator('dt:has-text("搬出联系人")');

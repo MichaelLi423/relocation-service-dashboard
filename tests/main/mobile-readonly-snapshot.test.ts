@@ -131,7 +131,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
     }
   });
 
-  it('空库生成合法空集合快照（D10：schemaVersion=2，空项目，指标零值）', () => {
+  it('空库生成合法空集合快照（D10：schemaVersion=3，空项目，指标零值）', () => {
     const { db, close } = setupDb();
     try {
       const snapshot = buildWith(db);
@@ -147,7 +147,7 @@ describe('一致快照遍历全部项目（tasks 3.1）', () => {
         reminderToday: 0,
         openRepairProjects: 0,
       });
-      expect(snapshot.schemaVersion).toBe(2);
+      expect(snapshot.schemaVersion).toBe(3);
       expect(snapshot.dataAsOf).toBe(FIXED_ISO);
       expect(snapshot.contentGenerationId.length).toBeGreaterThan(0);
       expect(snapshot.businessRevision).toBeGreaterThanOrEqual(0);

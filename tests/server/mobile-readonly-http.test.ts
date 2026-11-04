@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MobileReadonlyPublishResult } from '../../src/shared/mobile-readonly';
-import { makeEmptySnapshotFixture, makeSnapshotFixture, makeSnapshotV2Fixture, mutateFirstRowOfKind } from '../helpers/mobile-readonly-fixtures';
+import { makeEmptySnapshotFixture, makeSnapshotFixture, makeSnapshotV2Fixture, makeSnapshotV3Fixture, mutateFirstRowOfKind } from '../helpers/mobile-readonly-fixtures';
 import {
   TEST_UPLOAD_TOKEN,
   TEST_VIEWER_USERNAME,
@@ -50,24 +50,54 @@ function uploadPayload(publicationId: string, expectedCurrentVersion: number, sn
 }
 
 describe('no-store 与静态页/资产（7.5）', () => {
-  it('v2 发布元数据报告实际 schema，Basic Auth 详情可读但列表无联系人，非法嵌套拒绝且 no-store', async () => {
+  it('服务拒绝 v1/v2 夹带项目备注及 v3 缺键，接受 v3 null，失败不改变已发布内容', async () => {
+    const service = await startFresh();
+    const valid = makeSnapshotV3Fixture();
+    valid.projects[0].detail.projectNote = null;
+    expect((await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('v3-null', 0, valid), TEST_UPLOAD_TOKEN))).status).toBe(200);
+    const currentFile = join(service.dataDir, 'snapshots', 'current.json');
+    const accepted = readFileSync(currentFile);
+    const v1 = makeSnapshotFixture();
+    (v1.projects[0] as any).projectNote = '禁止文本哨兵';
+    const v1Nested = makeSnapshotFixture();
+    (v1Nested.projects[0] as any).detail = { projectNote: '禁止文本哨兵' };
+    const v2 = makeSnapshotV2Fixture();
+    (v2.projects[0].detail as any).projectNote = '禁止文本哨兵';
+    const missing = makeSnapshotV3Fixture();
+    delete (missing.projects[0].detail as any).projectNote;
+    const nested = makeSnapshotV3Fixture();
+    (nested.projects[0].detail as any).repairNote = '禁止文本哨兵';
+    for (const snapshot of [v1, v1Nested, v2, missing, nested]) {
+      const result = await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('invalid-note', 1, snapshot), TEST_UPLOAD_TOKEN));
+      expect(result.status).toBe(422);
+      expect(readFileSync(currentFile)).toEqual(accepted);
+    }
+  });
+
+  it.each([2, 3])('v%s 发布元数据报告实际 schema，Basic Auth 详情可读但列表无详情，非法嵌套拒绝且 no-store', async version => {
     const service = await startFresh();
     const meta = await doFetch(service.baseUrl, '/api/meta', { headers: { Authorization: bearerHeader() } });
     expect((await meta.json() as any).snapshotSchemaVersion).toBeNull();
-    const snapshot = makeSnapshotV2Fixture();
+    const snapshot = version === 2 ? makeSnapshotV2Fixture() : makeSnapshotV3Fixture();
     const publish = await doFetch(service.baseUrl, '/api/publish', uploadInit(uploadPayload('v2-http', 0, snapshot), TEST_UPLOAD_TOKEN));
     expect(publish.status).toBe(200);
-    expect((await publish.json() as any).metadata.snapshotSchemaVersion).toBe(2);
+    expect((await publish.json() as any).metadata.snapshotSchemaVersion).toBe(version);
+    const publishedMeta = await doFetch(service.baseUrl, '/api/meta', { headers: { Authorization: bearerHeader() } });
+    expect((await publishedMeta.json() as any).snapshotSchemaVersion).toBe(version);
     const auth = { headers: { Authorization: basicAuthHeader() } };
     const detail = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`, auth);
     expect(detail.headers.get('cache-control')).toBe('no-store');
     const body = await detail.json() as any;
     expect(body.data.project.detail.oldSiteContact).toBe('合成联系人 13800000000');
+    if (version === 3) expect(body.data.project.detail.projectNote).toBe('合成项目备注');
+    else expect(body.data.project.detail).not.toHaveProperty('projectNote');
     expect(body.data.recordCounts.instruments).toBe(1);
     const list = await doFetch(service.baseUrl, '/api/projects?limit=1', auth);
     const listed = await list.json() as any;
     expect(listed.data.total).toBe(1);
     expect(JSON.stringify(listed)).not.toContain('oldSiteContact');
+    expect(JSON.stringify(listed)).not.toContain('projectNote');
+    expect(JSON.stringify(listed)).not.toContain('合成项目备注');
     const denied = await doFetch(service.baseUrl, `/api/project?id=${snapshot.projects[0].id}`);
     expect(denied.status).toBe(401);
     expect(denied.headers.get('cache-control')).toBe('no-store');
@@ -77,7 +107,7 @@ describe('no-store 与静态页/资产（7.5）', () => {
     expect(bearerDenied.headers.get('cache-control')).toBe('no-store');
     const bearerDeniedText = await bearerDenied.text();
     for (const text of [deniedText, bearerDeniedText]) {
-      for (const sensitive of ['oldSiteContact', 'reminderNote', '合成联系人', '13800000000', '合成搬出地址', '合成提醒备注']) {
+      for (const sensitive of ['projectNote', '合成项目备注', 'oldSiteContact', 'reminderNote', '合成联系人', '13800000000', '合成搬出地址', '合成提醒备注']) {
         expect(text).not.toContain(sensitive);
       }
     }

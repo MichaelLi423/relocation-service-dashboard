@@ -9,8 +9,8 @@
 | 指标 | 数量 |
 | --- | --- |
 | 能力 spec 数 | 18 |
-| ADDED Requirements 场景总数 | 741 |
-| 有有效测试证据（✅） | 622 |
+| ADDED Requirements 场景总数 | 742 |
+| 有有效测试证据（✅） | 623 |
 | 待验证（⏳，真实源迁移 / Windows 验证） | 0 |
 | 缺证据 / 证据无效（❌） | 119 |
 
@@ -263,7 +263,8 @@
 | 轻量服务与文件信封快照存储 | 启动从文件恢复发布状态 | ❌ | — |  |
 | 轻量服务与文件信封快照存储 | 从未提交则无文件无版本 | ❌ | — |  |
 | 完整快照校验后原子替换 | v1 与 v2 分版本封闭校验 | ✅ | `tests/main/mobile-readonly-v2.test.ts`「v1 原字段仍合法，v2 授权字段不会反向进入 v1 白名单」<br>`tests/main/mobile-readonly-v2.test.ts`「v2 每个新增必填字段缺失或 undefined 均拒绝，null 与未知不互转」<br>`tests/main/mobile-readonly-whitelist.test.ts`「未知 schemaVersion 一律拒绝」<br>`tests/server/mobile-readonly-v2.test.ts`「从旧 v1 文件启动，提交 v2 后重启恢复详情，再合法替换为 v1 不残留详情」 |  |
-| 完整快照校验后原子替换 | 服务先升级且不自动降级 | ✅ | `docs/verification/mobile-readonly-detail-expansion-2026-10-27.md`「新服务先部署，再升级桌面；旧服务拒绝 v2，桌面不得自动降级上传 v1」 | 仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已授权或已执行。 |
+| 完整快照校验后原子替换 | 服务先升级且不自动降级 | ✅ | `docs/verification/mobile-project-note-release-2026-11-04.md`「先更新支持 v1/v2/v3 的服务及手机页面」 | 仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已经执行。 |
+| 完整快照校验后原子替换 | 项目备注按 v3 白名单发布 | ✅ | `tests/main/mobile-readonly-v2.test.ts`「v3 项目备注必填、可空且仅为字符串，嵌套未知键仍拒绝」<br>`tests/server/mobile-readonly-v2.test.ts`「v3 重启恢复备注后替换为 v1/v2 不合并旧备注」 |  |
 | 完整快照校验后原子替换 | 有效快照原子替换当前版本 | ❌ | — |  |
 | 完整快照校验后原子替换 | 校验失败保留旧版本 | ❌ | — |  |
 | 完整快照校验后原子替换 | 嵌套未知 key 被拒 | ❌ | — |  |

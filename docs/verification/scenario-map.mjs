@@ -2925,9 +2925,15 @@ export const scenarioMap = {
     '服务先升级且不自动降级': {
       abstract: true,
       evidence: [
-        ['docs/verification/mobile-readonly-detail-expansion-2026-10-27.md', '新服务先部署，再升级桌面；旧服务拒绝 v2，桌面不得自动降级上传 v1'],
+        ['docs/verification/mobile-project-note-release-2026-11-04.md', '先更新支持 v1/v2/v3 的服务及手机页面'],
       ],
-      note: '仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已授权或已执行。',
+      note: '仅登记升级顺序、不降级与回滚限制的文档性契约证据；不表示生产部署已经执行。',
+    },
+    '项目备注按 v3 白名单发布': {
+      evidence: [
+        ['tests/main/mobile-readonly-v2.test.ts', 'v3 项目备注必填、可空且仅为字符串，嵌套未知键仍拒绝'],
+        ['tests/server/mobile-readonly-v2.test.ts', 'v3 重启恢复备注后替换为 v1/v2 不合并旧备注'],
+      ],
     },
   },
   'mobile-readonly-workbench': {

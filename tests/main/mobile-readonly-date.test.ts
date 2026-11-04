@@ -144,7 +144,6 @@ describe('日期契约：快照业务日期 yyyy-mm-dd 且无审计/技术 ISO �
         'destinationShipToId',
         'originalPrice',
         'discountedPrice',
-        'projectNote',
         'cancelReason',
         'managerApprovalReason',
         'accountId',
@@ -166,7 +165,7 @@ describe('日期契约：快照业务日期 yyyy-mm-dd 且无审计/技术 ISO �
       // 敏感自由文本值绝不外泄。
       const text = JSON.stringify(snapshot);
       expect(text).toContain('旧址联系人'); // v2 显式授权联系人；其余自由备注仍禁止。
-      expect(text).not.toContain('项目备注');
+      expect(snapshot.projects[0].detail?.projectNote).toContain('项目备注'); // v3 仅授权项目详情备注。
       expect(text).not.toContain('维修备注');
       expect(text).not.toContain('撤销原因');
     } finally {

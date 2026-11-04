@@ -9,7 +9,13 @@
 > API、无任何 DNS/安全组/防火墙写入。
 > 本机私有查看口令/上传 token **永不写入本文件**（见「凭据」）；本文件不含任何 secret。
 
-## 0. 已核验环境事实（据上线前勘察，勿在脚本外改动）
+## 2026-11-04 服务升级状态
+
+手机页面与服务已升级为支持 v1/v2/v3 的版本，新增项目备注展示，并上线此前的联系人、地址及提醒扩展。运行镜像为 `relocation-mobile-readonly:note-v3-20261104`；现有凭证、快照及 nginx 配置均保持不变。原容器已停止并保留为 `relocation-mobile-readonly-rollback-note-20261104`。
+
+**客户数据尚未升级**：上线验收时生产快照仍为 schema 1、序列版本 697。真实 Windows 数据源需安装桌面 0.1.2 并发布 v3；当前开发机不能代发。完整验证、已知测试缺口、镜像 ID 与 Windows 交接步骤见 [本次发布记录](verification/mobile-project-note-release-2026-11-04.md)。下面首次安装脚本与环境数值为历史记录，不得将固定旧镜像的 `install` 当作升级或回滚命令。
+
+## 0. 已核验环境事实（据首次上线前勘察）
 
 - 远端：`ssh root@aliyun`（BatchMode、ConnectTimeout 10、StrictHostKeyChecking=yes），
   `8.162.13.22:22`，主机名 `iZn4ag1sme72dafucqhgrxZ`，Linux x86_64，Docker 26.1.3，

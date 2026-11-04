@@ -3,13 +3,32 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildProjectDetail, buildProjectListPage, buildRecordsPage } from '../../src/server/mobile-readonly/query';
 import { createNodeEnvelopeIo, EnvelopeStore } from '../../src/server/mobile-readonly/store';
-import { makeSnapshotFixture, makeSnapshotV2Fixture } from '../helpers/mobile-readonly-fixtures';
+import { makeSnapshotFixture, makeSnapshotV2Fixture, makeSnapshotV3Fixture } from '../helpers/mobile-readonly-fixtures';
 import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) cleanupTempDir(dir); });
 
 describe('真实磁盘 v1/v2 启动恢复及替换', () => {
+  it('v3 重启恢复备注后替换为 v1/v2 不合并旧备注', async () => {
+    const dir = makeTempDir('mobile-v3-store-'); dirs.push(dir);
+    const restart = () => {
+      const store = new EnvelopeStore(createNodeEnvelopeIo(join(dir, 'snapshots')), { nowIso: () => '2026-08-08T10:00:00Z' });
+      store.init(); return store;
+    };
+    for (const older of [makeSnapshotFixture(), makeSnapshotV2Fixture()]) {
+      const store = restart();
+      const version = store.currentMetadata().currentVersion;
+      await store.publish({ publicationId: `v3-${version}`, expectedCurrentVersion: version, snapshot: makeSnapshotV3Fixture() });
+      const restored = restart();
+      expect(restored.currentMetadata().snapshotSchemaVersion).toBe(3);
+      expect(buildProjectDetail(restored.currentEnvelope()!.snapshot, older.projects[0].id).project?.detail?.projectNote).toBe('合成项目备注');
+      await restored.publish({ publicationId: `older-${version}`, expectedCurrentVersion: version + 1, snapshot: older });
+      const replaced = restart();
+      expect(replaced.currentEnvelope()!.snapshot).toEqual(older);
+      expect(JSON.stringify(buildProjectDetail(replaced.currentEnvelope()!.snapshot, older.projects[0].id))).not.toContain('projectNote');
+    }
+  });
   it('从旧 v1 文件启动，提交 v2 后重启恢复详情，再合法替换为 v1 不残留详情', async () => {
     const dir = makeTempDir('mobile-v2-store-'); dirs.push(dir);
     const snapshotsDir = join(dir, 'snapshots');
@@ -54,8 +73,8 @@ describe('真实磁盘 v1/v2 启动恢复及替换', () => {
 });
 
 describe('v1/v2 查询隔离和有界计数', () => {
-  it.each([1, 2])('v%s 详情计数取完整数组，分页 total 不受 limit 影响，列表不泄漏 detail', version => {
-    const snapshot = version === 1 ? makeSnapshotFixture() : makeSnapshotV2Fixture();
+  it.each([1, 2, 3])('v%s 详情计数取完整数组，分页 total 不受 limit 影响，列表不泄漏 detail', version => {
+    const snapshot = version === 1 ? makeSnapshotFixture() : version === 2 ? makeSnapshotV2Fixture() : makeSnapshotV3Fixture();
     const first = snapshot.projects[0];
     first.records.instruments = Array.from({ length: 3 }, (_, index) => ({
       ...first.records.instruments[0], id: `instrument-${index}`,
@@ -65,6 +84,7 @@ describe('v1/v2 查询隔离和有界计数', () => {
     expect(list.total).toBe(2); expect(list.items).toHaveLength(1); expect(list.nextCursor).not.toBeNull();
     expect(JSON.stringify(list)).not.toContain('oldSiteContact');
     expect(JSON.stringify(list)).not.toContain('reminderNote');
+    expect(JSON.stringify(list)).not.toContain('projectNote');
     expect(list.items[0]).not.toHaveProperty('detail');
     const filtered = buildProjectListPage(snapshot, 1, { query: 'other', status: null, region: null, offset: null, limit: 1 });
     expect(filtered.total).toBe(1);

@@ -20,7 +20,7 @@ import { cleanupTempDir, makeTempDir } from '../helpers/tmp-db';
 
 /**
  * 首次空库 / 清空 / 恢复空库（tasks 3.5，真实 SQLite 集成）：
- * - 空库首次发布生成**空集合快照**（空快照合法，schemaVersion=1）；
+ * - 空库首次发布生成**空集合快照**（空快照合法，schemaVersion=3）；
  * - 已发布后数据清空或恢复空库必须再次发布空集合，防止手机残留旧数据；
  * - 云端「尚未发布」与「已发布空集合」是两个状态。
  */
@@ -102,7 +102,7 @@ describe('空库/清空/恢复空库（tasks 3.5，真实 SQLite）', () => {
       await runtime.checkNow();
       expect(server.published).toBe(true);
       expect(server.snapshots.length).toBe(1);
-      expect(server.snapshots[0].schemaVersion).toBe(1);
+      expect(server.snapshots[0].schemaVersion).toBe(3);
       expect(server.snapshots[0].projects).toEqual([]);
       expect(server.snapshots[0].overview.metrics.totalProjects).toBe(0);
 
