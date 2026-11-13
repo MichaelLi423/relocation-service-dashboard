@@ -1824,6 +1824,7 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     // 同时保留一条项目内开单：修复不得改变有项目记录的行为。
     facade.v2Mutate({ op: 'submit_action', projectId, action: { type: 'order', projectId, values: { orderType: 'relocation', serviceOrderNo: 'SO-NP-PROJ', orderedAt: '2026-08-11', engineer: '工程师乙' } } });
     const projOrderId = String(db.prepare('SELECT id FROM service_orders WHERE project_id = ?').get(projectId)!.id);
+    db.prepare('UPDATE service_orders SET created_at = ? WHERE id = ?').run('2026-08-08T10:00:00+08:00', projOrderId);
 
     const page = facade.v2HistoryPage({ kind: 'service_order' });
     expect(page.total).toBe(2); // 修复前：total=1，无项目开单被 INNER JOIN 漏掉
@@ -1848,10 +1849,10 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     // 日期筛选对无项目记录同样生效
     expect(facade.v2HistoryPage({ kind: 'service_order', from: '2026-08-09', to: '2026-08-09' }).rows.map((r) => r.id)).toEqual(['so-np-1']);
 
-    // keyset 分页包含无项目记录（业务日期倒序：08-11 项目开单在前、08-09 无项目在后）
+    // keyset 分页包含无项目记录（创建时间倒序：08-09 无项目开单在前、08-08 项目开单在后）
     const first = facade.v2HistoryPage({ kind: 'service_order', limit: 1 });
     const second = facade.v2HistoryPage({ kind: 'service_order', limit: 1, cursor: first.nextCursor! });
-    expect([...first.rows, ...second.rows].map((r) => r.id)).toEqual([projOrderId, 'so-np-1']);
+    expect([...first.rows, ...second.rows].map((r) => r.id)).toEqual(['so-np-1', projOrderId]);
 
     // 项目详情 section 查询不受影响：无项目开单不属于任何项目
     expect(facade.v2SectionPage({ kind: 'orders', projectId }).total).toBe(1);
@@ -1860,6 +1861,53 @@ describe('工作台 v2 跨项目历史分页（historyPage）', () => {
     expect(() =>
       orderStmt.run('so-np-dup', 'certification', 'SO-NP-001', '2026-08-10', '工程师丁', '另一客户', null, null, 't', 't'),
     ).toThrow(/UNIQUE/);
+    closeDatabase(db);
+  });
+
+  it('service_order：按完整创建时间倒序、同时间按 id 倒序，混合开单跨页无漏重且仍按业务日期筛选', () => {
+    const { db, facade, projectId } = makeFacade();
+    const insert = db.prepare(
+      `INSERT INTO service_orders (id, order_type, service_order_no, ordered_at, customer_name, project_id, created_at, updated_at)
+       VALUES (?, 'pm', ?, ?, '独立客户', ?, ?, ?)`,
+    );
+    const records = [
+      // 业务日期与创建时间逆序；同一天不同时刻的排序不能退化为日期或 id 排序。
+      ['so-z-old', '2026-08-31', projectId, '2026-09-01T09:00:00+08:00'],
+      ['so-y-middle', '2026-08-20', null, '2026-09-01T10:00:00+08:00'],
+      ['so-tie-a', '2026-08-10', projectId, '2026-09-01T11:00:00+08:00'],
+      ['so-tie-b', '2026-08-15', null, '2026-09-01T11:00:00+08:00'],
+      ['so-a-new', '2026-07-31', null, '2026-09-01T12:00:00+08:00'],
+    ] as const;
+    for (const [id, orderedAt, linkedProjectId, createdAt] of records) {
+      insert.run(id, id, orderedAt, linkedProjectId, createdAt, createdAt);
+    }
+    const expectedIds = ['so-a-new', 'so-tie-b', 'so-tie-a', 'so-y-middle', 'so-z-old'];
+    const all = facade.v2HistoryPage({ kind: 'service_order' });
+    expect(all.rows.map((row) => row.id)).toEqual(expectedIds);
+    expect(all.rows.map((row) => row.businessDate)).toEqual([
+      '2026-07-31', '2026-08-15', '2026-08-10', '2026-08-20', '2026-08-31',
+    ]);
+
+    // 每页一条，强制同创建时间的两条记录跨页，验证完整时间与 id 游标一致。
+    const walk = (from?: string, to?: string): string[] => {
+      const ids: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = facade.v2HistoryPage({ kind: 'service_order', limit: 1, cursor, from, to });
+        expect(page.total).toBe(from ? 4 : 5);
+        ids.push(...page.rows.map((row) => row.id));
+        expect(ids.length).toBeLessThanOrEqual(5);
+        if (page.nextCursor) {
+          expect(JSON.parse(page.nextCursor)).toEqual([page.rows[0].createdAt, page.rows[0].id]);
+        }
+        cursor = page.nextCursor;
+      } while (cursor !== null);
+      return ids;
+    };
+    expect(walk()).toEqual(expectedIds);
+    // 所有 created_at 都在九月，八月筛选仍包含四条业务日期在范围内的记录（含边界）。
+    expect(walk('2026-08-10', '2026-08-31')).toEqual(expectedIds.slice(1));
+    expect(facade.v2HistoryPage({ kind: 'service_order', from: '2026-09-01' }).total).toBe(0);
     closeDatabase(db);
   });
 

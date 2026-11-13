@@ -366,6 +366,7 @@ export function WorkbenchV2({
   const [warningToast, setWarningToast] = useState("");
   const [layer, setLayer] = useState<LayerState | null>(null);
   const [tagEditGuard, setTagEditGuard] = useState({ dirty: false, busy: false });
+  const [largeOrderGuard, setLargeOrderGuard] = useState({ saved: false, busy: false });
   const [historyImport, setHistoryImport] = useState(false);
   const [dataMenuOpen, setDataMenuOpen] = useState(false);
   const [publicationOpen, setPublicationOpen] = useState(false);
@@ -652,12 +653,13 @@ export function WorkbenchV2({
   async function mutate(
     request: WorkbenchV2MutationRequest,
     success: string,
-    options?: { keepLayer?: boolean },
+    options?: { keepLayer?: boolean; onCommitted?: () => void },
   ): Promise<void> {
     try {
       const api = bridge();
       if (!api) throw new Error("当前环境未连接主进程");
       const result = await requireV2(api, "v2Mutate")(request);
+      options?.onCommitted?.();
       revision.current = Math.max(revision.current, result.businessRevision);
       let cleared: Filters | undefined;
       if (
@@ -1505,14 +1507,16 @@ export function WorkbenchV2({
           side={layer.kind === "independent" || layer.kind === "report" || layer.kind === "history" || layer.kind === "reminder-all" || layer.kind === "tags"}
           protectDirty={layerRequiresDirtyProtection(layer)}
           controlledDirty={layer.kind === "edit-project-tags" ? tagEditGuard.dirty : undefined}
-          busy={layer.kind === "edit-project-tags" ? tagEditGuard.busy : false}
+          busy={layer.kind === "edit-project-tags" ? tagEditGuard.busy : layer.kind === "large-project-order" ? largeOrderGuard.busy : false}
           requestCloseRef={layerCloseRequest}
           resetDirtyKey={
             layer.kind === "tags"
               ? tagCatalog
               : layer.kind === "independent"
                 ? independentRefresh
-                : undefined
+                : layer.kind === "large-project-order"
+                  ? largeOrderGuard.saved
+                  : undefined
           }
           onClose={() => setLayer(null)}
         >
@@ -1528,10 +1532,12 @@ export function WorkbenchV2({
             />
           ) : layer.kind === "large-project-order" ? (
             <LargeProjectOrderForm
-              onSave={(action) =>
+              onStateChange={setLargeOrderGuard}
+              onSave={(action, onCommitted) =>
                 mutate(
                   { op: "submit_action", action },
                   "中大型项目开单已保存",
+                  { keepLayer: true, onCommitted },
                 )
               }
             />
@@ -2877,10 +2883,13 @@ function ActionFormV2({
 
 function LargeProjectOrderForm({
   onSave,
+  onStateChange,
 }: {
-  onSave: (action: WorkbenchActionPayload) => Promise<void>;
+  onSave: (action: WorkbenchActionPayload, onCommitted: () => void) => Promise<void>;
+  onStateChange: (state: { saved: boolean; busy: boolean }) => void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [orderType, setOrderType] = useState<"relocation" | "certification" | "parts_by_mail" | "pm">("relocation");
   const [serviceOrderNo, setServiceOrderNo] = useState("");
@@ -2889,10 +2898,15 @@ function LargeProjectOrderForm({
   const [engineer, setEngineer] = useState("");
   const [note, setNote] = useState("");
   const submitLock = useRef(false);
+  const committed = useRef(false);
+
+  useEffect(() => {
+    onStateChange({ saved, busy });
+  }, [saved, busy, onStateChange]);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (submitLock.current) return;
+    if (submitLock.current || committed.current) return;
     const trimmedCustomer = customerName.trim();
     if (!trimmedCustomer) {
       setError("请填写客户单位");
@@ -2918,9 +2932,15 @@ function LargeProjectOrderForm({
           engineer: engineer.trim() || null,
           ...(note.trim() ? { note: note.trim() } : {}),
         },
+      }, () => {
+        // 写入成功即锁定，后续刷新失败也不能再次创建。
+        committed.current = true;
+        setSaved(true);
       });
     } catch (cause) {
-      setError(messageOf(cause));
+      setError(committed.current
+        ? `开单已保存，但刷新失败：${messageOf(cause)}。请勿重复开单。`
+        : messageOf(cause));
     } finally {
       submitLock.current = false;
       setBusy(false);
@@ -2936,9 +2956,9 @@ function LargeProjectOrderForm({
         <button
           form="large-project-order-form"
           className="button primary"
-          disabled={busy}
+          disabled={busy || saved}
         >
-          {busy ? "正在保存…" : "保存开单"}
+          {saved ? "已保存" : busy ? "正在保存…" : "保存开单"}
         </button>
       </LayerHeaderAction>
       <p className="notice">
@@ -2948,6 +2968,7 @@ function LargeProjectOrderForm({
         <Select
           name="orderType"
           label="开单类型"
+          disabled={busy || saved}
           value={orderType}
           onChange={(event) =>
             setOrderType(
@@ -2964,6 +2985,7 @@ function LargeProjectOrderForm({
         <Field
           name="serviceOrderNo"
           label="服务单号"
+          disabled={busy || saved}
           required
           value={serviceOrderNo}
           onChange={(event) => setServiceOrderNo(event.target.value)}
@@ -2972,6 +2994,7 @@ function LargeProjectOrderForm({
         <Field
           name="orderedAt"
           label="开单日期"
+          disabled={busy || saved}
           type="date"
           required
           value={orderedAt}
@@ -2980,6 +3003,7 @@ function LargeProjectOrderForm({
         <Field
           name="customerName"
           label="客户单位"
+          disabled={busy || saved}
           required
           value={customerName}
           onChange={(event) => setCustomerName(event.target.value)}
@@ -2989,6 +3013,7 @@ function LargeProjectOrderForm({
         <Field
           name="engineer"
           label="工程师"
+          disabled={busy || saved}
           optional
           value={engineer}
           onChange={(event) => setEngineer(event.target.value)}
@@ -2997,6 +3022,7 @@ function LargeProjectOrderForm({
         <Field
           name="note"
           label="备注"
+          disabled={busy || saved}
           optional
           value={note}
           onChange={(event) => setNote(event.target.value)}
@@ -3009,7 +3035,7 @@ function LargeProjectOrderForm({
         </div>
       )}
       <div className="form-footer">
-        <span>中大型开单独立保存，不关联任何搬迁项目</span>
+        <span>{saved ? "开单已保存，内容仅供查看，请点击右上角关闭。" : "中大型开单独立保存，不关联任何搬迁项目"}</span>
       </div>
     </form>
   );

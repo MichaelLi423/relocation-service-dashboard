@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { App } from '../../src/renderer/app';
 import type {
@@ -278,7 +278,7 @@ describe('中大型项目开单独立入口与表单交互 (Task 4.1)', () => {
     expect(within(dialog).getByRole('alert')).toHaveTextContent('请填写服务单号');
   });
 
-  it('填写完整四类之一保存成功，显式传递 workScope medium_large 且不传 projectId，显示 Toast 并关闭', async () => {
+  it('保存成功保留全部字段并锁定，显式传递 workScope，不重复创建，手动关闭不提示未保存', async () => {
     const api = mockApi();
     Object.defineProperty(window, 'workbench', { value: api, configurable: true });
     render(<App />);
@@ -294,6 +294,7 @@ describe('中大型项目开单独立入口与表单交互 (Task 4.1)', () => {
     fireEvent.change(within(dialog).getByLabelText(/客户单位/), { target: { value: '上海中大型研发中心' } });
     // 工程师留空
     fireEvent.change(within(dialog).getByLabelText(/工程师/), { target: { value: '   ' } });
+    fireEvent.change(within(dialog).getByLabelText(/备注/), { target: { value: '保存后核对备注' } });
 
     fireEvent.submit(form);
 
@@ -309,19 +310,43 @@ describe('中大型项目开单独立入口与表单交互 (Task 4.1)', () => {
             orderedAt: '2026-09-18',
             customerName: '上海中大型研发中心',
             engineer: null,
+            note: '保存后核对备注',
           },
         },
       });
     });
 
-    // 成功 Toast 呈现且弹窗关闭
+    // 保存后停留在原表单，所有输入值保留且不可再次提交。
     expect(await screen.findByRole('status')).toHaveTextContent('中大型项目开单已保存');
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: '已保存' })).toBeDisabled();
+    const values = [
+      [/开单类型/, 'pm'], [/服务单号/, 'SO-PM-8899'], [/开单日期/, '2026-09-18'],
+      [/客户单位/, '上海中大型研发中心'], [/工程师/, '   '], [/备注/, '保存后核对备注'],
+    ] as const;
+    for (const [label, value] of values) {
+      expect(within(dialog).getByLabelText(label)).toHaveValue(value);
+      expect(within(dialog).getByLabelText(label)).toBeDisabled();
+    }
+    expect(within(dialog).getByText(/内容仅供查看，请点击右上角关闭/)).toBeInTheDocument();
+    fireEvent.submit(form);
+    expect(api.v2Mutate).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
     expect(screen.queryByRole('dialog', { name: '中大型项目开单' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/放弃修改/)).not.toBeInTheDocument();
+
+    // 再次从入口打开时为新草稿，不沿用上一单的保存状态。
+    fireEvent.click(screen.getByRole('button', { name: '中大型项目开单' }));
+    const nextDialog = await screen.findByRole('dialog', { name: '中大型项目开单' });
+    expect(within(nextDialog).getByLabelText(/服务单号/)).toHaveValue('');
+    expect(within(nextDialog).getByRole('button', { name: '保存开单' })).toBeEnabled();
   });
 
   it('保存失败时就地提示错误原因并不关闭弹层', async () => {
     const api = mockApi({
-      v2Mutate: vi.fn().mockRejectedValue(new Error('单号 SO-DUP-001 已存在，禁止重复登记')),
+      v2Mutate: vi.fn()
+        .mockRejectedValueOnce(new Error('单号 SO-DUP-001 已存在，禁止重复登记'))
+        .mockResolvedValue({ businessRevision: 2, invalidated: [], changed: null }),
     });
     Object.defineProperty(window, 'workbench', { value: api, configurable: true });
     render(<App />);
@@ -339,5 +364,62 @@ describe('中大型项目开单独立入口与表单交互 (Task 4.1)', () => {
     const errorAlert = await within(dialog).findByRole('alert');
     expect(errorAlert).toHaveTextContent('单号 SO-DUP-001 已存在，禁止重复登记');
     expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/客户单位/)).toHaveValue('客户单位乙');
+    expect(within(dialog).getByLabelText(/服务单号/)).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: '保存开单' })).toBeEnabled();
+    fireEvent.change(within(dialog).getByLabelText(/服务单号/), { target: { value: 'SO-RETRY-002' } });
+    fireEvent.submit(form);
+    expect(await within(dialog).findByRole('button', { name: '已保存' })).toBeDisabled();
+    expect(api.v2Mutate).toHaveBeenCalledTimes(2);
+    expect(api.v2Mutate).toHaveBeenLastCalledWith(expect.objectContaining({
+      action: expect.objectContaining({ values: expect.objectContaining({ serviceOrderNo: 'SO-RETRY-002' }) }),
+    }));
+  });
+
+  it('保存进行中锁定输入与关闭，并拦截重复提交', async () => {
+    let finish!: (value: Awaited<ReturnType<WorkbenchApi['v2Mutate']>>) => void;
+    const api = mockApi({ v2Mutate: vi.fn().mockReturnValue(new Promise((resolve) => { finish = resolve; })) });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+    fireEvent.click(screen.getByRole('button', { name: '中大型项目开单' }));
+    const dialog = await screen.findByRole('dialog', { name: '中大型项目开单' });
+    const form = dialog.querySelector('form')!;
+    fireEvent.change(within(dialog).getByLabelText(/服务单号/), { target: { value: 'SO-PENDING' } });
+    fireEvent.change(within(dialog).getByLabelText(/客户单位/), { target: { value: '保存中的客户' } });
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(api.v2Mutate).toHaveBeenCalledTimes(1);
+    expect(within(dialog).getByRole('button', { name: '正在保存…' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: '关闭' })).toBeDisabled();
+    expect(within(dialog).getByLabelText(/服务单号/)).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+    await act(async () => { finish({ businessRevision: 2, invalidated: [], changed: null }); });
+    expect(within(dialog).getByRole('button', { name: '已保存' })).toBeDisabled();
+  });
+
+  it('写入成功但刷新失败仍保持已保存状态，不允许再次创建且可直接关闭', async () => {
+    const api = mockApi({
+      v2Overview: vi.fn().mockResolvedValueOnce(overview).mockRejectedValue(new Error('概览刷新失败')),
+    });
+    Object.defineProperty(window, 'workbench', { value: api, configurable: true });
+    render(<App />);
+    await screen.findByRole('heading', { name: /项目队列/ });
+    fireEvent.click(screen.getByRole('button', { name: '中大型项目开单' }));
+    const dialog = await screen.findByRole('dialog', { name: '中大型项目开单' });
+    const form = dialog.querySelector('form')!;
+    fireEvent.change(within(dialog).getByLabelText(/服务单号/), { target: { value: 'SO-REFRESH-FAIL' } });
+    fireEvent.change(within(dialog).getByLabelText(/客户单位/), { target: { value: '已落库客户' } });
+    fireEvent.submit(form);
+    expect(await within(dialog).findByRole('button', { name: '已保存' })).toBeDisabled();
+    await waitFor(() => { expect(screen.getByText('概览刷新失败')).toBeInTheDocument(); });
+    expect(api.v2Overview).toHaveBeenCalledTimes(2);
+    expect(within(dialog).getByLabelText(/服务单号/)).toHaveValue('SO-REFRESH-FAIL');
+    expect(within(dialog).getByLabelText(/客户单位/)).toBeDisabled();
+    fireEvent.submit(form);
+    expect(api.v2Mutate).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }));
+    expect(screen.queryByRole('dialog', { name: '中大型项目开单' })).not.toBeInTheDocument();
   });
 });

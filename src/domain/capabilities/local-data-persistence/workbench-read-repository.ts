@@ -845,17 +845,18 @@ export class WorkbenchReadRepository {
       range.sql !== '' ? ` AND ${range.sql}` : '',
     ].join('');
     const whereSql = ` WHERE 1=1 ${conditions}`;
-    const orderSql = ` ORDER BY COALESCE(${spec.dateExpr}, '') DESC, ${spec.idExpr} DESC`;
+    const sortExpr = `COALESCE(${spec.sortExpr ?? spec.dateExpr}, '')`;
+    const orderSql = ` ORDER BY ${sortExpr} DESC, ${spec.idExpr} DESC`;
     let cursorSql = '';
     let cursorParams: SQLInputValue[] = [];
     if (request.cursor) {
       const cursor = decodeCursor(request.cursor);
-      cursorSql = ` AND (COALESCE(${spec.dateExpr}, ''), ${spec.idExpr}) < (?, ?)`;
+      cursorSql = ` AND (${sortExpr}, ${spec.idExpr}) < (?, ?)`;
       cursorParams = [cursor.sortKey ?? '', cursor.id];
     }
     const rows = prepareReadBigInt(
       this.db,
-      `SELECT ${spec.selectSql}, COALESCE(${spec.dateExpr}, '') AS __business_date
+      `SELECT ${spec.selectSql}, ${sortExpr} AS __sort_key
        ${spec.fromSql}
        ${whereSql} ${cursorSql} ${orderSql} LIMIT ?`,
     ).all(...range.params, ...cursorParams, limit + 1) as Row[];
@@ -868,7 +869,7 @@ export class WorkbenchReadRepository {
     const last = pageRows[pageRows.length - 1];
     const nextCursor =
       hasMore && last
-        ? encodeCursor(String(last.__business_date ?? ''), String(last.id))
+        ? encodeCursor(String(last.__sort_key ?? ''), String(last.id))
         : null;
     return {
       businessRevision: readBusinessRevision(this.db),
@@ -1760,13 +1761,15 @@ export const LOOKUP_KINDS: readonly WorkbenchV2LookupKind[] = ['ship_to_requests
  *   历史浏览不得漏行），客户名回退为 service_orders.customer_name；
  * - dateExpr：业务日期表达式；instrument 无业务日期字段，按 created_at 日期部分
  *   （substr）过滤与输出，保证 to 截止日期包含当天；
- * - 排序/游标统一按 COALESCE(dateExpr,'') DESC, id DESC（无日期者排在末尾）。
+ * - 排序/游标按 COALESCE(sortExpr ?? dateExpr,'') DESC, id DESC（无日期者排在末尾）；
+ *   service_order 单独按完整 created_at 排序，日期筛选仍按 ordered_at。
  */
 interface HistorySpec {
   fromSql: string;
   selectSql: string;
   idExpr: string;
   dateExpr: string;
+  sortExpr?: string;
   extraWhere?: string;
 }
 
@@ -1803,6 +1806,7 @@ const HISTORY_SPECS: Record<WorkbenchV2HistoryKind, HistorySpec> = {
       "o.id, o.project_id, o.order_type, o.service_order_no, o.ordered_at, o.engineer, o.created_at, CASE WHEN o.project_id IS NULL THEN o.customer_name ELSE cu.name END AS customer_name, c.ecc, p.temp_no, o.work_scope",
     idExpr: 'o.id',
     dateExpr: 'o.ordered_at',
+    sortExpr: 'o.created_at',
   },
   invoice: {
     fromSql:
