@@ -237,6 +237,21 @@ html:has(.workbench-v2 .overlay) { overflow-y: hidden; }
   }
 }
 
+/* 项目开单记录：短字段保持紧凑，备注承接余宽；窄窗口沿用表格内横向滚动。 */
+.project-orders-table {
+  table-layout: fixed;
+  min-width: 860px;
+}
+.project-orders-table .order-date-column { width: 120px; }
+.project-orders-table .order-engineer-column { width: 112px; }
+.project-orders-table .order-type-column { width: 96px; }
+.project-orders-table .order-number-column { width: 176px; }
+.project-orders-table .order-actions-column { width: 160px; }
+.project-orders-table td { overflow-wrap: anywhere; }
+.project-orders-table td:nth-child(1),
+.project-orders-table td:nth-child(3) { white-space: nowrap; }
+.project-orders-table td:nth-child(5) { white-space: pre-wrap; }
+
 /* 序列号地址更新：所有桌面宽度均按登记、记录的任务顺序纵向排列。 */
 .wide-drawer .serial-address-module {
   grid-template-columns: minmax(0, 1fr);

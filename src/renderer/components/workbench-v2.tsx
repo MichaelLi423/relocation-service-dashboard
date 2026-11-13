@@ -2327,7 +2327,17 @@ function SectionTable({
     return <Empty title="暂无记录" copy="通过就近记录入口新增业务事实。" />;
   return (
     <div className="table-scroll">
-      <table className="data-table">
+      <table className={`data-table${page.kind === "orders" ? " project-orders-table" : ""}`}>
+        {page.kind === "orders" && (
+          <colgroup>
+            <col className="order-date-column" />
+            <col className="order-engineer-column" />
+            <col className="order-type-column" />
+            <col className="order-number-column" />
+            <col />
+            <col className="order-actions-column" />
+          </colgroup>
+        )}
         <thead>
           <tr>
             {sectionColumns(page.kind).map((column) => (

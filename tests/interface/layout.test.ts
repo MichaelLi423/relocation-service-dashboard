@@ -19,6 +19,18 @@ describe('workbench-interface 桌面布局静态约束', () => {
     expect(css).toContain('--radius-dialog:12px');
   });
 
+  it('仅项目开单表固定短字段宽度并让备注承接余宽，长内容可换行且窄屏可滚动', () => {
+    expect(renderer).toContain('page.kind === "orders" ? " project-orders-table" : ""');
+    expect(renderer).toMatch(/page.kind === "orders" && \([\s\S]*?<colgroup>[\s\S]*?<col className="order-number-column" \/>\s*<col \/>\s*<col className="order-actions-column" \/>/);
+    expect(css).toMatch(/\.project-orders-table\s*\{\s*table-layout: fixed;\s*min-width: 860px;/);
+    for (const [column, width] of [['date', 120], ['engineer', 112], ['type', 96], ['number', 176], ['actions', 160]]) {
+      expect(css).toContain(`.project-orders-table .order-${column}-column { width: ${width}px; }`);
+    }
+    expect(css).toContain('.project-orders-table td { overflow-wrap: anywhere; }');
+    expect(css).toContain('.project-orders-table td:nth-child(5) { white-space: pre-wrap; }');
+    expect(css).toContain('.table-scroll{max-width:100%;overflow-x:auto}');
+  });
+
   it('1024 附近不产生页面级横向溢出，宽表格在容器内滚动', () => {
     expect(css).toContain('body{margin:0;min-width:0');
     expect(css).toContain('overflow-x:clip');
