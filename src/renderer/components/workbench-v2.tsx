@@ -2346,8 +2346,8 @@ function SectionTable({
                   <td><strong>{row.name}</strong><small className="inline-readonly-note">只读</small></td>
                   <td><input autoFocus aria-label="仪器厂商" value={instrumentDraft.manufacturer ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, manufacturer: event.target.value })} /></td>
                   <td><input aria-label="型号" value={instrumentDraft.model ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, model: event.target.value })} /></td>
-                  <td><input aria-label="服务级别" value={instrumentDraft.serviceLevel ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, serviceLevel: event.target.value })} /></td>
                   <td><input aria-label="序列号" value={instrumentDraft.serialNo ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, serialNo: event.target.value })} /></td>
+                  <td><input aria-label="服务级别" value={instrumentDraft.serviceLevel ?? ""} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, serviceLevel: event.target.value })} /></td>
                   <td>{formatCell("batchId", row.batchId)}<small className="inline-readonly-note">只读</small></td>
                   <td><select aria-label="是否 UPS" value={instrumentDraft.ups ? "true" : "false"} onChange={(event) => setInstrumentDraft({ ...instrumentDraft, ups: event.target.value === "true" })}><option value="true">是</option><option value="false">否</option></select></td>
                   <td>{formatCell("qrRequested", row.qrRequested)}<small className="inline-readonly-note">只读</small></td>
@@ -2412,7 +2412,7 @@ function SectionTable({
 
 function sectionColumns(kind: WorkbenchV2SectionKind): string[] {
   return kind === "instruments"
-    ? ["name", "manufacturer", "model", "serviceLevel", "serialNo", "batchId", "ups", "qrRequested"]
+    ? ["name", "manufacturer", "model", "serialNo", "serviceLevel", "batchId", "ups", "qrRequested"]
     : kind === "batches"
       ? [
           "planTransportDate",

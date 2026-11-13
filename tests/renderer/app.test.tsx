@@ -554,6 +554,12 @@ describe('Oracle #10 bounded workbench renderer', () => {
     fireEvent.click(screen.getByRole('tab', { name: '搬迁仪器' }));
     const table = (await screen.findByRole('columnheader', { name: '仪器产商' })).closest('table')!;
     expect(within(table).getByRole('columnheader', { name: '服务级别' })).toBeInTheDocument();
+    expect(within(table).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
+      '仪器名称', '仪器产商', '型号', '序列号', '服务级别', '物流费用记录', 'UPS', '二维码', '操作',
+    ]);
+    const cells = within(within(table).getByRole('row', { name: /仪器 0 / })).getAllByRole('cell');
+    expect(cells[3]).toHaveTextContent('SN-0');
+    expect(cells[4]).toHaveTextContent('金牌');
     expect(within(table).queryByRole('columnheader', { name: '二维码是否申请' })).not.toBeInTheDocument();
     expect(table).toHaveTextContent('产商 0'); expect(table).toHaveTextContent('金牌');
   });
@@ -598,6 +604,9 @@ describe('Oracle #10 bounded workbench renderer', () => {
     fireEvent.click(within(instrumentTable).getAllByRole('button', { name: '编辑' })[0]!);
     expect(screen.queryByRole('dialog', { name: '编辑仪器资料' })).not.toBeInTheDocument();
     const row = within(instrumentTable).getByRole('row', { name: /仪器 0/ });
+    const cells = within(row).getAllByRole('cell');
+    expect(within(cells[3]!).getByLabelText('序列号')).toHaveValue('SN-0');
+    expect(within(cells[4]!).getByLabelText('服务级别')).toHaveValue('金牌');
     expect(within(row).queryByRole('textbox', { name: '仪器名称' })).not.toBeInTheDocument();
     fireEvent.change(within(row).getByLabelText('仪器厂商'), { target: { value: '新厂商' } });
     fireEvent.change(within(row).getByLabelText('型号'), { target: { value: '7900X' } });
